@@ -4,6 +4,7 @@ import type { Plugin, ViteDevServer } from 'vite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import zlib from 'node:zlib'
 import StyleDictionary from 'style-dictionary'
 
 import type { VitePluginStyleDictionaryOptions } from './types.js'
@@ -172,16 +173,129 @@ export function vitePluginStyleDictionary(
   // Compile design tokens
   const runBuilds = async (
     resolvedConfigs: Array<{ config: Config | string; dir: string }>,
+    context?: string,
   ) => {
-    log('Compiling design tokens...', 'info')
+    const startTime = Date.now()
     try {
+      if (!context) {
+        log('Compiling design tokens...', 'info')
+      }
+
+      const generatedFiles = new Set<string>()
+
       for (const item of resolvedConfigs) {
         const sd = new StyleDictionary(item.config)
-        await sd.buildAllPlatforms()
+        await sd.hasInitialized
+        const silentSD = await sd.extend({
+          log: {
+            verbosity: 'silent',
+          },
+        })
+        await silentSD.buildAllPlatforms()
+
+        if (!context && !silent && silentSD.platforms) {
+          for (const platformName of Object.keys(silentSD.platforms)) {
+            const platform = silentSD.platforms[platformName]
+            if (platform && platform.files) {
+              const buildPath = platform.buildPath || ''
+              for (const file of platform.files) {
+                if (file && file.destination) {
+                  const absoluteBuildPath = path.isAbsolute(buildPath)
+                    ? buildPath
+                    : path.resolve(viteRoot, buildPath)
+                  const absoluteDestination = path.isAbsolute(file.destination)
+                    ? file.destination
+                    : path.resolve(absoluteBuildPath, file.destination)
+                  generatedFiles.add(absoluteDestination)
+                }
+              }
+            }
+          }
+        }
       }
-      log('Compiled successfully!', 'success')
+
+      const duration = Date.now() - startTime
+
+      if (context) {
+        log(
+          `Rebuilt design tokens due to change in ${context} (${duration}ms)`,
+          'success',
+        )
+      } else {
+        if (!silent && generatedFiles.size > 0) {
+          const fileInfos: Array<{
+            coloredPath: string
+            gzipSizeStr: string
+            relativeDisplayPath: string
+            sizeStr: string
+          }> = []
+
+          for (const filePath of generatedFiles) {
+            if (fs.existsSync(filePath)) {
+              const displayPath = path
+                .relative(viteRoot, filePath)
+                .replace(/\\/g, '/')
+              const dir = path.dirname(displayPath)
+              const base = path.basename(displayPath)
+              const coloredPath =
+                dir === '.'
+                  ? `\x1b[32m${base}\x1b[0m`
+                  : `\x1b[90m${dir}/\x1b[0m\x1b[32m${base}\x1b[0m`
+
+              try {
+                const stats = fs.statSync(filePath)
+                const bytes = stats.size
+                const sizeStr = `${(bytes / 1024).toFixed(2)} kB`
+
+                const content = fs.readFileSync(filePath)
+                const gzipBytes = zlib.gzipSync(content).length
+                const gzipSizeStr = `${(gzipBytes / 1024).toFixed(2)} kB`
+
+                fileInfos.push({
+                  coloredPath,
+                  gzipSizeStr,
+                  relativeDisplayPath: displayPath,
+                  sizeStr,
+                })
+              } catch {
+                // Ignore errors reading individual files
+              }
+            }
+          }
+
+          if (fileInfos.length > 0) {
+            const longestPathLength = Math.max(
+              ...fileInfos.map((f) => f.relativeDisplayPath.length),
+              0,
+            )
+            const longestSizeLength = Math.max(
+              ...fileInfos.map((f) => f.sizeStr.length),
+              0,
+            )
+
+            for (const info of fileInfos) {
+              const pathPadding = ' '.repeat(
+                Math.max(
+                  2,
+                  longestPathLength - info.relativeDisplayPath.length + 2,
+                ),
+              )
+              const sizePadded = info.sizeStr.padStart(longestSizeLength)
+              console.log(
+                `${info.coloredPath}${pathPadding}\x1b[90m${sizePadded} │ gzip: ${info.gzipSizeStr}\x1b[0m`,
+              )
+            }
+          }
+        }
+
+        log(`Compiled successfully! (${duration}ms)`, 'success')
+      }
     } catch (err) {
-      log(`Compilation failed: ${(err as Error).message}`, 'error')
+      const duration = Date.now() - startTime
+      log(
+        `Compilation failed after ${duration}ms: ${(err as Error).message}`,
+        'error',
+      )
     }
   }
 
@@ -233,14 +347,9 @@ export function vitePluginStyleDictionary(
         })
 
         if (isConfigOrToken) {
-          log(
-            `File change detected: ${normalizedFile}. Rebuilding design tokens...`,
-            'info',
-          )
-
           // Re-resolve configs to handle added/removed configs or changes to config itself
           const currentResolved = await resolveConfigs()
-          await runBuilds(currentResolved)
+          await runBuilds(currentResolved, path.basename(normalizedFile))
 
           // Dynamically update the watch list in case the configurations changed
           const newWatches = await getWatchFiles(currentResolved)
