@@ -22,8 +22,8 @@ export default defineConfig({
   },
   plugins: [
     dts({
+      bundleTypes: true,
       entryRoot: 'src',
-      rollupTypes: true,
       tsconfigPath: './tsconfig.lib.json',
     }),
   ],
