@@ -1,6 +1,6 @@
 {
   "name": "@kanso-labs/vite-plugin-style-dictionary",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Vite plugin to compile Style Dictionary design tokens with automatic watching and rebuilding",
   "keywords": [
     "vite",
