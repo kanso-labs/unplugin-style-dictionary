@@ -1,10 +1,13 @@
 {
-  "name": "@kanso-labs/vite-plugin-style-dictionary",
+  "name": "@kanso-labs/unplugin-style-dictionary",
   "version": "0.1.0",
-  "description": "Vite plugin to compile Style Dictionary design tokens with automatic watching and rebuilding",
+  "description": "Compile Style Dictionary design tokens ahead of your bundler (Vite, Rolldown, Rollup, or Webpack) from a single unplugin-based plugin, with automatic watching and rebuilding under Vite",
   "keywords": [
+    "unplugin",
     "vite",
-    "vite-plugin",
+    "rolldown",
+    "rollup",
+    "webpack",
     "style-dictionary",
     "design-tokens",
     "tokens"
@@ -15,10 +18,31 @@
   ],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
-    }
+      "require": "./dist/index.cjs"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.js",
+      "require": "./dist/vite.cjs"
+    },
+    "./rolldown": {
+      "types": "./dist/rolldown.d.ts",
+      "import": "./dist/rolldown.js",
+      "require": "./dist/rolldown.cjs"
+    },
+    "./rollup": {
+      "types": "./dist/rollup.d.ts",
+      "import": "./dist/rollup.js",
+      "require": "./dist/rollup.cjs"
+    },
+    "./webpack": {
+      "types": "./dist/webpack.d.ts",
+      "import": "./dist/webpack.js",
+      "require": "./dist/webpack.cjs"
+    },
+    "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -32,14 +56,30 @@
     "prepare": "husky"
   },
   "peerDependencies": {
+    "rolldown": "*",
+    "rollup": "*",
     "style-dictionary": "^5.0.0",
-    "vite": "^6.0.0 || ^7.0.0 || ^8.0.0"
+    "vite": "^6.0.0 || ^7.0.0 || ^8.0.0",
+    "webpack": "*"
+  },
+  "peerDependenciesMeta": {
+    "rolldown": {
+      "optional": true
+    },
+    "rollup": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    },
+    "webpack": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.1",
     "@commitlint/config-conventional": "21.2.0",
     "@eslint/js": "10.0.1",
-    "@microsoft/api-extractor": "7.58.7",
     "@types/node": "25.9.1",
     "eslint": "10.5.0",
     "eslint-config-prettier": "10.1.8",
@@ -49,11 +89,16 @@
     "husky": "9.1.7",
     "prettier": "3.8.3",
     "rimraf": "6.1.3",
+    "rollup": "^4.62.2",
     "style-dictionary": "5.4.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.61.1",
     "vite": "8.1.5",
     "vite-plugin-dts": "5.0.1",
-    "vitest": "4.1.10"
+    "vitest": "4.1.10",
+    "webpack": "^5.108.4"
+  },
+  "dependencies": {
+    "unplugin": "^3.3.0"
   }
 }
