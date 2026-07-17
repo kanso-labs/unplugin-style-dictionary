@@ -1,21 +1,24 @@
 import type { Config } from 'style-dictionary'
-import type { Plugin, ViteDevServer } from 'vite'
+import type { UnpluginFactory } from 'unplugin'
+import type { ViteDevServer } from 'vite'
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import zlib from 'node:zlib'
 import StyleDictionary from 'style-dictionary'
+import { createUnplugin } from 'unplugin'
 
-import type { VitePluginStyleDictionaryOptions } from './types.js'
+import type { UnpluginStyleDictionaryOptions } from './types.js'
 
 export * from './types.js'
 
-export function vitePluginStyleDictionary(
-  options: VitePluginStyleDictionaryOptions = {},
-): Plugin {
+export const unpluginFactory: UnpluginFactory<
+  undefined | UnpluginStyleDictionaryOptions,
+  false
+> = (options = {}) => {
   const { silent = false } = options
-  let viteRoot = process.cwd()
+  let root = process.cwd()
 
   // Helper to log if not silent
   const log = (
@@ -23,7 +26,7 @@ export function vitePluginStyleDictionary(
     type: 'error' | 'info' | 'success' = 'info',
   ) => {
     if (silent) return
-    const prefix = '[vite-plugin-style-dictionary]'
+    const prefix = '[unplugin-style-dictionary]'
     if (type === 'error') {
       console.error(`\x1b[31m${prefix} ${message}\x1b[0m`)
     } else if (type === 'success') {
@@ -48,7 +51,7 @@ export function vitePluginStyleDictionary(
         'sd.config.mjs',
       ]
       for (const file of defaults) {
-        const fullPath = path.resolve(viteRoot, file)
+        const fullPath = path.resolve(root, file)
         if (fs.existsSync(fullPath)) {
           rawConfig = file
           break
@@ -73,7 +76,7 @@ export function vitePluginStyleDictionary(
 
     return configs.map((conf) => {
       if (typeof conf === 'string') {
-        const fullPath = path.resolve(viteRoot, conf)
+        const fullPath = path.resolve(root, conf)
         return {
           config: fullPath,
           dir: path.dirname(fullPath),
@@ -82,7 +85,7 @@ export function vitePluginStyleDictionary(
       } else {
         return {
           config: conf,
-          dir: viteRoot,
+          dir: root,
         }
       }
     })
@@ -162,7 +165,7 @@ export function vitePluginStyleDictionary(
       for (const pattern of extraWatches) {
         const absolutePattern = path.isAbsolute(pattern)
           ? pattern
-          : path.resolve(viteRoot, pattern)
+          : path.resolve(root, pattern)
         filesToWatch.add(absolutePattern.replace(/\\/g, '/'))
       }
     }
@@ -202,7 +205,7 @@ export function vitePluginStyleDictionary(
                 if (file && file.destination) {
                   const absoluteBuildPath = path.isAbsolute(buildPath)
                     ? buildPath
-                    : path.resolve(viteRoot, buildPath)
+                    : path.resolve(root, buildPath)
                   const absoluteDestination = path.isAbsolute(file.destination)
                     ? file.destination
                     : path.resolve(absoluteBuildPath, file.destination)
@@ -233,7 +236,7 @@ export function vitePluginStyleDictionary(
           for (const filePath of generatedFiles) {
             if (fs.existsSync(filePath)) {
               const displayPath = path
-                .relative(viteRoot, filePath)
+                .relative(root, filePath)
                 .replace(/\\/g, '/')
               const dir = path.dirname(displayPath)
               const base = path.basename(displayPath)
@@ -302,64 +305,91 @@ export function vitePluginStyleDictionary(
   return {
     async buildStart() {
       const resolved = await resolveConfigs()
-      if (resolved.length > 0) {
-        await runBuilds(resolved)
+      if (resolved.length === 0) return
+
+      // Register token/config files with the host bundler's watch mode.
+      // Works out of the box wherever the host runs a persistent watcher
+      // (e.g. `rollup --watch`); Vite's dev server is additionally handled
+      // below via the `vite.configureServer` escape hatch, since token
+      // sources are plain JSON/JS files outside the module graph and
+      // `watchChange` is not reliably invoked by Vite while serving.
+      const watchFiles = await getWatchFiles(resolved)
+      for (const file of watchFiles) {
+        this.addWatchFile(file)
       }
+
+      await runBuilds(resolved)
     },
 
-    async configResolved(config) {
-      viteRoot = config.root || process.cwd()
+    name: 'unplugin-style-dictionary',
+
+    vite: {
+      configResolved(config) {
+        root = config.root || process.cwd()
+      },
+
+      async configureServer(server: ViteDevServer) {
+        const resolved = await resolveConfigs()
+        if (resolved.length === 0) return
+
+        const filesToWatch = await getWatchFiles(resolved)
+
+        // Watch configuration files and token files
+        server.watcher.add(filesToWatch)
+
+        server.watcher.on('all', async (_event, file) => {
+          const normalizedFile = file.replace(/\\/g, '/')
+
+          // Check if the modified file matches our watched config or token patterns
+          const isConfigOrToken = filesToWatch.some((pattern) => {
+            // If the pattern is an exact file path
+            if (pattern === normalizedFile) return true
+
+            // If the pattern is a glob, we check if the file matches it.
+            // Note: A simple string match or simple glob matcher can be used here.
+            // For simplicity and correctness, since token source paths are usually globs,
+            // we can match based on path directory containment or general matching.
+            // Let's implement a robust matchesGlob check or check if it's one of the token files.
+            // Chokidar triggers on actual files, so we want to check if the changed file matches
+            // any of the config files or token files/globs.
+            return (
+              normalizedFile.startsWith(pattern.replace(/\/\*\*/g, '')) ||
+              (pattern.includes('*') &&
+                new RegExp(
+                  pattern
+                    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                    .replace(/\*/g, '.*'),
+                ).test(normalizedFile))
+            )
+          })
+
+          if (isConfigOrToken) {
+            // Re-resolve configs to handle added/removed configs or changes to config itself
+            const currentResolved = await resolveConfigs()
+            await runBuilds(currentResolved, path.basename(normalizedFile))
+
+            // Dynamically update the watch list in case the configurations changed
+            const newWatches = await getWatchFiles(currentResolved)
+            server.watcher.add(newWatches)
+          }
+        })
+      },
     },
 
-    async configureServer(server: ViteDevServer) {
+    async watchChange(id) {
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
 
-      const filesToWatch = await getWatchFiles(resolved)
+      await runBuilds(resolved, path.basename(id))
 
-      // Watch configuration files and token files
-      server.watcher.add(filesToWatch)
-
-      server.watcher.on('all', async (_event, file) => {
-        const normalizedFile = file.replace(/\\/g, '/')
-
-        // Check if the modified file matches our watched config or token patterns
-        const isConfigOrToken = filesToWatch.some((pattern) => {
-          // If the pattern is an exact file path
-          if (pattern === normalizedFile) return true
-
-          // If the pattern is a glob, we check if the file matches it.
-          // Note: A simple string match or simple glob matcher can be used here.
-          // For simplicity and correctness, since token source paths are usually globs,
-          // we can match based on path directory containment or general matching.
-          // Let's implement a robust matchesGlob check or check if it's one of the token files.
-          // Chokidar triggers on actual files, so we want to check if the changed file matches
-          // any of the config files or token files/globs.
-          return (
-            normalizedFile.startsWith(pattern.replace(/\/\*\*/g, '')) ||
-            (pattern.includes('*') &&
-              new RegExp(
-                pattern
-                  .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-                  .replace(/\*/g, '.*'),
-              ).test(normalizedFile))
-          )
-        })
-
-        if (isConfigOrToken) {
-          // Re-resolve configs to handle added/removed configs or changes to config itself
-          const currentResolved = await resolveConfigs()
-          await runBuilds(currentResolved, path.basename(normalizedFile))
-
-          // Dynamically update the watch list in case the configurations changed
-          const newWatches = await getWatchFiles(currentResolved)
-          server.watcher.add(newWatches)
-        }
-      })
+      const watchFiles = await getWatchFiles(resolved)
+      for (const file of watchFiles) {
+        this.addWatchFile(file)
+      }
     },
-
-    name: 'vite-plugin-style-dictionary',
   }
 }
 
-export default vitePluginStyleDictionary
+export const unplugin = /* #__PURE__ */ createUnplugin(unpluginFactory)
+
+export default unplugin

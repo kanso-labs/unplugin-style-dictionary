@@ -8,12 +8,30 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   build: {
     lib: {
-      entry: path.resolve(dirname, 'src/index.ts'),
-      fileName: (format) => `index.${format === 'es' ? 'js' : 'cjs'}`,
+      entry: {
+        index: path.resolve(dirname, 'src/index.ts'),
+        rolldown: path.resolve(dirname, 'src/rolldown.ts'),
+        rollup: path.resolve(dirname, 'src/rollup.ts'),
+        vite: path.resolve(dirname, 'src/vite.ts'),
+        webpack: path.resolve(dirname, 'src/webpack.ts'),
+      },
+      fileName: (format, entryName) =>
+        `${entryName}.${format === 'es' ? 'js' : 'cjs'}`,
       formats: ['es', 'cjs'],
     },
     rollupOptions: {
-      external: ['style-dictionary', 'vite', /^node:/, 'path', 'fs', 'url'],
+      external: [
+        'style-dictionary',
+        'unplugin',
+        'vite',
+        'rolldown',
+        'rollup',
+        'webpack',
+        /^node:/,
+        'path',
+        'fs',
+        'url',
+      ],
       output: {
         exports: 'named',
       },
@@ -22,7 +40,6 @@ export default defineConfig({
   },
   plugins: [
     dts({
-      bundleTypes: true,
       entryRoot: 'src',
       tsconfigPath: './tsconfig.lib.json',
     }),
