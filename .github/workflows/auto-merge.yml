@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     if:
       github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.repository == 'kanso-labs/kanso-ui'
+      github.repository == 'kanso-labs/unplugin-style-dictionary'
     steps:
       - name: Get Dependabot metadata
         id: metadata
