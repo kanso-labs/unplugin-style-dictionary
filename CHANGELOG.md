@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.0...unplugin-style-dictionary-v0.2.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* filter watchChange the same way configureServer already does ([65c3020](https://github.com/kanso-labs/unplugin-style-dictionary/commit/65c3020d49a791b137bcc7a05d23e4747e383769))
+* filter watchChange the same way configureServer already does ([cce9d76](https://github.com/kanso-labs/unplugin-style-dictionary/commit/cce9d76354fd94aa4aec23d4cf70d28c3f0bdca4))
+
 ## [0.2.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.1.0...unplugin-style-dictionary-v0.2.0) (2026-07-17)
 
 

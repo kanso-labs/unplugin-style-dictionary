@@ -1,6 +1,6 @@
 {
   "name": "@kanso-labs/unplugin-style-dictionary",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Compile Style Dictionary design tokens ahead of your bundler (Vite, Rolldown, Rollup, or Webpack) from a single unplugin-based plugin, with automatic watching and rebuilding under Vite",
   "keywords": [
     "unplugin",
