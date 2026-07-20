@@ -5,6 +5,7 @@ import path from 'node:path'
 import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { matchesWatchedFile } from '../src/index.ts'
 import vitePlugin from '../src/vite.ts'
 
 interface BuildContext {
@@ -19,6 +20,16 @@ const callBuildStart = async (plugin: Plugin) => {
   await (
     plugin.buildStart as (this: BuildContext) => Promise<void> | void
   ).call(context)
+}
+
+const callWatchChange = async (plugin: Plugin, id: string) => {
+  const context: BuildContext = { addWatchFile: () => {} }
+  await (
+    plugin.watchChange as (
+      this: BuildContext,
+      id: string,
+    ) => Promise<void> | void
+  ).call(context, id)
 }
 
 describe('unplugin-style-dictionary (vite target)', () => {
@@ -192,5 +203,79 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.existsSync(repeatOutputFile)).toBe(true)
     const content = fs.readFileSync(repeatOutputFile, 'utf-8')
     expect(content).toContain('color-primary=#0070f3')
+  })
+
+  it('matchesWatchedFile matches config/token paths but not unrelated generated output', () => {
+    const patterns = ['/project/tokens/*.tokens.json']
+
+    expect(
+      matchesWatchedFile('/project/tokens/design.tokens.json', patterns),
+    ).toBe(true)
+    // The exact shape of the original bug report: a generated file that sits
+    // in the same directory as the watched glob, but doesn't match its
+    // suffix, must not be treated as a watched source.
+    expect(
+      matchesWatchedFile('/project/tokens/design.tokens.stylex.ts', patterns),
+    ).toBe(false)
+  })
+
+  it('watchChange does not rebuild when the changed file is not a watched source', async () => {
+    const plugin = vitePlugin({
+      config: configFile,
+      silent: true,
+    })
+
+    await callBuildStart(plugin)
+    const beforeContent = fs.readFileSync(outputFile, 'utf-8')
+
+    // Change the token source on disk without going through the plugin, so
+    // a wrongly-triggered rebuild would produce visibly different output —
+    // a false negative (rebuild ran but happened to write identical
+    // content) is impossible here.
+    fs.writeFileSync(
+      tokenFile,
+      JSON.stringify({
+        color: {
+          primary: {
+            value: '#ff0000',
+          },
+        },
+      }),
+    )
+
+    // This is the exact shape of the reported bug: the plugin's own
+    // generated output is part of the host bundler's module graph (real
+    // code imports it), so a naive watchChange implementation reacts to it
+    // "changing" — which every regenerate does — and rebuilds forever.
+    // outputFile is not part of `source`/`include` in the fixture config,
+    // so this must be a no-op regardless of what changed on disk elsewhere.
+    await callWatchChange(plugin, outputFile)
+
+    expect(fs.readFileSync(outputFile, 'utf-8')).toBe(beforeContent)
+  })
+
+  it('watchChange rebuilds when the changed file is a watched token source', async () => {
+    const plugin = vitePlugin({
+      config: configFile,
+      silent: true,
+    })
+
+    await callBuildStart(plugin)
+
+    fs.writeFileSync(
+      tokenFile,
+      JSON.stringify({
+        color: {
+          primary: {
+            value: '#ff0000',
+          },
+        },
+      }),
+    )
+
+    await callWatchChange(plugin, tokenFile)
+
+    const content = fs.readFileSync(outputFile, 'utf-8')
+    expect(content).toContain('--color-primary: #ff0000;')
   })
 })

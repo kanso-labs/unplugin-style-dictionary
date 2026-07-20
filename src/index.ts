@@ -13,6 +13,37 @@ import type { UnpluginStyleDictionaryOptions } from './types.js'
 
 export * from './types.js'
 
+// Whether `file` matches one of the resolved config/token watch patterns.
+// Shared by the Vite-specific `configureServer` watcher and the universal
+// `watchChange` hook — both need it, and both must skip files that don't
+// match: without this filter, `watchChange` reacts to *any* changed
+// module-graph file, including this plugin's own generated output (since
+// consuming code imports it). Every regenerate is itself a "change", which
+// without filtering re-triggers a rebuild forever.
+export function matchesWatchedFile(file: string, patterns: string[]): boolean {
+  const normalizedFile = file.replace(/\\/g, '/')
+
+  return patterns.some((pattern) => {
+    // If the pattern is an exact file path
+    if (pattern === normalizedFile) return true
+
+    // If the pattern is a glob, we check if the file matches it.
+    // Note: A simple string match or simple glob matcher can be used here.
+    // For simplicity and correctness, since token source paths are usually globs,
+    // we can match based on path directory containment or general matching.
+    // Let's implement a robust matchesGlob check or check if it's one of the token files.
+    // Chokidar triggers on actual files, so we want to check if the changed file matches
+    // any of the config files or token files/globs.
+    return (
+      normalizedFile.startsWith(pattern.replace(/\/\*\*/g, '')) ||
+      (pattern.includes('*') &&
+        new RegExp(
+          pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'),
+        ).test(normalizedFile))
+    )
+  })
+}
+
 export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
@@ -338,40 +369,15 @@ export const unpluginFactory: UnpluginFactory<
         server.watcher.add(filesToWatch)
 
         server.watcher.on('all', async (_event, file) => {
-          const normalizedFile = file.replace(/\\/g, '/')
+          if (!matchesWatchedFile(file, filesToWatch)) return
 
-          // Check if the modified file matches our watched config or token patterns
-          const isConfigOrToken = filesToWatch.some((pattern) => {
-            // If the pattern is an exact file path
-            if (pattern === normalizedFile) return true
+          // Re-resolve configs to handle added/removed configs or changes to config itself
+          const currentResolved = await resolveConfigs()
+          await runBuilds(currentResolved, path.basename(file))
 
-            // If the pattern is a glob, we check if the file matches it.
-            // Note: A simple string match or simple glob matcher can be used here.
-            // For simplicity and correctness, since token source paths are usually globs,
-            // we can match based on path directory containment or general matching.
-            // Let's implement a robust matchesGlob check or check if it's one of the token files.
-            // Chokidar triggers on actual files, so we want to check if the changed file matches
-            // any of the config files or token files/globs.
-            return (
-              normalizedFile.startsWith(pattern.replace(/\/\*\*/g, '')) ||
-              (pattern.includes('*') &&
-                new RegExp(
-                  pattern
-                    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-                    .replace(/\*/g, '.*'),
-                ).test(normalizedFile))
-            )
-          })
-
-          if (isConfigOrToken) {
-            // Re-resolve configs to handle added/removed configs or changes to config itself
-            const currentResolved = await resolveConfigs()
-            await runBuilds(currentResolved, path.basename(normalizedFile))
-
-            // Dynamically update the watch list in case the configurations changed
-            const newWatches = await getWatchFiles(currentResolved)
-            server.watcher.add(newWatches)
-          }
+          // Dynamically update the watch list in case the configurations changed
+          const newWatches = await getWatchFiles(currentResolved)
+          server.watcher.add(newWatches)
         })
       },
     },
@@ -380,9 +386,16 @@ export const unpluginFactory: UnpluginFactory<
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
 
+      const watchFiles = await getWatchFiles(resolved)
+      // Without this check, watchChange fires for *any* changed file in the
+      // host bundler's module graph — including our own generated output,
+      // since consuming code imports it. Every regenerate is itself a
+      // "change", so skipping non-matching files here is what keeps this
+      // from rebuilding forever.
+      if (!matchesWatchedFile(id, watchFiles)) return
+
       await runBuilds(resolved, path.basename(id))
 
-      const watchFiles = await getWatchFiles(resolved)
       for (const file of watchFiles) {
         this.addWatchFile(file)
       }
