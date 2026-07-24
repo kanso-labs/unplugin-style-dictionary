@@ -100,7 +100,7 @@
     "vite": "8.1.5",
     "vite-plugin-dts": "5.0.3",
     "vitest": "4.1.10",
-    "webpack": "^5.108.4"
+    "webpack": "^5.109.0"
   },
   "dependencies": {
     "unplugin": "^3.3.0"
