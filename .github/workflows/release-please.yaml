@@ -1,0 +1,80 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+# Every release merge pushes main, and every push starts a run. Overlapping runs
+# try to cut the same tags and strip the same labels, and one dies on the
+# other's half-finished work. Do not add cancel-in-progress: the last push must
+# still get a run, or the release it carries is never proposed.
+#
+# This belongs to the caller. GitHub documents concurrency there and says
+# nothing either way about a group declared inside a called workflow.
+concurrency:
+  cancel-in-progress: false
+  group: release-please
+
+# Wide because this repository has no application token yet, so the shared
+# workflow falls back to GITHUB_TOKEN and that token has to do the writing
+# itself. Once the secrets below exist, this can drop to contents: read.
+#
+# id-token is granted on the publish job rather than here, since that job is
+# the only thing that needs it and npm is the only audience for it.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # These two secrets do not exist in this repository yet. An unset secret
+  # arrives as an empty string, which selects the shared workflow's
+  # GITHUB_TOKEN fallback and prints a warning saying so — it does not fail.
+  #
+  # The fallback cannot actually release this repository, and could not before
+  # either. A pull request opened with GITHUB_TOKEN starts no workflow runs, so
+  # the release pull request never starts Build, Lint or Test, which are the
+  # three checks this repository's ruleset requires in order to merge it.
+  #
+  # Installing the app that home-assistant-applications already uses and adding
+  # its two secrets is the fix, and needs no change to this file.
+  release-please:
+    name: Propose releases
+    uses: kanso-labs/github-actions/.github/workflows/_release-please.yaml@v1.0.2
+    secrets:
+      app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+      private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+
+  publish:
+    name: Publish to npm
+    needs: release-please
+    # Compared against the string rather than used bare. A bare truthiness test
+    # would also pass on the string "false", which is what this output carries
+    # when release-please runs and decides not to cut a release.
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm trusted publishing exchanges this for a short-lived credential, so
+      # there is no npm token in this repository at all.
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: kanso-labs/github-actions/actions/setup-node@v1.0.2
+        with:
+          # This job installs once and then throws the runner away, so
+          # restoring the cache costs more than the install it would save.
+          cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Run build
+        run: npm run build
+
+      - name: Publish to npm
+        run: npm publish
