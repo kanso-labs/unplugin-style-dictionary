@@ -1,6 +1,10 @@
 name: Test
 
-on: pull_request
+on:
+  pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -9,12 +13,17 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
 
+      # Nothing these tests need comes from a lifecycle script — they drive the
+      # Vite target against real files in a temporary directory.
       - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v2.0.0
+        uses: kanso-labs/github-actions/actions/setup-node@v2.1.0
+        with:
+          ignore-scripts: true
 
       - name: Run tests
         run: npm run test

@@ -77,15 +77,33 @@ bare leaves `this` undefined and the failure looks like a plugin bug.
 
 ## Workflows and checks
 
-`Build`, `Lint` and `Test` each run on `pull_request` only — **none of them runs
-on pushes to `main`**. The three are the checks the repository's ruleset
-requires, so a merge is gated on them, but `main` itself is never re-verified
-after the fact.
+`Build`, `Lint` and `Test` run on `pull_request` and on pushes to `main`. The
+three are the checks the repository's ruleset requires, so a merge is gated on
+them, and the push trigger is what re-verifies `main` afterwards rather than
+leaving it on trust.
 
-All four workflows consume `kanso-labs/github-actions` at an exact release tag,
-never a moving major. A change over there reaches this repository only when
-Renovate bumps that pin, which is deliberate — see that repository's
-`AGENTS.md`.
+The `pull_request` trigger is deliberately unscoped. Adding `branches: [main]`
+would match the sibling repositories, but a pull request opened against any
+other base would then post none of the three checks the ruleset requires —
+which reads as a hang rather than a failure, because nothing will ever report.
+
+**A job name becomes a check name.** Ruleset `19123565` ("Default") requires
+`Build`, `Lint` and `Test` by exact string, so renaming a job edits the merge
+gate rather than the label on it. Keep the two in sync in one change.
+
+`Lint` runs actionlint as a step rather than as a job of its own, and that is
+the reason why: a new job is a new check name, nothing requires it, and it
+would be free to fail without stopping anything.
+
+Everything shared comes from `kanso-labs/github-actions` at an exact release
+tag, never a moving major — `actions/setup-node`, `actions/lint-workflows`,
+`_release-please.yaml`, `_publish-npm.yaml` and `_renovate-command.yaml`. A
+change over there reaches this repository only when Renovate bumps the pin,
+which is deliberate — see that repository's `AGENTS.md`.
+
+`renovate-command.yaml` is what makes `@renovate rebase` work on a dependency
+pull request here. It only ever runs from `main`, because `issue_comment` is a
+repository-level event, so a change to it cannot be tested from a branch.
 
 ## Commits and pull requests
 
@@ -143,14 +161,25 @@ under `kanso-labs-admin` — this workflow has never published anything.
 Configuring the trusted publisher against this repository and
 `release-please.yaml` is the fix, and needs no change to the workflow.
 
-**`release-please.yaml`'s own comments describe a failure that no longer
-happens.** They say the two secrets do not exist, that the shared workflow
-therefore falls back to `GITHUB_TOKEN`, and that `permissions:` is wide to
-suit — all superseded, as the 0.2.2 run shows: `Mint an application token`
-succeeded and `Warn that no application token was supplied` was skipped. That
-superseded failure is also why the npm one went unseen for so long.
+**`release-please.yaml` used to describe a failure that no longer happens.**
+Its comments said the two secrets did not exist, that the shared workflow
+therefore fell back to `GITHUB_TOKEN`, and that `permissions:` was wide to
+suit. All three were superseded, as the 0.2.2 run shows: `Mint an application
+token` succeeded and `Warn that no application token was supplied` was skipped.
+The comments and the wide grant are both gone now, and `GITHUB_TOKEN` is back
+on `contents: read`.
+
+That superseded failure is also why the npm one went unseen for so long.
 `Publish to npm` is gated on `release_created`, no release pull request had
 ever been mergeable, and so the job had never once run before 0.2.2.
+
+**Moving the publish into the shared workflow does not change what npm
+validates.** `Publish to npm` now calls `_publish-npm.yaml`, but npm's trusted
+publishing checks the *entry point* workflow rather than the reusable one that
+runs `npm publish` — so the name to register on npmjs.com is still
+`release-please.yaml`, exactly as it was. `id-token: write` has to be granted
+on both the calling job and the called workflow, and it is. None of this fixes
+the `E404` above: that is still a missing trusted publisher on the registry.
 
 **The watched-file filter is what stops an infinite rebuild loop.**
 `matchesWatchedFile` guards both the Vite `configureServer` watcher and the

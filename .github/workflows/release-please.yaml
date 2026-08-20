@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+  # release-please only ever reacts to a push, which leaves no way to ask it to
+  # look again. That matters when a release pull request has to be discarded:
+  # release-please rewrites one only when the release it computes changes, so a
+  # pull request that cannot merge is not repaired by closing it, and nothing
+  # proposes a replacement until somebody happens to push. This is that lever.
+  workflow_dispatch:
 
 # Every release merge pushes main, and every push starts a run. Overlapping runs
 # try to cut the same tags and strip the same labels, and one dies on the
@@ -16,36 +22,23 @@ concurrency:
   cancel-in-progress: false
   group: release-please
 
-# Wide because this repository has no application token yet, so the shared
-# workflow falls back to GITHUB_TOKEN and that token has to do the writing
-# itself. Once the secrets below exist, this can drop to contents: read.
-#
-# id-token is granted on the publish job rather than here, since that job is
-# the only thing that needs it and npm is the only audience for it.
+# The application token below does the writing, so GITHUB_TOKEN stays on read.
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  # These two secrets do not exist in this repository yet. An unset secret
-  # arrives as an empty string, which selects the shared workflow's
-  # GITHUB_TOKEN fallback and prints a warning saying so — it does not fail.
-  #
-  # The fallback cannot actually release this repository, and could not before
-  # either. A pull request opened with GITHUB_TOKEN starts no workflow runs, so
-  # the release pull request never starts Build, Lint or Test, which are the
-  # three checks this repository's ruleset requires in order to merge it.
-  #
-  # Installing the app that home-assistant-applications already uses and adding
-  # its two secrets is the fix, and needs no change to this file.
   release-please:
     name: Propose releases
-    uses: kanso-labs/github-actions/.github/workflows/_release-please.yaml@v2.0.0
+    uses: kanso-labs/github-actions/.github/workflows/_release-please.yaml@v2.1.0
     secrets:
       client-id: ${{ secrets.RELEASE_PLEASE_CLIENT_ID }}
       private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
 
+  # Trusted publishing, so there is no npm token in this repository. The first
+  # publish could not use it — npm configures a trusted publisher on the package
+  # page, and the package has to exist before there is a page to configure — so
+  # 0.2.1 was pushed by hand and carries a human _npmUser and no provenance
+  # attestation. Everything since goes through here.
   publish:
     name: Publish to npm
     needs: release-please
@@ -53,28 +46,11 @@ jobs:
     # would also pass on the string "false", which is what this output carries
     # when release-please runs and decides not to cut a release.
     if: needs.release-please.outputs.release_created == 'true'
-    runs-on: ubuntu-latest
+    # id-token is what npm exchanges for a short-lived credential, and what
+    # mints the provenance attestation off the same token. The called workflow
+    # declares both as well, so forgetting one here fails the run immediately
+    # with the scope named rather than being refused later by npm.
     permissions:
       contents: read
-      # npm trusted publishing exchanges this for a short-lived credential, so
-      # there is no npm token in this repository at all.
       id-token: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v2.0.0
-        with:
-          # This job installs once and then throws the runner away, so
-          # restoring the cache costs more than the install it would save.
-          cache: false
-          registry-url: https://registry.npmjs.org
-
-      - name: Run build
-        run: npm run build
-
-      - name: Publish to npm
-        run: npm publish
+    uses: kanso-labs/github-actions/.github/workflows/_publish-npm.yaml@v2.1.0
