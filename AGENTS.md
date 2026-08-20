@@ -123,16 +123,34 @@ which is the point: housekeeping should not cut a release.
 
 ## Traps
 
-**Releases cannot currently complete, and the failure is quiet.**
-`release-please.yaml` passes `RELEASE_PLEASE_CLIENT_ID` and
-`RELEASE_PLEASE_PRIVATE_KEY`, and neither secret exists in this repository. An
-unset secret arrives as an empty string, which selects the shared workflow's
-`GITHUB_TOKEN` fallback and prints a warning rather than failing. But a pull
-request opened with `GITHUB_TOKEN` starts no workflow runs, so the release pull
-request never starts `Build`, `Lint` or `Test` — the three checks the ruleset
-requires to merge it. The release pull request is therefore proposed and then
-unmergeable. Installing the app `home-assistant-applications` already uses and
-adding those two secrets is the fix, and needs no change to the workflow.
+**Releases tag but never reach npm.** The release half works now:
+`RELEASE_PLEASE_CLIENT_ID` and `RELEASE_PLEASE_PRIVATE_KEY` are organization
+secrets on `kanso-labs` with visibility `ALL` — `gh secret list` run against
+this repository prints nothing and they are there all the same — so release
+pull requests are opened by `app/kanso-labs`, start `Build`, `Lint` and
+`Test`, merge, and tag. `Publish to npm` is the job that fails, with
+`npm error code E404` on the `PUT` to
+`https://registry.npmjs.org/@kanso-labs%2funplugin-style-dictionary`, which
+leaves the 0.2.2 tag and GitHub release standing while npm still serves 0.2.1.
+The job authenticates with nothing: `id-token: write` is granted and Node
+24.19.0's npm 11.17.0 is new enough for trusted publishing, but the run log
+shows no OIDC exchange even attempted — npm makes the `PUT` unauthenticated,
+and npm answers an unauthorized write with 404 rather than 403 so as not to
+leak whether a package exists. The missing half is on the registry: no trusted
+publisher is configured for this package on npmjs.com. 0.2.0 and 0.2.1 carry
+the registry signature but no attestations, so they were published by hand
+under `kanso-labs-admin` — this workflow has never published anything.
+Configuring the trusted publisher against this repository and
+`release-please.yaml` is the fix, and needs no change to the workflow.
+
+**`release-please.yaml`'s own comments describe a failure that no longer
+happens.** They say the two secrets do not exist, that the shared workflow
+therefore falls back to `GITHUB_TOKEN`, and that `permissions:` is wide to
+suit — all superseded, as the 0.2.2 run shows: `Mint an application token`
+succeeded and `Warn that no application token was supplied` was skipped. That
+superseded failure is also why the npm one went unseen for so long.
+`Publish to npm` is gated on `release_created`, no release pull request had
+ever been mergeable, and so the job had never once run before 0.2.2.
 
 **The watched-file filter is what stops an infinite rebuild loop.**
 `matchesWatchedFile` guards both the Vite `configureServer` watcher and the
