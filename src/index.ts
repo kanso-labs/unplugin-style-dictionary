@@ -44,6 +44,105 @@ export function matchesWatchedFile(file: string, patterns: string[]): boolean {
   })
 }
 
+// Style Dictionary writes every generated file with a plain `writeFile` on the
+// volume it was handed, which truncates the destination and then streams the
+// new contents into it. Anything reading that file inside the window sees a
+// partial file: a consuming test run whose tokens are rebuilt mid-suite, or a
+// dev-server request landing on a rebuild, gets a truncated module and fails
+// to parse it. Writing a sibling temporary file and renaming it over the
+// destination closes the window — `rename` is atomic within a filesystem, so a
+// concurrent reader sees either the whole old file or the whole new one.
+
+// Best-effort cleanup of a temporary file whose write or rename failed. The
+// original failure is what the caller reports, so nothing here may throw.
+function discardTemporaryFile(temporary: string): void {
+  try {
+    fs.rmSync(temporary, { force: true })
+  } catch {
+    // Ignore: a leftover temporary file is not worth masking the real error.
+  }
+}
+
+// Temporary path for an atomic write of `destination`.
+//
+// It has to be a sibling of the destination, because `rename` is only atomic
+// within one filesystem and the system temp directory is often a different
+// mount. The final extension is dropped rather than kept, so the temporary
+// file cannot match a pattern written for the generated file's own extension —
+// `matchesWatchedFile` tests its globs unanchored, and a leftover
+// `vars.css.tmp` would match a `*.css` watch. The pid and counter make the
+// name unique, so two writes of the same destination — parallel platforms in
+// one build, or two builds overlapping — never share a temporary file.
+let temporaryFileCounter = 0
+
+function temporaryPathFor(destination: string): string {
+  const extension = path.extname(destination)
+
+  return path.join(
+    path.dirname(destination),
+    `.${path.basename(destination, extension)}.${process.pid}.${temporaryFileCounter++}.tmp`,
+  )
+}
+
+const writeFileAtomic: typeof fs.promises.writeFile = async (
+  file,
+  data,
+  options,
+) => {
+  // A file handle or descriptor is already-open state that a rename cannot
+  // stand in for, so only a path is written atomically.
+  if (typeof file !== 'string') {
+    return fs.promises.writeFile(file, data, options)
+  }
+
+  const temporary = temporaryPathFor(file)
+
+  try {
+    await fs.promises.writeFile(temporary, data, options)
+    await fs.promises.rename(temporary, file)
+  } catch (err) {
+    discardTemporaryFile(temporary)
+    throw err
+  }
+}
+
+const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
+  if (typeof file !== 'string') {
+    fs.writeFileSync(file, data, options)
+    return
+  }
+
+  const temporary = temporaryPathFor(file)
+
+  try {
+    fs.writeFileSync(temporary, data, options)
+    fs.renameSync(temporary, file)
+  } catch (err) {
+    discardTemporaryFile(temporary)
+    throw err
+  }
+}
+
+// `node:fs` with both write entry points swapped for their atomic
+// equivalents, handed to Style Dictionary as the volume it builds through.
+// Everything else — reads, `mkdir`, `access`, the `promises` namespace — is
+// inherited from `node:fs` unchanged, so only the moment a file becomes
+// visible to readers changes. Custom actions receive this volume too, so
+// whatever they emit is written the same way.
+//
+// It is assigned onto the instance rather than passed as the `volume`
+// constructor option on purpose: that option marks the volume as a custom
+// filesystem shim, which switches Style Dictionary's path resolution off for
+// every read as well.
+const atomicVolume = Object.create(fs, {
+  promises: {
+    value: Object.create(fs.promises, {
+      writeFile: { value: writeFileAtomic },
+    }) as typeof fs.promises,
+  },
+  writeFileSync: { value: writeFileSyncAtomic },
+}) as typeof fs
+
 export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
@@ -225,6 +324,10 @@ export const unpluginFactory: UnpluginFactory<
             verbosity: 'silent',
           },
         })
+        // Swap in the atomic volume only now that the instance has finished
+        // reading its configs and token sources, so every write below lands
+        // through `rename` while the read path stays exactly as it was.
+        silentSD.volume = atomicVolume
         await silentSD.buildAllPlatforms()
 
         if (!context && !silent && silentSD.platforms) {

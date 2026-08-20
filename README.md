@@ -10,6 +10,7 @@ Built on unplugin, the same core plugin targets **Vite**, **Rolldown**, **Rollup
 - **Asynchronous builds**: Native support for Style Dictionary v4/v5 async compilation API.
 - **Automatic watching**: Reads the `source` and `include` patterns from your Style Dictionary configurations and automatically watches them. Live rebuild-on-change is fully supported under Vite's dev server; other targets rebuild on change wherever the host bundler itself runs a persistent watch mode.
 - **Config flexibility**: Supports file paths (JSON, JS, MJS, CJS, TS), configuration objects, or functions — including registering custom formats at config-resolution time.
+- **Atomic writes**: Every generated file is written to a temporary sibling and renamed into place, so code importing a token file while it is being rebuilt never reads a half-written file.
 - **Multi-configuration**: Can run multiple Style Dictionary configurations in parallel (useful for multi-brand or multi-theme projects).
 - **TypeScript Support**: Fully written in TypeScript and exports complete type definitions.
 
