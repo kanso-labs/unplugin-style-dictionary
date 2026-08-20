@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.1...unplugin-style-dictionary-v0.2.2) (2026-08-20)
+
+
+### Bug Fixes
+
+* write generated files atomically ([#71](https://github.com/kanso-labs/unplugin-style-dictionary/issues/71)) ([ab7886e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ab7886ee29f9fc2ea6d290ea887db0d67657279a))
+
 ## [0.2.1](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.0...unplugin-style-dictionary-v0.2.1) (2026-07-20)
 
 

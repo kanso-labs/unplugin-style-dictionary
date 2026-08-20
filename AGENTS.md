@@ -142,6 +142,19 @@ output, since consuming code imports it. Each regenerate is itself a change, so
 dropping the filter rebuilds forever. `tests/index.test.ts` pins this directly;
 do not "simplify" the guard.
 
+**Generated files go through a temporary file and a `rename` on purpose.**
+Style Dictionary writes each file straight to its destination, which truncates
+it first, so anything importing a generated file mid-rebuild — a consuming test
+run, a dev-server request — reads a partial file and fails to parse it.
+`runBuilds` therefore hands the instance an `atomicVolume`: `node:fs` with both
+write entry points swapped for versions that write a sibling temporary file and
+rename it over the destination, `rename` being atomic within a filesystem. It
+is assigned onto the instance rather than passed as Style Dictionary's `volume`
+constructor option, because that option also marks the volume as a custom
+filesystem shim and turns path resolution off for every read.
+`tests/index.test.ts` pins this with a concurrent reader; a single clean build
+proves nothing, since the window is only tens of milliseconds wide.
+
 **Vite needs the `configureServer` escape hatch, and that is not redundancy.**
 Token sources are plain JSON and JS files sitting outside the module graph, and
 Vite does not reliably invoke `watchChange` while serving. `watchChange` alone
