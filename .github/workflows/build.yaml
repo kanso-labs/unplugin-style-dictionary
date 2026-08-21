@@ -21,7 +21,7 @@ jobs:
       # Skips the prepare script, which only installs husky's git hooks. A
       # runner has no commits to hook, so it is pure install time here.
       - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v3.0.2
+        uses: kanso-labs/github-actions/actions/setup-node@v3.1.1
         with:
           ignore-scripts: true
 
