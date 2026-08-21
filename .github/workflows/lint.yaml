@@ -26,6 +26,14 @@ jobs:
       - name: Run actionlint
         uses: kanso-labs/github-actions/actions/lint-workflows@v3.0.2
 
+      # Also before the install, and a step of this job for the same reason as
+      # actionlint above. It compares the AGENTS.md paragraphs marked
+      # `<!-- shared:… -->` against the canonical copies in github-actions, so
+      # editing one of them here alone fails Lint rather than quietly leaving
+      # this repository's copy saying something the others do not.
+      - name: Check shared documentation blocks
+        uses: kanso-labs/github-actions/actions/check-shared-docs@v3.1.0
+
       - name: Set up Node
         uses: kanso-labs/github-actions/actions/setup-node@v3.0.2
         with:
