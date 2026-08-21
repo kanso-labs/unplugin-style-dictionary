@@ -11,7 +11,7 @@ import { createUnplugin } from 'unplugin'
 
 import type { UnpluginStyleDictionaryOptions } from './types.js'
 
-export * from './types.js'
+export type * from './types.js'
 
 // Whether `file` matches one of the resolved config/token watch patterns.
 // Shared by the Vite-specific `configureServer` watcher and the universal
@@ -44,15 +44,6 @@ export function matchesWatchedFile(file: string, patterns: string[]): boolean {
   })
 }
 
-// Style Dictionary writes every generated file with a plain `writeFile` on the
-// volume it was handed, which truncates the destination and then streams the
-// new contents into it. Anything reading that file inside the window sees a
-// partial file: a consuming test run whose tokens are rebuilt mid-suite, or a
-// dev-server request landing on a rebuild, gets a truncated module and fails
-// to parse it. Writing a sibling temporary file and renaming it over the
-// destination closes the window — `rename` is atomic within a filesystem, so a
-// concurrent reader sees either the whole old file or the whole new one.
-
 // Best-effort cleanup of a temporary file whose write or rename failed. The
 // original failure is what the caller reports, so nothing here may throw.
 function discardTemporaryFile(temporary: string): void {
@@ -62,6 +53,41 @@ function discardTemporaryFile(temporary: string): void {
     // Ignore: a leftover temporary file is not worth masking the real error.
   }
 }
+
+// `catch` binds `unknown`, and a thrown non-Error — a string, a rejected
+// value out of a config module — carries no `.message`. The `as Error` casts
+// this replaces claimed otherwise and printed `undefined` for exactly those
+// cases, which is the least useful thing a failure log can say.
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+// A config file is an untyped boundary: `JSON.parse` and a dynamic `import`
+// both hand back `any`, and an `any` assigned to `configObj` spreads through
+// every read of it downstream. These two narrow that boundary once, here.
+// They are type predicates rather than assertions on purpose — a predicate is
+// a check the compiler verifies, where a cast is only a claim.
+function isConfig(value: unknown): value is Config {
+  return typeof value === 'object' && value !== null
+}
+
+// A config module may expose its config as a `default` export or as the
+// namespace itself. `'default' in value` is what lets the compiler reach
+// `.default` without a cast.
+function unwrapDefault(value: unknown): unknown {
+  return typeof value === 'object' && value !== null && 'default' in value
+    ? (value.default ?? value)
+    : value
+}
+
+// Style Dictionary writes every generated file with a plain `writeFile` on the
+// volume it was handed, which truncates the destination and then streams the
+// new contents into it. Anything reading that file inside the window sees a
+// partial file: a consuming test run whose tokens are rebuilt mid-suite, or a
+// dev-server request landing on a rebuild, gets a truncated module and fails
+// to parse it. Writing a sibling temporary file and renaming it over the
+// destination closes the window — `rename` is atomic within a filesystem, so a
+// concurrent reader sees either the whole old file or the whole new one.
 
 // Temporary path for an atomic write of `destination`.
 //
@@ -134,6 +160,11 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
 // constructor option on purpose: that option marks the volume as a custom
 // filesystem shim, which switches Style Dictionary's path resolution off for
 // every read as well.
+// `Object.create` is declared as returning `any`, so pinning the result to
+// `typeof fs` is a claim no type guard can replace. The prototype link is the
+// whole point — see the note above — so rebuilding this with a spread, which
+// copies own properties and drops the chain, is not a substitute.
+/* oxlint-disable typescript/no-unsafe-type-assertion */
 const atomicVolume = Object.create(fs, {
   promises: {
     value: Object.create(fs.promises, {
@@ -142,6 +173,7 @@ const atomicVolume = Object.create(fs, {
   },
   writeFileSync: { value: writeFileSyncAtomic },
 }) as typeof fs
+/* oxlint-enable typescript/no-unsafe-type-assertion */
 
 export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
@@ -240,17 +272,30 @@ export const unpluginFactory: UnpluginFactory<
 
       if (typeof item.config === 'string') {
         try {
+          let loaded: unknown
+
           if (item.config.endsWith('.json')) {
-            const content = fs.readFileSync(item.config, 'utf-8')
-            configObj = JSON.parse(content)
+            loaded = JSON.parse(fs.readFileSync(item.config, 'utf-8'))
           } else {
             const fileUrl = pathToFileURL(item.config).href
-            const module = await import(`${fileUrl}?t=${Date.now()}`)
-            configObj = module.default || module
+            // Sequential on purpose: a config module runs arbitrary code at
+            // import time — `registerFormat` and friends — and Style
+            // Dictionary's registries are global, so importing several at
+            // once would interleave those registrations.
+            loaded = unwrapDefault(await import(`${fileUrl}?t=${Date.now()}`))
+          }
+
+          if (isConfig(loaded)) {
+            configObj = loaded
+          } else {
+            log(
+              `Config file did not resolve to a configuration object: ${item.config}`,
+              'error',
+            )
           }
         } catch (err) {
           log(
-            `Failed to parse config file: ${item.config}. Error: ${(err as Error).message}`,
+            `Failed to parse config file: ${item.config}. Error: ${errorMessage(err)}`,
             'error',
           )
         }
@@ -316,6 +361,11 @@ export const unpluginFactory: UnpluginFactory<
 
       const generatedFiles = new Set<string>()
 
+      // Configurations are built one after another rather than with
+      // `Promise.all`, and that is load-bearing. Two configurations may name
+      // the same destination file, and each instance gets the atomic volume
+      // swapped onto it below — overlapping builds would interleave those
+      // writes and hand a reader a file assembled from both.
       for (const item of resolvedConfigs) {
         const sd = new StyleDictionary(item.config)
         await sd.hasInitialized
@@ -330,21 +380,18 @@ export const unpluginFactory: UnpluginFactory<
         silentSD.volume = atomicVolume
         await silentSD.buildAllPlatforms()
 
-        if (!context && !silent && silentSD.platforms) {
-          for (const platformName of Object.keys(silentSD.platforms)) {
-            const platform = silentSD.platforms[platformName]
-            if (platform && platform.files) {
-              const buildPath = platform.buildPath || ''
-              for (const file of platform.files) {
-                if (file && file.destination) {
-                  const absoluteBuildPath = path.isAbsolute(buildPath)
-                    ? buildPath
-                    : path.resolve(root, buildPath)
-                  const absoluteDestination = path.isAbsolute(file.destination)
-                    ? file.destination
-                    : path.resolve(absoluteBuildPath, file.destination)
-                  generatedFiles.add(absoluteDestination)
-                }
+        if (!context && !silent) {
+          for (const platform of Object.values(silentSD.platforms)) {
+            const buildPath = platform.buildPath ?? ''
+            for (const file of platform.files ?? []) {
+              if (file.destination) {
+                const absoluteBuildPath = path.isAbsolute(buildPath)
+                  ? buildPath
+                  : path.resolve(root, buildPath)
+                const absoluteDestination = path.isAbsolute(file.destination)
+                  ? file.destination
+                  : path.resolve(absoluteBuildPath, file.destination)
+                generatedFiles.add(absoluteDestination)
               }
             }
           }
@@ -430,7 +477,7 @@ export const unpluginFactory: UnpluginFactory<
     } catch (err) {
       const duration = Date.now() - startTime
       log(
-        `Compilation failed after ${duration}ms: ${(err as Error).message}`,
+        `Compilation failed after ${duration}ms: ${errorMessage(err)}`,
         'error',
       )
     }
@@ -471,20 +518,39 @@ export const unpluginFactory: UnpluginFactory<
         // Watch configuration files and token files
         server.watcher.add(filesToWatch)
 
-        server.watcher.on('all', async (_event, file) => {
+        // chokidar types its listener as returning void and does not await
+        // what it is handed, so handing it an async function left every
+        // rejection floating — `runBuilds` catches its own, but
+        // `resolveConfigs` and `getWatchFiles` do not. Launching the work
+        // explicitly and catching here is what keeps a bad config on disk
+        // from surfacing as an unhandled rejection that kills the dev server.
+        server.watcher.on('all', (_event, file) => {
           if (!matchesWatchedFile(file, filesToWatch)) return
 
-          // Re-resolve configs to handle added/removed configs or changes to config itself
-          const currentResolved = await resolveConfigs()
-          await runBuilds(currentResolved, path.basename(file))
+          void (async () => {
+            try {
+              // Re-resolve configs to handle added/removed configs or changes
+              // to config itself
+              const currentResolved = await resolveConfigs()
+              await runBuilds(currentResolved, path.basename(file))
 
-          // Dynamically update the watch list in case the configurations changed
-          const newWatches = await getWatchFiles(currentResolved)
-          server.watcher.add(newWatches)
+              // Dynamically update the watch list in case the configurations
+              // changed
+              const newWatches = await getWatchFiles(currentResolved)
+              server.watcher.add(newWatches)
+            } catch (err) {
+              log(`Rebuild failed: ${errorMessage(err)}`, 'error')
+            }
+          })()
         })
       },
     },
 
+    // Rollup types `watchChange` as returning void, yet awaits it as a
+    // sequential hook — and the work here is inherently asynchronous. The
+    // signature is the thing that is wrong, so the rule is silenced rather
+    // than the hook made to lie about finishing.
+    // oxlint-disable-next-line typescript/no-misused-promises
     async watchChange(id) {
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return

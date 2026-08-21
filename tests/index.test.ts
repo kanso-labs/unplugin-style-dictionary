@@ -13,24 +13,38 @@ interface BuildContext {
   addWatchFile: (id: string) => void
 }
 
+type PluginHook<A extends unknown[]> = (
+  this: BuildContext,
+  ...args: A
+) => Promise<void> | void
+
+// Rollup types every hook as `ObjectHook` — a union of a plain function and a
+// `{ handler }` object — and neither member carries the stub `this` below. A
+// predicate narrows that union to the callable form; a cast would claim the
+// same thing without the compiler checking the call is possible at all.
+function isPluginHook<A extends unknown[]>(
+  hook: unknown,
+): hook is PluginHook<A> {
+  return typeof hook === 'function'
+}
+
 // Vite/Rollup normally provide the plugin-context `this` (with addWatchFile,
 // etc.) when invoking a hook. To unit-test buildStart in isolation we bind a
 // minimal stub context ourselves rather than spinning up a real dev server.
 const callBuildStart = async (plugin: Plugin) => {
   const context: BuildContext = { addWatchFile: () => {} }
-  await (
-    plugin.buildStart as (this: BuildContext) => Promise<void> | void
-  ).call(context)
+  if (!isPluginHook<[]>(plugin.buildStart)) {
+    throw new TypeError('buildStart is not a callable hook')
+  }
+  await plugin.buildStart.call(context)
 }
 
 const callWatchChange = async (plugin: Plugin, id: string) => {
   const context: BuildContext = { addWatchFile: () => {} }
-  await (
-    plugin.watchChange as (
-      this: BuildContext,
-      id: string,
-    ) => Promise<void> | void
-  ).call(context, id)
+  if (!isPluginHook<[string]>(plugin.watchChange)) {
+    throw new TypeError('watchChange is not a callable hook')
+  }
+  await plugin.watchChange.call(context, id)
 }
 
 describe('unplugin-style-dictionary (vite target)', () => {
@@ -100,12 +114,9 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })
 
     // Simulate configResolved hook
-    if (plugin.configResolved) {
-      await (
-        plugin.configResolved as (
-          config: Record<string, unknown>,
-        ) => Promise<void> | void
-      )({ root: process.cwd() })
+    if (isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
+      const context: BuildContext = { addWatchFile: () => {} }
+      await plugin.configResolved.call(context, { root: process.cwd() })
     }
 
     await callBuildStart(plugin)
@@ -273,17 +284,19 @@ describe('unplugin-style-dictionary (vite target)', () => {
 
     const failures: string[] = []
     let reads = 0
-    let building = true
+    const state = { building: true }
 
     const reader = (async () => {
-      while (building) {
+      while (state.building) {
         reads++
 
         let content: string
         try {
           content = fs.readFileSync(concurrentOutputFile, 'utf-8')
         } catch (err) {
-          failures.push(`read failed: ${(err as Error).message}`)
+          failures.push(
+            `read failed: ${err instanceof Error ? err.message : String(err)}`,
+          )
           await new Promise((resolve) => setImmediate(resolve))
           continue
         }
@@ -295,7 +308,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
           try {
             JSON.parse(content)
           } catch (err) {
-            reason = (err as Error).message
+            reason = err instanceof Error ? err.message : String(err)
           }
           failures.push(
             `${reason} (read ${content.length} of ${expected.length} bytes)`,
@@ -310,7 +323,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
     for (let index = 0; index < rebuilds; index++) {
       await callBuildStart(plugin)
     }
-    building = false
+    state.building = false
     await reader
 
     expect(failures).toEqual([])
