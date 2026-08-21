@@ -1,6 +1,7 @@
 import type { Plugin } from 'vite'
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -33,7 +34,16 @@ const callWatchChange = async (plugin: Plugin, id: string) => {
 }
 
 describe('unplugin-style-dictionary (vite target)', () => {
-  const tempDir = path.resolve('temp-test-tokens')
+  // A fixture directory per run, rather than one shared `temp-test-tokens` at
+  // the repo root. Every path below is derived from it, and the whole suite
+  // writes real files, so two vitest processes in the same checkout — a watch
+  // run beside a one-shot run, an agent beside a human — otherwise delete and
+  // truncate each other's fixtures and fail with ENOTEMPTY and ENOENT. Under
+  // the OS temp directory a crashed run also leaves nothing untracked behind
+  // in the working tree.
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-'),
+  )
   const configFile = path.join(tempDir, 'sd.config.json')
   const tokenFile = path.join(tempDir, 'tokens.json')
   const outputFile = path.join(tempDir, 'vars.css')
