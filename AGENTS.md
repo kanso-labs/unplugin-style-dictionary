@@ -48,20 +48,15 @@ compiles each Style Dictionary config in turn, and letting those overlap would
 have two builds writing the same destinations at once. The rule's advice to
 collect the promises and `Promise.all` them is a bug here, not an optimisation.
 
-<!-- shared:node-install -->
-
 **Install with the Node version in `.tool-versions` (24.19.0).** CI resolves it
 from that file, and an older npm silently drops the platform entries the
 lockfile carries for Linux builds — a rewrite with no visible symptom until a
 Linux runner installs the wrong native binary. If `node --version` disagrees,
 prefix the command: `mise exec node@24.19.0 -- npm install`.
-<!-- /shared:node-install -->
 
 ## Conventions
 
 Shared with the other `kanso-labs` repositories:
-
-<!-- shared:conventions -->
 
 - **Keys in JSON and YAML are ordered by name.** Files whose order carries
   meaning are exempt: workflows, where step order is execution order;
@@ -82,8 +77,6 @@ Shared with the other `kanso-labs` repositories:
   ranges are correct there and stay.
 - **`.tool-versions` pins a fully-specified version on every line**,
   `nodejs 24.19.0`, never `nodejs 24` or `nodejs lts`.
-
-<!-- /shared:conventions -->
 
 In TypeScript that ordering rule is enforced rather than trusted:
 `eslint-plugin-perfectionist` runs at `recommended-natural`, so object keys,
@@ -115,20 +108,14 @@ three are the checks the repository's ruleset requires, so a merge is gated on
 them, and the push trigger is what re-verifies `main` afterwards rather than
 leaving it on trust.
 
-<!-- shared:pull-request-unscoped -->
-
 The `pull_request` trigger is deliberately unscoped. Adding `branches: [main]`
 would match the sibling repositories, but a pull request opened against any
 other base would then post none of the checks the ruleset requires, which reads
 as a hang rather than a failure because nothing will ever report.
-<!-- /shared:pull-request-unscoped -->
-
-<!-- shared:job-name-check -->
 
 **A job name becomes a check name.** Renaming a job edits the merge gate rather
 than the label on it, so keep the job name and the ruleset in sync in one
 change.
-<!-- /shared:job-name-check -->
 
 Ruleset `19123565` ("Default") requires `Build`, `Lint` and `Test` by exact
 string.
@@ -155,11 +142,8 @@ minor, `fix` or `deps` for a patch, `!` for a breaking change, anything else
 releases nothing. `bump-minor-pre-major` is set, so while the version is below
 1.0.0 a breaking change takes the minor.
 
-<!-- shared:branch-commits -->
-
 Write branch commits conventionally anyway. They are what a reviewer reads while
 the pull request is open, even though only the title survives the merge.
-<!-- /shared:branch-commits -->
 
 Renovate's own commits are typed `deps:`, and that type is what makes them
 release. release-please computes a patch bump for any commit that is not a
@@ -310,15 +294,12 @@ output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
 merge to npm.
 
-<!-- shared:commitlint -->
-
 **commitlint is installed but never runs.** `@commitlint/cli`,
 `@commitlint/config-conventional` and `.commitlintrc.json` are all present, and
 `.husky/` carries a `pre-commit` hook — but that hook runs lint-staged, not
 commitlint. There is no `commit-msg` hook and no workflow invoking one, so a
 malformed type reaches `main` unnoticed and lands in the changelog, and the pull
 request title is on the author to get right.
-<!-- /shared:commitlint -->
 
 The hook directory existing makes this easier to misread as solved than it was
 when the directory held nothing but husky's own `_`.
