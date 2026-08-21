@@ -30,8 +30,14 @@
         "eslint",
         "eslint-config-**",
         "eslint-plugin-**",
-        "typescript-eslint"
+        "typescript-eslint",
+        "!eslint-plugin-oxlint"
       ]
+    },
+    {
+      "description": "eslint-plugin-oxlint declares a hard `~` peer on the matching oxlint minor, so a lone bump of either resolves to ERESOLVE. The eslint rule above negates the plugin out of its `eslint-plugin-**` matcher so this pairing does not rest on rule order.",
+      "groupName": "oxlint",
+      "matchPackageNames": ["eslint-plugin-oxlint", "oxlint"]
     },
     {
       "groupName": "vitest",
