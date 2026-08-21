@@ -128,3 +128,4 @@ vite.config.ts.timestamp-*
 
 ### Claude Code ###
 .claude/worktrees/
+.context/

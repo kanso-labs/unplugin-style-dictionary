@@ -1,6 +1,6 @@
 import eslintJs from '@eslint/js'
+import eslintPluginOxlint from 'eslint-plugin-oxlint'
 import eslintPluginPerfectionist from 'eslint-plugin-perfectionist'
-import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import globals from 'globals'
 import typescriptEslint from 'typescript-eslint'
@@ -15,7 +15,6 @@ export default defineConfig([
       eslintJs.configs.recommended,
       ...typescriptEslint.configs.recommended,
       eslintPluginPerfectionist.configs['recommended-natural'],
-      eslintPluginPrettierRecommended,
     ],
     files: ['**/*.{ts,js,mjs,cjs}'],
     languageOptions: {
@@ -26,4 +25,5 @@ export default defineConfig([
       },
     },
   },
+  ...eslintPluginOxlint.buildFromOxlintConfigFile('./.oxlintrc.json'),
 ])
