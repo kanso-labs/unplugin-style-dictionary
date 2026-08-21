@@ -1,0 +1,4 @@
+{
+  "!(*-lock).{json,md,yaml,yml}": ["oxfmt"],
+  "*.ts": ["oxlint --type-aware --fix", "eslint --fix", "oxfmt"]
+}
