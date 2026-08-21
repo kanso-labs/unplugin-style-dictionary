@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.6...unplugin-style-dictionary-v0.3.0) (2026-08-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* replace the Vite library build with tsdown, and Prettier with oxfmt ([#90](https://github.com/kanso-labs/unplugin-style-dictionary/issues/90))
+
+### Build System
+
+* replace the Vite library build with tsdown, and Prettier with oxfmt ([#90](https://github.com/kanso-labs/unplugin-style-dictionary/issues/90)) ([d62fbc4](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d62fbc4439b4bf261fd9c07520a33416e15fcdc7))
+
 ## [0.2.6](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.5...unplugin-style-dictionary-v0.2.6) (2026-08-21)
 
 
