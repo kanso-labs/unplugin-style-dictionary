@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.2...unplugin-style-dictionary-v0.2.3) (2026-08-21)
+
+
+### Dependencies
+
+* update js-yaml and brace-expansion to patched versions ([#76](https://github.com/kanso-labs/unplugin-style-dictionary/issues/76)) ([633a17a](https://github.com/kanso-labs/unplugin-style-dictionary/commit/633a17a478f327c35878a487ce5697bd3f2dd81d))
+
 ## [0.2.2](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.1...unplugin-style-dictionary-v0.2.2) (2026-08-20)
 
 
