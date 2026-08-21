@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.3.0...unplugin-style-dictionary-v0.4.0) (2026-08-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* drop the CommonJS build and ship ESM only ([#93](https://github.com/kanso-labs/unplugin-style-dictionary/issues/93))
+
+### Build System
+
+* drop the CommonJS build and ship ESM only ([#93](https://github.com/kanso-labs/unplugin-style-dictionary/issues/93)) ([64caa41](https://github.com/kanso-labs/unplugin-style-dictionary/commit/64caa41565a42791754b95e462a7a6132908c247))
+
 ## [0.3.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.2.6...unplugin-style-dictionary-v0.3.0) (2026-08-21)
 
 
