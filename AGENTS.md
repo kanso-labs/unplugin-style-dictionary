@@ -26,11 +26,11 @@ bundler usage, examples. Keep it correct when you change the public surface.
 | Format | `npm run format` | oxfmt; `npm run format:check` is the check       |
 | Build  | `npm run build`  | Type-checks (`tsc -b`) then builds ESM + CJS     |
 
-**oxfmt formats this repository, not Prettier**, matching `kanso-ui`. The
-formatter runs as its own `npm run format`, and `npm run lint` ends in
-`oxfmt --check` so a badly formatted file fails `Lint` rather than being quietly
-rewritten. `eslint-plugin-prettier` is gone, so `npm run lint -- --fix` no
-longer reformats anything — reach for `npm run format`.
+**oxfmt formats this repository, not Prettier.** The formatter runs as its own
+`npm run format`, and `npm run lint` ends in `oxfmt --check` so a badly
+formatted file fails `Lint` rather than being quietly rewritten.
+`eslint-plugin-prettier` is gone, so `npm run lint -- --fix` no longer reformats
+anything — reach for `npm run format`.
 
 **oxfmt covers Markdown, JSON and YAML as well as TypeScript**, which is new:
 nothing formatted those before. `CHANGELOG.md` is the one exemption, via
@@ -40,12 +40,13 @@ next release pull request, at which point `Lint` fails on a branch nobody
 hand-edits.
 
 **oxlint runs type-aware, and its ruleset is stricter than the code was written
-against.** `.oxlintrc.json` mirrors `kanso-ui`'s minus the React plugins. One
-rule is switched off outright: `no-await-in-loop`. Every loop it flagged awaits
-on purpose — `runBuilds` compiles each Style Dictionary config in turn, and
-letting those overlap would have two builds writing the same destinations at
-once. The rule's advice to collect the promises and `Promise.all` them is a bug
-here, not an optimisation.
+against.** `.oxlintrc.json` runs the `correctness`, `suspicious` and `perf`
+categories with `typeAware` turned on, over the typescript, unicorn, oxc,
+import, promise and vitest plugins. One rule is switched off outright:
+`no-await-in-loop`. Every loop it flagged awaits on purpose — `runBuilds`
+compiles each Style Dictionary config in turn, and letting those overlap would
+have two builds writing the same destinations at once. The rule's advice to
+collect the promises and `Promise.all` them is a bug here, not an optimisation.
 
 **Install with the Node version in `.tool-versions` (24.19.0).** CI resolves it
 from that file, and an older npm silently drops the platform entries the
@@ -225,20 +226,19 @@ called.
 This trap used to end by warning that GitHub Packages creates a new package
 private, and that it would need flipping under the organization's **Packages**
 tab. It did not: 0.2.5 created the package and it came out `visibility=public`
-with no manual step, as did `kanso-ui`'s. Both are public repositories with
-`publishConfig.access` set to `public`, so this is not a general rule, just one
-fewer thing to do here. Visibility is still a package-level setting nothing in
-the run reports, so it is worth a glance the first time a package appears on a
-registry.
+with no manual step. This is a public repository with `publishConfig.access` set
+to `public`, so this is not a general rule, just one fewer thing to do here.
+Visibility is still a package-level setting nothing in the run reports, so it is
+worth a glance the first time a package appears on a registry.
 
 **`fixedExtension: false` in `tsdown.config.ts` cannot be removed.** tsdown
 derives `fixedExtension` from `platform`, and `platform` defaults to `node` —
 which is right for a build-time plugin, but flips the default to emitting ESM as
 `.mjs`. Every `import` condition in `package.json`, plus `module` and `types`,
 names `.js`. Delete the line and the build still succeeds, the tests still pass,
-and the published package resolves to nothing. `kanso-ui` reaches the same
-extensions through `platform: 'neutral'`, so copying its config rather than its
-outcome reintroduces this.
+and the published package resolves to nothing. A project that reaches the same
+extensions through `platform: 'neutral'` needs no such line, so copying another
+repository's config rather than its outcome reintroduces this.
 
 **The build warns `MIXED_EXPORTS` on every run, and the fix is worse than the
 warning.** rolldown notices `src/index.ts` exporting both named members and a
@@ -297,6 +297,6 @@ merge to npm.
 `.husky/` now carries a `pre-commit` hook — but that hook runs lint-staged, not
 commitlint. There is still no `commit-msg` hook and no workflow invoking one, so
 a malformed type reaches `main` unnoticed and lands in the changelog, and the
-pull request title is on the author to get right. `kanso-ui` has the same gap.
-The hook directory existing now makes this easier to misread as solved than it
-was when the directory held nothing but husky's own `_`.
+pull request title is on the author to get right. The hook directory existing
+now makes this easier to misread as solved than it was when the directory held
+nothing but husky's own `_`.
