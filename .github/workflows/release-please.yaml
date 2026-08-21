@@ -39,6 +39,14 @@ jobs:
   # page, and the package has to exist before there is a page to configure — so
   # 0.2.1 was pushed by hand and carries a human _npmUser and no provenance
   # attestation. Everything since goes through here.
+  #
+  # The shared workflow publishes the same tarball twice: to npmjs.com as
+  # described above, then to GitHub Packages. Two jobs, one call, and the second
+  # runs only if the first did — so the organization's own registry never
+  # carries a version npmjs.com has not got. GitHub Packages needs no equivalent
+  # of the bootstrap above; GITHUB_TOKEN creates the package on first publish.
+  # What it does need is a look at the package page afterwards, because a new
+  # package there is created private.
   publish:
     name: Publish to npm
     needs: release-please
@@ -46,11 +54,24 @@ jobs:
     # would also pass on the string "false", which is what this output carries
     # when release-please runs and decides not to cut a release.
     if: needs.release-please.outputs.release_created == 'true'
-    # id-token is what npm exchanges for a short-lived credential, and what
-    # mints the provenance attestation off the same token. The called workflow
-    # declares both as well, so forgetting one here fails the run immediately
-    # with the scope named rather than being refused later by npm.
+    # Three scopes for two registries. id-token is what npm exchanges for a
+    # short-lived credential, and what mints the provenance attestation off the
+    # same token. GitHub Packages has no trusted publishing to exchange against
+    # and takes GITHUB_TOKEN with packages: write instead.
+    #
+    # The called workflow splits the three across its two jobs, and neither job
+    # holds the other's — so all three are named here rather than the two npm
+    # alone would need. A caller is checked against each job it starts, so a
+    # scope left out fails the run immediately with that scope named rather than
+    # being refused later by a registry.
+    #
+    # packages: write landed here before the pin below moved to a version that
+    # has the GitHub Packages job, and that order is not optional: a caller
+    # granting less than a called job asks for fails outright, while granting
+    # more than it asks for is harmless. Renovate's bump of the pin is what
+    # turns the second registry on.
     permissions:
       contents: read
       id-token: write
+      packages: write
     uses: kanso-labs/github-actions/.github/workflows/_publish-npm.yaml@v2.1.0
