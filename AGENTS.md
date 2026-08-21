@@ -34,7 +34,11 @@ repositories' `npm run format` does not exist here.
 **Nothing formats or lints Markdown, JSON or YAML.** `eslint.config.js` scopes
 itself to `**/*.{ts,js,mjs,cjs}`. Match the surrounding style by hand.
 
-Node comes from `.tool-versions` (24.19.0), which is what CI resolves.
+**Install with the Node version in `.tool-versions` (24.19.0).** CI resolves it
+from that file, and an older npm silently drops the platform entries the
+lockfile carries for Linux builds — a rewrite with no visible symptom until a
+Linux runner installs the wrong native binary. If `node --version` disagrees,
+prefix the command: `mise exec node@24.19.0 -- npm install`.
 
 ## Conventions
 
@@ -51,6 +55,14 @@ Shared with the other `kanso-labs` repositories:
   and matrix keys are exempt.
 - **Actions are pinned to exact release tags**, never a moving major or
   `@main`. Renovate opens the bump pull requests.
+- **Dependency versions are pinned exactly.** Every `dependencies`,
+  `devDependencies` and `optionalDependencies` entry is a bare version,
+  `5.5.2`, never `^5.5.2`, `~5.5.2`, `>=5.5.2`, `*`, `5.x` or an `||` union.
+  Renovate opens those bumps too. `peerDependencies` are the deliberate
+  exception: they state what the consumer's own installed copy must satisfy,
+  so ranges are correct there and stay.
+- **`.tool-versions` pins a fully-specified version on every line**,
+  `nodejs 24.19.0`, never `nodejs 24` or `nodejs lts`.
 
 In TypeScript that ordering rule is enforced rather than trusted:
 `eslint-plugin-perfectionist` runs at `recommended-natural`, so object keys,
