@@ -51,16 +51,16 @@ Shared with the other `kanso-labs` repositories:
 - **A workflow's filename is the kebab-case of its `name:` field.** Reusable
   workflows, meaning those triggered only by `workflow_call`, take a leading
   underscore.
-- **Job names and step names are imperative verb phrases.** Job ids, step ids
+- **Job names and step names are imperative verb phrases.** Job ids, step ids,
   and matrix keys are exempt.
-- **Actions are pinned to exact release tags**, never a moving major or
-  `@main`. Renovate opens the bump pull requests.
+- **Actions are pinned to exact release tags**, `actions/checkout@v7.0.1`, never
+  a moving major or `@main`. Renovate opens the bump pull requests.
 - **Dependency versions are pinned exactly.** Every `dependencies`,
-  `devDependencies` and `optionalDependencies` entry is a bare version,
-  `5.5.2`, never `^5.5.2`, `~5.5.2`, `>=5.5.2`, `*`, `5.x` or an `||` union.
+  `devDependencies`, and `optionalDependencies` entry is a bare version,
+  `1.2.3`, never `^1.2.3`, `~1.2.3`, `>=1.2.3`, `*`, `1.x`, or an `||` union.
   Renovate opens those bumps too. `peerDependencies` are the deliberate
-  exception: they state what the consumer's own installed copy must satisfy,
-  so ranges are correct there and stay.
+  exception: they state what the consumer's own installed copy must satisfy, so
+  ranges are correct there and stay.
 - **`.tool-versions` pins a fully-specified version on every line**,
   `nodejs 24.19.0`, never `nodejs 24` or `nodejs lts`.
 
@@ -125,8 +125,8 @@ minor, `fix` or `deps` for a patch, `!` for a breaking change, anything else
 releases nothing. `bump-minor-pre-major` is set, so while the version is below
 1.0.0 a breaking change takes the minor.
 
-Write branch commits conventionally anyway — they are what a reviewer reads
-while the pull request is open.
+Write branch commits conventionally anyway. They are what a reviewer reads while
+the pull request is open, even though only the title survives the merge.
 
 Renovate's own commits are typed `deps:`, and that type is what makes them
 release. release-please computes a patch bump for any commit that is not a
