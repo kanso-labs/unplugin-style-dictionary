@@ -6,7 +6,10 @@ import globals from 'globals'
 import typescriptEslint from 'typescript-eslint'
 
 export default defineConfig([
-  globalIgnores(['dist', 'node_modules', 'coverage']),
+  // `.claude` holds Claude Code's git worktrees, each a full checkout of this
+  // repository, so without this `eslint .` lints every other branch's copy of
+  // `src/` as if it were this one's — and takes four times as long doing it.
+  globalIgnores(['.claude', 'dist', 'node_modules', 'coverage']),
   {
     extends: [
       eslintJs.configs.recommended,
