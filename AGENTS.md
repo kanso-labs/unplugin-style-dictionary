@@ -110,12 +110,15 @@ leaving it on trust.
 
 The `pull_request` trigger is deliberately unscoped. Adding `branches: [main]`
 would match the sibling repositories, but a pull request opened against any
-other base would then post none of the three checks the ruleset requires — which
-reads as a hang rather than a failure, because nothing will ever report.
+other base would then post none of the checks the ruleset requires, which reads
+as a hang rather than a failure because nothing will ever report.
 
-**A job name becomes a check name.** Ruleset `19123565` ("Default") requires
-`Build`, `Lint` and `Test` by exact string, so renaming a job edits the merge
-gate rather than the label on it. Keep the two in sync in one change.
+**A job name becomes a check name.** Renaming a job edits the merge gate rather
+than the label on it, so keep the job name and the ruleset in sync in one
+change.
+
+Ruleset `19123565` ("Default") requires `Build`, `Lint` and `Test` by exact
+string.
 
 `Lint` runs actionlint as a step rather than as a job of its own, and that is
 the reason why: a new job is a new check name, nothing requires it, and it would
@@ -128,8 +131,8 @@ change over there reaches this repository only when Renovate bumps the pin,
 which is deliberate — see that repository's `AGENTS.md`.
 
 `renovate-command.yaml` is what makes `@renovate rebase` work on a dependency
-pull request here. It only ever runs from `main`, because `issue_comment` is a
-repository-level event, so a change to it cannot be tested from a branch.
+pull request here. Only the copy on `main` ever runs: `issue_comment` is a
+repository-level event, so a change to that file cannot be tested from a branch.
 
 ## Commits and pull requests
 
@@ -291,11 +294,12 @@ output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
 merge to npm.
 
-**commitlint is installed but still never runs.** `@commitlint/cli` 21.2.2,
+**commitlint is installed but never runs.** `@commitlint/cli`,
 `@commitlint/config-conventional` and `.commitlintrc.json` are all present, and
-`.husky/` now carries a `pre-commit` hook — but that hook runs lint-staged, not
-commitlint. There is still no `commit-msg` hook and no workflow invoking one, so
-a malformed type reaches `main` unnoticed and lands in the changelog, and the
-pull request title is on the author to get right. The hook directory existing
-now makes this easier to misread as solved than it was when the directory held
-nothing but husky's own `_`.
+`.husky/` carries a `pre-commit` hook — but that hook runs lint-staged, not
+commitlint. There is no `commit-msg` hook and no workflow invoking one, so a
+malformed type reaches `main` unnoticed and lands in the changelog, and the pull
+request title is on the author to get right.
+
+The hook directory existing makes this easier to misread as solved than it was
+when the directory held nothing but husky's own `_`.
