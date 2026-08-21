@@ -161,25 +161,24 @@ which is the point: housekeeping should not cut a release.
 
 ## Traps
 
-**Releases tag but never reach npm.** The release half works now:
-`RELEASE_PLEASE_CLIENT_ID` and `RELEASE_PLEASE_PRIVATE_KEY` are organization
-secrets on `kanso-labs` with visibility `ALL` — `gh secret list` run against
-this repository prints nothing and they are there all the same — so release
-pull requests are opened by `app/kanso-labs`, start `Build`, `Lint` and
-`Test`, merge, and tag. `Publish to npm` is the job that fails, with
-`npm error code E404` on the `PUT` to
-`https://registry.npmjs.org/@kanso-labs%2funplugin-style-dictionary`, which
-leaves the 0.2.2 tag and GitHub release standing while npm still serves 0.2.1.
-The job authenticates with nothing: `id-token: write` is granted and Node
-24.19.0's npm 11.17.0 is new enough for trusted publishing, but the run log
-shows no OIDC exchange even attempted — npm makes the `PUT` unauthenticated,
-and npm answers an unauthorized write with 404 rather than 403 so as not to
-leak whether a package exists. The missing half is on the registry: no trusted
-publisher is configured for this package on npmjs.com. 0.2.0 and 0.2.1 carry
-the registry signature but no attestations, so they were published by hand
-under `kanso-labs-admin` — this workflow has never published anything.
-Configuring the trusted publisher against this repository and
-`release-please.yaml` is the fix, and needs no change to the workflow.
+**Releases used to tag but never reach npm, and what fixed it was not in this
+repository.** `Publish to npm` failed with `npm error code E404` on the `PUT`
+to `https://registry.npmjs.org/@kanso-labs%2funplugin-style-dictionary`,
+leaving the 0.2.2 tag and GitHub release standing while npm still served 0.2.1.
+The job was authenticating with nothing: `id-token: write` was granted and Node
+24.19.0's npm was new enough for trusted publishing, but the run log showed no
+OIDC exchange even attempted, so npm made the `PUT` unauthenticated — and npm
+answers an unauthorized write with 404 rather than 403 so as not to leak
+whether a package exists. The missing half was on the registry: no trusted
+publisher was configured for this package on npmjs.com.
+
+Configuring it against this repository and `release-please.yaml` was the whole
+fix, and it needed no change to any workflow. It holds: 0.2.2 and 0.2.3 are on
+npm under `_npmUser` `GitHub Actions` and carry provenance attestations, where
+0.2.0 and 0.2.1 were pushed by hand under `kanso-labs-admin` and carry none.
+Keep the shape of this in mind rather than the symptom — a publish that
+authenticates with nothing looks, from the run log, exactly like a publish
+whose credentials were rejected.
 
 **`release-please.yaml` used to describe a failure that no longer happens.**
 Its comments said the two secrets did not exist, that the shared workflow
@@ -194,12 +193,22 @@ That superseded failure is also why the npm one went unseen for so long.
 ever been mergeable, and so the job had never once run before 0.2.2.
 
 **Moving the publish into the shared workflow does not change what npm
-validates.** `Publish to npm` now calls `_publish-npm.yaml`, but npm's trusted
+validates.** `Publish to npm` calls `_publish-npm.yaml`, but npm's trusted
 publishing checks the *entry point* workflow rather than the reusable one that
-runs `npm publish` — so the name to register on npmjs.com is still
-`release-please.yaml`, exactly as it was. `id-token: write` has to be granted
-on both the calling job and the called workflow, and it is. None of this fixes
-the `E404` above: that is still a missing trusted publisher on the registry.
+runs `npm publish` — so the name registered on npmjs.com is
+`release-please.yaml`, exactly as it was before the move. `id-token: write` has
+to be granted on both the calling job and the called workflow, and it is.
+Renaming this file, or moving the publish job into a different one, breaks the
+publish until the trusted publisher is re-registered against the new name.
+
+**Only the npm half of the publish is registered anywhere.** The shared workflow
+also pushes to GitHub Packages, and that half has no trusted publisher, no OIDC
+exchange and no attestation — it authenticates with `GITHUB_TOKEN` and
+`packages: write`, both of which the run already has. So nothing needs
+registering for it, and nothing about it is affected by what this file is
+called. What it does need, once, is a look at the package page under the
+organization's **Packages** tab: GitHub Packages creates a new package private,
+and a version published to a private package is installable only with a token.
 
 **The watched-file filter is what stops an infinite rebuild loop.**
 `matchesWatchedFile` guards both the Vite `configureServer` watcher and the
