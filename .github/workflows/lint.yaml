@@ -24,10 +24,10 @@ jobs:
       # would be a new name nothing requires — free to fail without stopping
       # anything.
       - name: Run actionlint
-        uses: kanso-labs/github-actions/actions/lint-workflows@v2.1.0
+        uses: kanso-labs/github-actions/actions/lint-workflows@v3.0.1
 
       - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v2.1.0
+        uses: kanso-labs/github-actions/actions/setup-node@v3.0.1
         with:
           ignore-scripts: true
 
