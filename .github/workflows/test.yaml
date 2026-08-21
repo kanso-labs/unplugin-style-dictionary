@@ -21,7 +21,7 @@ jobs:
       # Nothing these tests need comes from a lifecycle script — they drive the
       # Vite target against real files in a temporary directory.
       - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v3.0.1
+        uses: kanso-labs/github-actions/actions/setup-node@v3.0.2
         with:
           ignore-scripts: true
 
