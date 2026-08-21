@@ -19,12 +19,12 @@ bundler usage, examples. Keep it correct when you change the public surface.
 
 ## Commands
 
-| Task   | Command          | Notes                                            |
-| ------ | ---------------- | ------------------------------------------------ |
-| Test   | `npm test`       | Vitest, one run, no watch                        |
-| Lint   | `npm run lint`   | oxlint, then ESLint, then oxfmt formatting check |
-| Format | `npm run format` | oxfmt; `npm run format:check` is the check       |
-| Build  | `npm run build`  | Type-checks (`tsc -b`) then builds ESM + CJS     |
+| Task   | Command          | Notes                                               |
+| ------ | ---------------- | --------------------------------------------------- |
+| Test   | `npm test`       | Vitest, one run, no watch                           |
+| Lint   | `npm run lint`   | oxlint, then ESLint, then oxfmt formatting check    |
+| Format | `npm run format` | oxfmt; `npm run format:check` is the check          |
+| Build  | `npm run build`  | Type-checks (`tsc -b`) then builds ESM into `dist/` |
 
 **oxfmt formats this repository, not Prettier**, matching `kanso-ui`. The
 formatter runs as its own `npm run format`, and `npm run lint` ends in
@@ -85,10 +85,9 @@ Specific to this repository:
 
 - Every public option is declared and documented in `src/types.ts`. That file is
   the contract the README describes — change them together.
-- The build emits ESM and CJS for all five entry points, wired through `exports`
-  in `package.json`. Adding a bundler target means a new `src/<target>.ts`, a
-  new entry in `tsdown.config.ts`, and a new `exports` key — whose `import` and
-  `require` halves point at `dist/` and `dist/cjs/` respectively.
+- The build emits ESM for all five entry points, wired through `exports` in
+  `package.json`. Adding a bundler target means a new `src/<target>.ts`, a new
+  entry in `tsdown.config.ts`, and a new `exports` key.
 
 ## Testing
 
@@ -240,21 +239,21 @@ and the published package resolves to nothing. `kanso-ui` reaches the same
 extensions through `platform: 'neutral'`, so copying its config rather than its
 outcome reintroduces this.
 
-**The build warns `MIXED_EXPORTS` on every run, and the fix is worse than the
-warning.** rolldown notices `src/index.ts` exporting both named members and a
-default, and suggests `output.exports: 'named'`. Setting it also overrides
-tsdown's `cjsDefault`, which is what rewrites the four single-default target
-entries to `module.exports = fn` — so the suggestion silently reverts the
-published CJS shape to `exports.default = fn`. Measured, not assumed. Leave the
-warning alone.
+**The exports map says `default`, not `import`, and the difference is whether
+CommonJS works at all.** With only an `import` condition a `require()` of this
+package fails outright with `ERR_PACKAGE_PATH_NOT_EXPORTED`. Under `default`,
+Node resolves the same ESM file and serves the caller through `require(esm)`.
+That one word is the whole of this package's CommonJS support, so renaming it to
+`import` — which reads like a tidy-up next to a `type: module` package — removes
+support for every CommonJS consumer.
 
-**`require()` of a target entry returns the function itself, not
-`{ default }`.** The Vite library build used to emit `exports.default = fn` with
-`__esModule` for `/vite`, `/rolldown`, `/rollup` and `/webpack`; tsdown emits
-`module.exports = fn`. The index entry keeps its named exports and its
-`default`, but no longer carries `__esModule` or `Symbol.toStringTag`. This was
-a deliberate break, landed as a `build!:` commit — a CJS consumer reaching for
-`.default` on a target entry gets `undefined`.
+**A `require()` of a target entry returns the namespace, so callers need
+`.default`.** Node hands a `require(esm)` caller the module namespace object,
+not the default export. That was briefly untrue: while the package shipped a
+CommonJS build, tsdown's `cjsDefault` rewrote the four single-default target
+entries to `module.exports = fn`, and `require()` gave the function directly.
+Dropping that build put the `.default` hop back. The README documents the
+current form; keep the two together.
 
 **The watched-file filter is what stops an infinite rebuild loop.**
 `matchesWatchedFile` guards both the Vite `configureServer` watcher and the
