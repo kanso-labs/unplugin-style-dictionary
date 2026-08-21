@@ -206,9 +206,16 @@ also pushes to GitHub Packages, and that half has no trusted publisher, no OIDC
 exchange and no attestation — it authenticates with `GITHUB_TOKEN` and
 `packages: write`, both of which the run already has. So nothing needs
 registering for it, and nothing about it is affected by what this file is
-called. What it does need, once, is a look at the package page under the
-organization's **Packages** tab: GitHub Packages creates a new package private,
-and a version published to a private package is installable only with a token.
+called.
+
+This trap used to end by warning that GitHub Packages creates a new package
+private, and that it would need flipping under the organization's **Packages**
+tab. It did not: 0.2.5 created the package and it came out `visibility=public`
+with no manual step, as did `kanso-ui`'s. Both are public repositories with
+`publishConfig.access` set to `public`, so this is not a general rule, just one
+fewer thing to do here. Visibility is still a package-level setting nothing in
+the run reports, so it is worth a glance the first time a package appears on a
+registry.
 
 **The watched-file filter is what stops an infinite rebuild loop.**
 `matchesWatchedFile` guards both the Vite `configureServer` watcher and the

@@ -44,9 +44,8 @@ jobs:
   # described above, then to GitHub Packages. Two jobs, one call, and the second
   # runs only if the first did — so the organization's own registry never
   # carries a version npmjs.com has not got. GitHub Packages needs no equivalent
-  # of the bootstrap above; GITHUB_TOKEN creates the package on first publish.
-  # What it does need is a look at the package page afterwards, because a new
-  # package there is created private.
+  # of the bootstrap above: GITHUB_TOKEN creates the package on first publish,
+  # and 0.2.5 came out public with nothing to flip afterwards.
   publish:
     name: Publish to npm
     needs: release-please
