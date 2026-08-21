@@ -136,8 +136,11 @@ repository-level event, so a change to that file cannot be tested from a branch.
 
 ## Commits and pull requests
 
-Pull requests are squash-merged, so the pull request title becomes the only
-commit on `main` and is the single input to `release-please`: `feat` for a
+Pull requests are squash-merged, with the pull request title as the commit
+subject and an empty body. That title becomes the only commit on `main`, and
+branch commit messages are discarded by the squash and never reach history.
+
+That title is therefore the single input to `release-please`: `feat` for a
 minor, `fix` or `deps` for a patch, `!` for a breaking change, anything else
 releases nothing. `bump-minor-pre-major` is set, so while the version is below
 1.0.0 a breaking change takes the minor.
