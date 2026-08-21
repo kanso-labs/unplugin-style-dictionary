@@ -88,21 +88,23 @@ import StyleDictionary from '@kanso-labs/unplugin-style-dictionary/rollup'
 // or: import StyleDictionary from '@kanso-labs/unplugin-style-dictionary/webpack'
 ```
 
-A `webpack.config.js` is often CommonJS rather than ESM. Each target entry is
-the plugin factory itself, so `require` it directly — there is no `.default` to
-unwrap:
+A `webpack.config.js` is often CommonJS rather than ESM. This package ships ESM
+only, and Node serves a `require` of it through `require(esm)`, which hands back
+the module namespace — so reach for `.default`:
 
 ```javascript
-const StyleDictionary = require('@kanso-labs/unplugin-style-dictionary/webpack')
+const {
+  default: StyleDictionary,
+} = require('@kanso-labs/unplugin-style-dictionary/webpack')
 
 module.exports = {
   plugins: [StyleDictionary({ config: 'sd.config.json' })],
 }
 ```
 
-_Note: `require` of this package needs Node 20.19+ or 22.12+, because `unplugin`
-itself is ESM-only and the CommonJS build reaches it through `require(esm)`.
-Importing from ESM has no such floor._
+_Note: that path needs Node 20.19+ or 22.12+, the versions that can `require` an
+ES module. Every Node release still in support clears it. Importing from ESM has
+no such floor._
 
 ### Multiple Configurations
 

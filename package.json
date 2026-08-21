@@ -21,61 +21,34 @@
   },
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "require": {
-        "types": "./dist/cjs/index.d.cts",
-        "default": "./dist/cjs/index.cjs"
-      }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./vite": {
-      "import": {
-        "types": "./dist/vite.d.ts",
-        "default": "./dist/vite.js"
-      },
-      "require": {
-        "types": "./dist/cjs/vite.d.cts",
-        "default": "./dist/cjs/vite.cjs"
-      }
+      "types": "./dist/vite.d.ts",
+      "default": "./dist/vite.js"
     },
     "./rolldown": {
-      "import": {
-        "types": "./dist/rolldown.d.ts",
-        "default": "./dist/rolldown.js"
-      },
-      "require": {
-        "types": "./dist/cjs/rolldown.d.cts",
-        "default": "./dist/cjs/rolldown.cjs"
-      }
+      "types": "./dist/rolldown.d.ts",
+      "default": "./dist/rolldown.js"
     },
     "./rollup": {
-      "import": {
-        "types": "./dist/rollup.d.ts",
-        "default": "./dist/rollup.js"
-      },
-      "require": {
-        "types": "./dist/cjs/rollup.d.cts",
-        "default": "./dist/cjs/rollup.cjs"
-      }
+      "types": "./dist/rollup.d.ts",
+      "default": "./dist/rollup.js"
     },
     "./webpack": {
-      "import": {
-        "types": "./dist/webpack.d.ts",
-        "default": "./dist/webpack.js"
-      },
-      "require": {
-        "types": "./dist/cjs/webpack.d.cts",
-        "default": "./dist/cjs/webpack.cjs"
-      }
+      "types": "./dist/webpack.d.ts",
+      "default": "./dist/webpack.js"
     },
     "./package.json": "./package.json"
   },
-  "main": "./dist/cjs/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kanso-labs/unplugin-style-dictionary.git"
