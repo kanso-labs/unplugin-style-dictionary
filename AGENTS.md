@@ -148,21 +148,22 @@ releases nothing. `bump-minor-pre-major` is set, so while the version is below
 Write branch commits conventionally anyway. They are what a reviewer reads while
 the pull request is open, even though only the title survives the merge.
 
-Renovate's own commits are typed `deps:`, and that type is what makes them
-release. release-please computes a patch bump for any commit that is not a
-`feat` or a breaking change, but it only proposes a release when the notes it
-generated are non-empty — a run whose every commit falls in a hidden changelog
+**Renovate commits are typed `deps:`, and that is what makes them release.**
+release-please computes a patch bump for any commit that is not a `feat` or a
+breaking change, but it only opens a release pull request when the notes it
+generates are non-empty — a run whose every commit falls in a hidden changelog
 section is skipped as "No user facing commits found". Renovate's default,
 `chore(deps):`, lands in exactly such a section, so an upgrade never cut a
-release of its own; it shipped only when a feature happened to land beside it,
+release of its own: it shipped only when a feature happened to land beside it,
 and a run of nothing but upgrades published nothing at all.
-`.github/renovate.json` therefore sets `semanticCommits: enabled`,
-`semanticCommitType: deps` and `semanticCommitScope: null`, and
-`release-please-config.json` spells out `changelog-sections` with `deps` visible
-under a `Dependencies` heading. The two move together: that list replaces
-release-please's defaults wholesale, so a type missing from it is invisible
-rather than merely unstyled, and `deps` with no matching section would put the
-upgrades back where they started.
+
+`.github/renovate.json` therefore sets `semanticCommits: enabled` and
+`semanticCommitScope: null` at the top level, and `semanticCommitType: deps` in
+a `packageRule` rather than beside them. `release-please-config.json` spells out
+`changelog-sections` with `deps` visible under a `Dependencies` heading. The two
+move together: that list replaces release-please's defaults wholesale, so a type
+missing from it is invisible rather than merely unstyled, and `deps` with no
+matching section would put the upgrades back where they started.
 
 **`semanticCommitType` sits in a `packageRule`, and that is the whole fix.** It
 was a top-level key at first and did nothing at all. `config:recommended`
