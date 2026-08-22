@@ -101,7 +101,7 @@
     "rollup": "4.62.5",
     "style-dictionary": "5.5.2",
     "tsdown": "0.22.14",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "typescript-eslint": "8.67.0",
     "vite": "8.2.2",
     "vitest": "4.1.11",
