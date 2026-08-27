@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.11](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.10...unplugin-style-dictionary-v0.4.11) (2026-08-27)
+
+
+### Dependencies
+
+* update dependency lint-staged to v17.4.1 ([#125](https://github.com/kanso-labs/unplugin-style-dictionary/issues/125)) ([7ac004b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/7ac004bce7f7ae70cfccf67297a559a80a31c0b6))
+* update dependency webpack to v5.110.0 ([#126](https://github.com/kanso-labs/unplugin-style-dictionary/issues/126)) ([fd597d3](https://github.com/kanso-labs/unplugin-style-dictionary/commit/fd597d3401c58a8b30f6e22aec5f1cef04e4d98e))
+
 ## [0.4.10](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.9...unplugin-style-dictionary-v0.4.10) (2026-08-27)
 
 
