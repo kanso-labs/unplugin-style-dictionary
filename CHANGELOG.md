@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.14](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.13...unplugin-style-dictionary-v0.4.14) (2026-08-30)
+
+
+### Dependencies
+
+* update dependency webpack to v5.110.2 ([#134](https://github.com/kanso-labs/unplugin-style-dictionary/issues/134)) ([33a27dc](https://github.com/kanso-labs/unplugin-style-dictionary/commit/33a27dc151dbe1f1287c7b1350b31f8cdd98627c))
+
 ## [0.4.13](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.12...unplugin-style-dictionary-v0.4.13) (2026-08-28)
 
 
