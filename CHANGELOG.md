@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.15](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.14...unplugin-style-dictionary-v0.4.15) (2026-08-31)
+
+
+### Dependencies
+
+* update dependency eslint-plugin-perfectionist to v5.11.0 ([#136](https://github.com/kanso-labs/unplugin-style-dictionary/issues/136)) ([df08ff9](https://github.com/kanso-labs/unplugin-style-dictionary/commit/df08ff9ac3afffee3e64c66d641ad2b9d38319e4))
+
 ## [0.4.14](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.13...unplugin-style-dictionary-v0.4.14) (2026-08-30)
 
 
