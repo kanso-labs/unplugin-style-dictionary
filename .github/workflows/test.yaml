@@ -7,6 +7,7 @@ on:
       - main
 
 permissions:
+  code-quality: write
   contents: read
 
 jobs:
@@ -21,9 +22,16 @@ jobs:
       # Nothing these tests need comes from a lifecycle script — they drive the
       # Vite target against real files in a temporary directory.
       - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v3.2.0
+        uses: kanso-labs/github-actions/actions/setup-node@v3.2.1
         with:
           ignore-scripts: true
 
       - name: Run tests
-        run: npm run test
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-code-coverage@v1.4.2
+        with:
+          file: coverage/cobertura-coverage.xml
+          label: code-coverage/vitest
+          language: TypeScript
