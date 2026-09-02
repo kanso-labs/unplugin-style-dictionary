@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.17](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.16...unplugin-style-dictionary-v0.4.17) (2026-09-02)
+
+
+### Dependencies
+
+* update dependency @types/node to v26.4.1 ([#144](https://github.com/kanso-labs/unplugin-style-dictionary/issues/144)) ([286b7f6](https://github.com/kanso-labs/unplugin-style-dictionary/commit/286b7f651c98e38cd1e3851dd0af8835ac5eb1b5))
+* update dependency globals to v17.12.0 ([#140](https://github.com/kanso-labs/unplugin-style-dictionary/issues/140)) ([2a12500](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2a12500fc80ea98ab6b509ec00b66ad0b0df5fec))
+* update dependency oxfmt to v0.66.0 ([#142](https://github.com/kanso-labs/unplugin-style-dictionary/issues/142)) ([6f138c0](https://github.com/kanso-labs/unplugin-style-dictionary/commit/6f138c0d92af6ec37faad43128b095f8a795bfeb))
+* update dependency webpack to v5.110.3 ([#145](https://github.com/kanso-labs/unplugin-style-dictionary/issues/145)) ([17158fc](https://github.com/kanso-labs/unplugin-style-dictionary/commit/17158fc6759af1401b3a7d10a71b7f90cba9135e))
+* update oxlint to v1.81.0 ([#143](https://github.com/kanso-labs/unplugin-style-dictionary/issues/143)) ([a22bcf1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a22bcf1e38f967d03f61ce9cfe8a0c350a720d05))
+
 ## [0.4.16](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.15...unplugin-style-dictionary-v0.4.16) (2026-09-01)
 
 
