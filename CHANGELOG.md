@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.22](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.21...unplugin-style-dictionary-v0.4.22) (2026-09-08)
+
+
+### Dependencies
+
+* update dependency oxfmt to v0.67.0 ([#157](https://github.com/kanso-labs/unplugin-style-dictionary/issues/157)) ([45879e3](https://github.com/kanso-labs/unplugin-style-dictionary/commit/45879e324dbd1013fb3093b0a38e5db6d385e3c2))
+* update dependency typescript-eslint to v8.70.0 ([#158](https://github.com/kanso-labs/unplugin-style-dictionary/issues/158)) ([dc64c24](https://github.com/kanso-labs/unplugin-style-dictionary/commit/dc64c240451eb472451b27c90d9a5e4c7c307aa1))
+* update oxlint to v1.82.0 ([#159](https://github.com/kanso-labs/unplugin-style-dictionary/issues/159)) ([be05d0c](https://github.com/kanso-labs/unplugin-style-dictionary/commit/be05d0c2522fb01ec1dbe973b65bb06d209201cb))
+
 ## [0.4.21](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.20...unplugin-style-dictionary-v0.4.21) (2026-09-07)
 
 
