@@ -292,6 +292,18 @@ Dropping that build put the `.default` hop back. The README documents the
 current form, and `scripts/check-package.mjs` requires all four target entries
 and asserts the hop, so the two cannot drift apart quietly.
 
+**`sideEffects: false` is a claim about module scope, not about what the plugin
+does.** The plugin writes files constantly, but only once a bundler calls a
+hook, and that is not what the field is about: it says a consumer who imports
+nothing from a module loses nothing by having it dropped. That holds here.
+`atomicVolume` is an `Object.create` over `node:fs`, which builds a new object
+rather than mutating the imported one; `createUnplugin` is annotated
+`/* #__PURE__ */`; the four target entries are a property access each. Add a
+top-level statement that does something observable — writing a file at load,
+mutating an import, registering a global — and the field becomes a lie bundlers
+will act on. Nothing enforces it: publint asks for the field and passes either
+way, and no test can see a side effect that has not been written yet.
+
 **The watched-file filter is what stops an infinite rebuild loop.**
 `matchesWatchedFile` guards both the Vite `configureServer` watcher and the
 universal `watchChange` hook. Without it `watchChange` fires for any changed
