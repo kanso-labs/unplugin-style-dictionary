@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.28](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.27...unplugin-style-dictionary-v0.4.28) (2026-09-14)
+
+
+### Performance Improvements
+
+* **package:** declare sideEffects false, and gate the published shape on publint ([#179](https://github.com/kanso-labs/unplugin-style-dictionary/issues/179)) ([7e68606](https://github.com/kanso-labs/unplugin-style-dictionary/commit/7e68606f7df7d2cd22484111e601b3d01c826cc7))
+
+
+### Dependencies
+
+* update dependency oxfmt to v0.68.0 ([#176](https://github.com/kanso-labs/unplugin-style-dictionary/issues/176)) ([ac2d30a](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ac2d30a496eb66a0ffd0e032f64b3564649cc02e))
+* update dependency oxlint to v1.83.0 ([#177](https://github.com/kanso-labs/unplugin-style-dictionary/issues/177)) ([cd37df5](https://github.com/kanso-labs/unplugin-style-dictionary/commit/cd37df5151894896e09d57d983b5e53acdf28d4c))
+* update dependency rollup to v4.63.3 ([#175](https://github.com/kanso-labs/unplugin-style-dictionary/issues/175)) ([6c2ea4d](https://github.com/kanso-labs/unplugin-style-dictionary/commit/6c2ea4d6d619255e1a141536823e8711238adb46))
+
 ## [0.4.27](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.26...unplugin-style-dictionary-v0.4.27) (2026-09-14)
 
 
