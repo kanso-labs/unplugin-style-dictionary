@@ -19,12 +19,13 @@ bundler usage, examples. Keep it correct when you change the public surface.
 
 ## Commands
 
-| Task   | Command          | Notes                                               |
-| ------ | ---------------- | --------------------------------------------------- |
-| Test   | `npm test`       | Vitest, one run, no watch                           |
-| Lint   | `npm run lint`   | oxlint, then ESLint, then oxfmt formatting check    |
-| Format | `npm run format` | oxfmt; `npm run format:check` is the check          |
-| Build  | `npm run build`  | Type-checks (`tsc -b`) then builds ESM into `dist/` |
+| Task   | Command                 | Notes                                                                               |
+| ------ | ----------------------- | ----------------------------------------------------------------------------------- |
+| Test   | `npm test`              | Vitest, one run, no watch                                                           |
+| Lint   | `npm run lint`          | oxlint, then ESLint, then oxfmt formatting check                                    |
+| Format | `npm run format`        | oxfmt; `npm run format:check` is the check                                          |
+| Build  | `npm run build`         | Type-checks (`tsc -b`) then builds ESM into `dist/`                                 |
+| Verify | `npm run package:check` | publint, then `scripts/check-package.mjs`; reads `dist/`, so it needs a build first |
 
 **oxfmt formats this repository, not Prettier.** The formatter runs as its own
 `npm run format`, and `npm run lint` ends in `oxfmt --check` so a badly
@@ -123,6 +124,29 @@ string.
 `Lint` runs actionlint as a step rather than as a job of its own, and that is
 the reason why: a new job is a new check name, nothing requires it, and it would
 be free to fail without stopping anything.
+
+`Build` ends in `npm run package:check` for that same reason. It reads `dist/`,
+so it has to come after the build, and a job of its own would be a check name
+the ruleset does not require.
+
+**That command is two tools, and the split is what each half can see.** publint
+reads `package.json` and the packed file list, so it catches an exports target
+aimed at a file the tarball does not carry — which is exactly what losing
+`fixedExtension: false` produces. `scripts/check-package.mjs` asks Node to
+resolve and then evaluate all five entries, which is the only way to reach the
+failures publint calls "All good!": `default` rewritten to `import`, a target
+entry that stops handing back a callable `.default`, and a subpath deleted from
+the map outright, since publint has no opinion on which subpaths ought to exist.
+Neither half is redundant; run the script through the npm script so the command
+that gates a branch is the command a contributor runs.
+
+`tests/index.test.ts` pins the same exports map from the source tree, so `Test`
+fails on a rewritten condition too, without waiting for a build.
+
+`scripts/check-package.mjs` is the repository's first `.mjs` file, and
+`.lintstagedrc.json` matches `*.{mjs,ts}` so the pre-commit hook covers it.
+`npm run lint` always did — `oxlint .` and `eslint .` take the whole tree — so
+the gap was only ever in the hook, which is the quiet kind.
 
 Everything shared comes from `kanso-labs/github-actions` at an exact release
 tag, never a moving major — `actions/setup-node`, `actions/lint-workflows`,
@@ -241,10 +265,12 @@ worth a glance the first time a package appears on a registry.
 derives `fixedExtension` from `platform`, and `platform` defaults to `node` —
 which is right for a build-time plugin, but flips the default to emitting ESM as
 `.mjs`. Every `import` condition in `package.json`, plus `module` and `types`,
-names `.js`. Delete the line and the build still succeeds, the tests still pass,
-and the published package resolves to nothing. A project that reaches the same
-extensions through `platform: 'neutral'` needs no such line, so copying another
-repository's config rather than its outcome reintroduces this.
+names `.js`. Delete the line and the build still succeeds and the tests still
+pass; publint is the only thing that fails, once per condition now pointing at a
+file that is not there. Before `npm run package:check` existed, this shipped a
+package that resolved to nothing with every check green. A project that reaches
+the same extensions through `platform: 'neutral'` needs no such line, so copying
+another repository's config rather than its outcome reintroduces this.
 
 **The exports map says `default`, not `import`, and the difference is whether
 CommonJS works at all.** With only an `import` condition a `require()` of this
@@ -252,7 +278,10 @@ package fails outright with `ERR_PACKAGE_PATH_NOT_EXPORTED`. Under `default`,
 Node resolves the same ESM file and serves the caller through `require(esm)`.
 That one word is the whole of this package's CommonJS support, so renaming it to
 `import` — which reads like a tidy-up next to a `type: module` package — removes
-support for every CommonJS consumer.
+support for every CommonJS consumer. publint reports the rewritten map as "All
+good!"; what catches it is the `require.resolve` half of
+`scripts/check-package.mjs`, and `tests/index.test.ts` pins the condition
+itself.
 
 **A `require()` of a target entry returns the namespace, so callers need
 `.default`.** Node hands a `require(esm)` caller the module namespace object,
@@ -260,7 +289,8 @@ not the default export. That was briefly untrue: while the package shipped a
 CommonJS build, tsdown's `cjsDefault` rewrote the four single-default target
 entries to `module.exports = fn`, and `require()` gave the function directly.
 Dropping that build put the `.default` hop back. The README documents the
-current form; keep the two together.
+current form, and `scripts/check-package.mjs` requires all four target entries
+and asserts the hop, so the two cannot drift apart quietly.
 
 **The watched-file filter is what stops an infinite rebuild loop.**
 `matchesWatchedFile` guards both the Vite `configureServer` watcher and the

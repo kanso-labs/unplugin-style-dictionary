@@ -6,6 +6,7 @@ import path from 'node:path'
 import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import packageJson from '../package.json' with { type: 'json' }
 import { matchesWatchedFile } from '../src/index.ts'
 import vitePlugin from '../src/vite.ts'
 
@@ -405,5 +406,85 @@ describe('unplugin-style-dictionary (vite target)', () => {
 
     const content = fs.readFileSync(outputFile, 'utf-8')
     expect(content).toContain('--color-primary: #ff0000;')
+  })
+})
+
+// Nothing pinned the exports map, and two of the ways it breaks leave every
+// other check green: `default` rewritten to `import` drops every CommonJS
+// consumer, and a target losing its entry is invisible to a suite that
+// imports from `src`. `scripts/check-package.mjs` resolves all of this for
+// real, but only against a build; these run on the source tree.
+describe('the exports map', () => {
+  // Each subpath is spelled out rather than indexed by a computed key, so the
+  // JSON's own types carry through and a renamed entry is a type error here
+  // rather than an assertion against `undefined`.
+  const entryPoints = [
+    { conditions: packageJson.exports['.'], file: 'index', subpath: '.' },
+    {
+      conditions: packageJson.exports['./rolldown'],
+      file: 'rolldown',
+      subpath: './rolldown',
+    },
+    {
+      conditions: packageJson.exports['./rollup'],
+      file: 'rollup',
+      subpath: './rollup',
+    },
+    {
+      conditions: packageJson.exports['./vite'],
+      file: 'vite',
+      subpath: './vite',
+    },
+    {
+      conditions: packageJson.exports['./webpack'],
+      file: 'webpack',
+      subpath: './webpack',
+    },
+  ]
+
+  it('publishes an entry point per bundler, plus the main one', () => {
+    // Compared as a set rather than in order: every subpath here is exact,
+    // so Node matches them whatever the order, and the file leads with
+    // `./vite` because that is the target the README leads with.
+    expect(new Set(Object.keys(packageJson.exports))).toEqual(
+      new Set([
+        './package.json',
+        ...entryPoints.map((entryPoint) => entryPoint.subpath),
+      ]),
+    )
+  })
+
+  it.each(entryPoints)(
+    'serves $subpath through `default`, which is what buys CommonJS support',
+    ({ conditions }) => {
+      // Under `import` alone the same require() fails with
+      // ERR_PACKAGE_PATH_NOT_EXPORTED and every CommonJS consumer is dropped,
+      // while the package still builds and publint still reports no problem.
+      // Vitest cannot require the built package, so what is pinned here is
+      // the condition that decides it — and its position, since `types` has
+      // to be matched before anything that could shadow it.
+      expect(Object.keys(conditions)).toEqual(['types', 'default'])
+    },
+  )
+
+  it.each(entryPoints)(
+    'points $subpath at the `.js` extension the build emits',
+    ({ conditions, file }) => {
+      // tsdown emits `.mjs` unless `fixedExtension: false` holds it to `.js`,
+      // and that line reads as redundant. Removing it republishes the package
+      // at paths these conditions do not name.
+      expect(conditions.default).toBe(`./dist/${file}.js`)
+      expect(conditions.types).toBe(`./dist/${file}.d.ts`)
+    },
+  )
+
+  it('agrees with the top-level fields that predate it', () => {
+    expect(packageJson.main).toBe(packageJson.exports['.'].default)
+    expect(packageJson.module).toBe(packageJson.exports['.'].default)
+    expect(packageJson.types).toBe(packageJson.exports['.'].types)
+  })
+
+  it('ships the directory every entry point resolves into', () => {
+    expect(packageJson.files).toContain('dist')
   })
 })
