@@ -822,6 +822,164 @@ describe('unplugin-style-dictionary (vite target)', () => {
     }
   }, 30000)
 
+  // A configuration that cannot be loaded has to come out of the plugin as a
+  // logged failure. Until the instance was constructed with `init: false`, the
+  // constructor's own fire-and-forget `init()` rejected a promise nothing
+  // held: the host died with a raw stack, or — where something had installed
+  // an `unhandledRejection` handler — `buildStart` simply never settled.
+  it.each([
+    {
+      contents: undefined,
+      id: 'missing',
+      label: 'a config path that does not exist',
+    },
+    {
+      contents: '{ "platforms": {',
+      id: 'malformed',
+      label: 'a config whose JSON is half-written',
+    },
+    {
+      contents: 'module.exports = { source: [] }',
+      id: 'cjs',
+      label: 'a .cjs config, which is not a Style Dictionary format',
+    },
+  ])(
+    'reports $label rather than crashing the host',
+    async ({ contents, id }) => {
+      const brokenConfigFile = path.join(
+        tempDir,
+        `broken-${id}.${id === 'cjs' ? 'cjs' : 'json'}`,
+      )
+      if (contents !== undefined) fs.writeFileSync(brokenConfigFile, contents)
+
+      const rejections: unknown[] = []
+      const recordRejection = (reason: unknown) => {
+        rejections.push(reason)
+      }
+      process.on('unhandledRejection', recordRejection)
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const plugin = vitePlugin({ config: brokenConfigFile })
+
+        // Settling at all is half the assertion: this is what used to hang.
+        await callBuildStart(plugin)
+
+        // A rejection is reported a tick after it is orphaned, so give it one.
+        await settle(50)
+        expect(rejections).toEqual([])
+
+        const messages = errorSpy.mock.calls.map((call) => String(call[0]))
+        expect(
+          messages.some((message) =>
+            message.includes('Compilation failed after'),
+          ),
+        ).toBe(true)
+      } finally {
+        errorSpy.mockRestore()
+        process.off('unhandledRejection', recordRejection)
+      }
+    },
+    15000,
+  )
+
+  it('initialises Style Dictionary once, so a preprocessor runs once', async () => {
+    // `init()` is `extend()` with `mutateOriginal`, so constructing and then
+    // extending loaded the configuration and combined every source twice.
+    // Counting a consumer's own preprocessor is the cheapest way to see it:
+    // it ran once per initialisation.
+    let preprocessorRuns = 0
+
+    const plugin = vitePlugin({
+      config: () => {
+        StyleDictionary.registerPreprocessor({
+          name: 'count-runs',
+          preprocessor: (dictionary) => {
+            preprocessorRuns++
+            return dictionary
+          },
+        })
+
+        return {
+          platforms: {
+            css: {
+              buildPath: tempDir.replace(/\\/g, '/') + '/',
+              files: [
+                {
+                  destination: 'preprocessor-count.css',
+                  format: 'css/variables',
+                },
+              ],
+              transformGroup: 'css',
+            },
+          },
+          preprocessors: ['count-runs'],
+          source: [tokenFile.replace(/\\/g, '/')],
+        }
+      },
+      silent: true,
+    })
+
+    await callBuildStart(plugin)
+
+    expect(preprocessorRuns).toBe(1)
+  })
+
+  it('keeps Style Dictionary quiet under silent', async () => {
+    // Style Dictionary prints a collision warning itself, and the first of the
+    // two initialisations ran at default verbosity — so its warnings reached
+    // the console whatever this plugin was asked for. Pinning silence here
+    // pins the single-initialisation shape indirectly: that line can only come
+    // from a pass that is not silent.
+    const collidingDirectory = path.join(tempDir, 'collision')
+    fs.mkdirSync(collidingDirectory, { recursive: true })
+    for (const [index, name] of ['one', 'two'].entries()) {
+      fs.writeFileSync(
+        path.join(collidingDirectory, `${name}.json`),
+        JSON.stringify({ color: { brand: { value: `#00000${index}` } } }),
+      )
+    }
+
+    const collisionConfigFile = path.join(tempDir, 'collision.config.json')
+    fs.writeFileSync(
+      collisionConfigFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'collision.css',
+                format: 'css/variables',
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [collidingDirectory.replace(/\\/g, '/') + '/*.json'],
+      }),
+    )
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({ config: collisionConfigFile, silent: true }),
+      )
+
+      const said = [...logSpy.mock.calls, ...warnSpy.mock.calls].map((call) =>
+        String(call[0]),
+      )
+      expect(said.filter((message) => message.includes('collision'))).toEqual(
+        [],
+      )
+      expect(said).toEqual([])
+    } finally {
+      warnSpy.mockRestore()
+      logSpy.mockRestore()
+    }
+  })
+
   it('watchChange does not rebuild when the changed file is not a watched source', async () => {
     const plugin = vitePlugin({
       config: configFile,

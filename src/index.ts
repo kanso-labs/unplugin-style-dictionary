@@ -536,25 +536,42 @@ export const unpluginFactory: UnpluginFactory<
       // swapped onto it below — overlapping builds would interleave those
       // writes and hand a reader a file assembled from both.
       for (const item of resolvedConfigs) {
-        const sd = new StyleDictionary(item.config)
-        await sd.hasInitialized
-        const silentSD = await sd.extend({
-          log: {
-            verbosity: 'silent',
-          },
+        // `{ init: false }` is the escape hatch Style Dictionary documents on
+        // this constructor, and it is what makes a bad configuration
+        // catchable. Left to itself the constructor ends in a call to
+        // `init()` whose promise it neither stores nor returns, so a config
+        // that fails to load rejects a promise nobody holds: the `catch`
+        // below never runs, and the host dies with a raw stack or — where an
+        // `unhandledRejection` handler suppresses it — hangs on a
+        // `buildStart` that never settles. `await sd.hasInitialized` cannot
+        // observe it either, since that promise is only ever resolved, at the
+        // tail of a successful extend.
+        const sd = new StyleDictionary(item.config, { init: false })
+
+        // One initialisation rather than two. `init()` is `extend()` with
+        // `mutateOriginal`, so the old pair loaded the configuration and
+        // combined every source twice — running a custom parser or
+        // preprocessor twice with it — and the first of the two ran at
+        // default verbosity, which is how Style Dictionary's own warnings
+        // escaped this plugin's `silent`. `config` defaults to the one the
+        // constructor was handed.
+        await sd.extend(undefined, {
+          mutateOriginal: true,
+          verbosity: 'silent',
         })
+
         // Swap in the atomic volume only now that the instance has finished
         // reading its configs and token sources, so every write below lands
         // through `rename` while the read path stays exactly as it was.
-        silentSD.volume = atomicVolume
-        await silentSD.buildAllPlatforms()
+        sd.volume = atomicVolume
+        await sd.buildAllPlatforms()
 
         // Collected on every build rather than only on the ones whose size
         // report prints it below. The set is also what keeps a rebuild from
         // being triggered by the write it just made, and a rebuild passes a
         // `context` — so gating the collection on `!context` left it empty on
         // exactly the builds a watcher is live for.
-        for (const platform of Object.values(silentSD.platforms)) {
+        for (const platform of Object.values(sd.platforms)) {
           const buildPath = platform.buildPath ?? ''
           for (const file of platform.files ?? []) {
             if (file.destination) {
