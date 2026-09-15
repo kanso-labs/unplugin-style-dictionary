@@ -467,6 +467,107 @@ describe('unplugin-style-dictionary (vite target)', () => {
     )
   })
 
+  // A `buildPath` inside a `source` directory is a supported layout, and its
+  // output matches the very glob that produced it — so a correct matcher says
+  // "watched source" about a file this plugin wrote, and every write triggers
+  // the rebuild that makes the next one. Against a real dev server that is a
+  // loop nothing breaks out of. Both layouts below are checked because the two
+  // glob shapes reach the destination differently: `*.json` only matches
+  // output written beside its sources, `**/*.json` also matches it a
+  // directory below.
+  it.each([
+    {
+      buildSubdirectory: '',
+      id: 'beside',
+      label: 'output written beside its own sources',
+      sourceGlob: '*.json',
+    },
+    {
+      buildSubdirectory: 'build',
+      id: 'below',
+      label: 'output written below its own sources',
+      sourceGlob: '**/*.json',
+    },
+  ])(
+    'never rebuilds on $label',
+    async ({ buildSubdirectory, id, sourceGlob }) => {
+      const tokensDirectory = path.join(tempDir, `self-trigger-${id}`)
+      const buildDirectory = path.join(tokensDirectory, buildSubdirectory)
+      fs.mkdirSync(buildDirectory, { recursive: true })
+
+      const tokenSource = path.join(tokensDirectory, 'base.json')
+      const selfConfigFile = path.join(
+        tempDir,
+        `self-trigger-${id}.config.json`,
+      )
+      const generated = path.join(buildDirectory, 'flat.json')
+      const sourcePattern = `${tokensDirectory.replace(/\\\\/g, '/')}/${sourceGlob}`
+
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#000000' } } }),
+      )
+      fs.writeFileSync(
+        selfConfigFile,
+        JSON.stringify({
+          platforms: {
+            json: {
+              buildPath: buildDirectory.replace(/\\/g, '/') + '/',
+              files: [
+                {
+                  destination: 'flat.json',
+                  format: 'json/flat',
+                },
+              ],
+              transformGroup: 'js',
+            },
+          },
+          source: [sourcePattern],
+        }),
+      )
+
+      const plugin = vitePlugin({
+        config: selfConfigFile,
+        silent: true,
+      })
+
+      await callBuildStart(plugin)
+
+      // What makes the guard load-bearing: on the pattern alone this file is a
+      // watched source, because it is output written under the glob that
+      // produced it. Only subtracting what the build wrote tells the two apart.
+      expect(
+        matchesWatchedFile(generated.replace(/\\/g, '/'), [sourcePattern]),
+      ).toBe(true)
+
+      // Change the token source on disk without going through the plugin, so a
+      // wrongly-triggered rebuild writes visibly different content.
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+      )
+
+      // Every generated file is written through a temporary file and renamed
+      // over the destination, so a rebuild always lands a different inode.
+      // Comparing that rather than the content is what makes this test unable
+      // to pass vacuously: a rebuild that happened to write identical bytes
+      // would still be caught.
+      const inodeAfterBuild = fs.statSync(generated).ino
+
+      await callWatchChange(plugin, generated)
+
+      expect(fs.statSync(generated).ino).toBe(inodeAfterBuild)
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#000000')
+
+      // The same watcher still rebuilds for a genuine token edit, so the guard
+      // subtracts the plugin's own output rather than the whole directory.
+      await callWatchChange(plugin, tokenSource)
+
+      expect(fs.statSync(generated).ino).not.toBe(inodeAfterBuild)
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#ff0000')
+    },
+  )
+
   it('watchChange does not rebuild when the changed file is not a watched source', async () => {
     const plugin = vitePlugin({
       config: configFile,

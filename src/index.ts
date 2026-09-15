@@ -22,6 +22,12 @@ export type * from './types.js'
 // consuming code imports it). Every regenerate is itself a "change", which
 // without filtering re-triggers a rebuild forever.
 //
+// Matching a pattern is only half of that, and this function is only the half
+// it can answer. A `buildPath` inside a `source` directory is a supported
+// layout, and under any correct matcher its output matches the very glob that
+// produced it — so the caller also subtracts what the last build wrote. See
+// `generatedDestinations` and `isWatchedSource` in the factory below.
+//
 // The patterns are Style Dictionary's own `source` and `include` globs, so the
 // filter has to admit exactly what the build reads — which is why the matching
 // is a real globber's rather than hand-rolled. The version this replaces was
@@ -197,6 +203,21 @@ export const unpluginFactory: UnpluginFactory<
 > = (options = {}) => {
   const { silent = false } = options
   let root = process.cwd()
+
+  // Every absolute destination the last completed build wrote, spelled with
+  // forward slashes so it compares against a normalised watcher path. This is
+  // the half of the rebuild-loop guard that pattern matching cannot supply:
+  // output written under a watched directory matches the source glob that
+  // produced it, so without subtracting this set a supported layout rebuilds
+  // on its own writes for as long as the dev server runs.
+  const generatedDestinations = new Set<string>()
+
+  // Whether a changed file is a token or config source rather than something
+  // this plugin just wrote. Both watch entry points ask through here, so
+  // neither can react to its own output.
+  const isWatchedSource = (file: string, patterns: string[]): boolean =>
+    !generatedDestinations.has(file.replace(/\\/g, '/')) &&
+    matchesWatchedFile(file, patterns)
 
   // Helper to log if not silent
   const log = (
@@ -396,22 +417,35 @@ export const unpluginFactory: UnpluginFactory<
         silentSD.volume = atomicVolume
         await silentSD.buildAllPlatforms()
 
-        if (!context && !silent) {
-          for (const platform of Object.values(silentSD.platforms)) {
-            const buildPath = platform.buildPath ?? ''
-            for (const file of platform.files ?? []) {
-              if (file.destination) {
-                const absoluteBuildPath = path.isAbsolute(buildPath)
-                  ? buildPath
-                  : path.resolve(root, buildPath)
-                const absoluteDestination = path.isAbsolute(file.destination)
-                  ? file.destination
-                  : path.resolve(absoluteBuildPath, file.destination)
-                generatedFiles.add(absoluteDestination)
-              }
+        // Collected on every build rather than only on the ones whose size
+        // report prints it below. The set is also what keeps a rebuild from
+        // being triggered by the write it just made, and a rebuild passes a
+        // `context` — so gating the collection on `!context` left it empty on
+        // exactly the builds a watcher is live for.
+        for (const platform of Object.values(silentSD.platforms)) {
+          const buildPath = platform.buildPath ?? ''
+          for (const file of platform.files ?? []) {
+            if (file.destination) {
+              const absoluteBuildPath = path.isAbsolute(buildPath)
+                ? buildPath
+                : path.resolve(root, buildPath)
+              const absoluteDestination = path.isAbsolute(file.destination)
+                ? file.destination
+                : path.resolve(absoluteBuildPath, file.destination)
+              generatedFiles.add(absoluteDestination)
             }
           }
         }
+      }
+
+      // Replaced wholesale rather than added to, so a destination dropped from
+      // a configuration stops being treated as ours and becomes watchable
+      // again. A build that throws never reaches this and leaves the previous
+      // set standing, which is the safe direction: the files it wrote before
+      // failing are still ours.
+      generatedDestinations.clear()
+      for (const destination of generatedFiles) {
+        generatedDestinations.add(destination.replace(/\\/g, '/'))
       }
 
       const duration = Date.now() - startTime
@@ -541,7 +575,7 @@ export const unpluginFactory: UnpluginFactory<
         // explicitly and catching here is what keeps a bad config on disk
         // from surfacing as an unhandled rejection that kills the dev server.
         server.watcher.on('all', (_event, file) => {
-          if (!matchesWatchedFile(file, filesToWatch)) return
+          if (!isWatchedSource(file, filesToWatch)) return
 
           void (async () => {
             try {
@@ -575,9 +609,10 @@ export const unpluginFactory: UnpluginFactory<
       // Without this check, watchChange fires for *any* changed file in the
       // host bundler's module graph — including our own generated output,
       // since consuming code imports it. Every regenerate is itself a
-      // "change", so skipping non-matching files here is what keeps this
-      // from rebuilding forever.
-      if (!matchesWatchedFile(id, watchFiles)) return
+      // "change", so skipping what is not a source here is what keeps this
+      // from rebuilding forever — both the files that match no pattern and
+      // the ones that match only because this plugin wrote them.
+      if (!isWatchedSource(id, watchFiles)) return
 
       await runBuilds(resolved, path.basename(id))
 
