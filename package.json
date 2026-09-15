@@ -66,6 +66,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "picomatch": "4.0.7",
     "unplugin": "3.3.0"
   },
   "devDependencies": {
@@ -73,6 +74,7 @@
     "@commitlint/config-conventional": "21.2.2",
     "@eslint/js": "10.0.1",
     "@types/node": "26.5.1",
+    "@types/picomatch": "4.0.3",
     "@vitest/coverage-v8": "5.0.1",
     "eslint": "10.10.0",
     "eslint-plugin-oxlint": "1.83.0",

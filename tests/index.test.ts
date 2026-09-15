@@ -348,6 +348,125 @@ describe('unplugin-style-dictionary (vite target)', () => {
     ).toBe(false)
   })
 
+  // The hand-rolled matcher this replaces was wrong in both directions at
+  // once, and the rows below are what both directions mean. Every expectation
+  // is what glob answers, which is what Style Dictionary resolves its own
+  // `source` and `include` patterns with — so a row that disagreed would be
+  // the filter admitting something the build does not read, or rejecting
+  // something it does.
+  const matcherRows: Array<[pattern: string, file: string, matches: boolean]> =
+    [
+      // `**` matches zero directories. This row is the first of the two
+      // failures: the README's own `tokens/**/*.json` never matched a token
+      // file sitting directly in `tokens/`, so editing one rebuilt nothing.
+      ['/p/tokens/**/*.json', '/p/tokens/design.json', true],
+      ['/p/tokens/**/*.json', '/p/tokens/sub/design.json', true],
+      ['/p/tokens/**/*.json', '/p/tokens/sub/deep/design.json', true],
+      ['/p/tokens/**/*.json', '/p/tokens/design.css', false],
+      // `*` stops at a separator, and the pattern is anchored at both ends.
+      // The old regex branch mapped it to `.*` and tested it unanchored, so
+      // all three of these were true.
+      ['/p/tokens/*.json', '/p/tokens/design.json', true],
+      ['/p/tokens/*.json', '/p/tokens/sub/design.json', false],
+      ['/p/tokens/*.json', '/p/tokens/design.json.bak', false],
+      ['/p/tokens/*.json', '/xx/p/tokens/design.json', false],
+      // A directory pattern covers its own tree and nothing that merely
+      // shares its prefix — the old branch stripped `/**` and let the
+      // sibling directory in.
+      ['/p/tokens/**', '/p/tokens/sub/design.json', true],
+      ['/p/tokens/**', '/p/tokens-backup/design.ts', false],
+      // An exact config path is not a prefix of a longer name.
+      ['/p/sd.config.json', '/p/sd.config.json', true],
+      ['/p/sd.config.json', '/p/sd.config.json.bak', false],
+      // Brace sets and `?`: glob expands both, while the old matcher escaped
+      // the braces into literals and never entered its glob branch at all for
+      // a pattern whose only wildcard was `?`.
+      ['/p/tokens/{color,size}.json', '/p/tokens/color.json', true],
+      ['/p/tokens/{color,size}.json', '/p/tokens/space.json', false],
+      ['/p/tokens/a?.json', '/p/tokens/a1.json', true],
+      ['/p/tokens/a?.json', '/p/tokens/a12.json', false],
+      // A dotfile is invisible to glob, so it is invisible here too. That is
+      // the second reason this plugin's own atomic temporary file can never
+      // match a watch pattern; the first is that it drops the destination's
+      // extension.
+      ['/p/tokens/*.json', '/p/tokens/.design.json', false],
+      ['/p/tokens/*.css', '/p/tokens/.vars.4242.0.tmp', false],
+    ]
+
+  it.each(matcherRows)(
+    'matchesWatchedFile: %s against %s is %s',
+    (pattern, file, matches) => {
+      expect(matchesWatchedFile(file, [pattern])).toBe(matches)
+    },
+  )
+
+  it('matchesWatchedFile normalises a backslash-spelled path', () => {
+    // chokidar reports native paths, so on Windows the file arrives with
+    // backslashes while the watch list is POSIX. Both sides are normalised
+    // before matching, which is what lets the two meet.
+    expect(
+      matchesWatchedFile('C:\\p\\tokens\\design.json', [
+        'C:/p/tokens/**/*.json',
+      ]),
+    ).toBe(true)
+  })
+
+  it('rebuilds a token file sitting directly in a `**` source directory', async () => {
+    // The end-to-end shape of the first failure, in the layout the README
+    // documents: `source: ['tokens/**/*.json']` with the edited token file at
+    // the top of that directory rather than in a subdirectory. Against a real
+    // dev server this logged nothing at all and left the output untouched.
+    const tokensDirectory = path.join(tempDir, 'glob-tokens')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+
+    const topLevelToken = path.join(tokensDirectory, 'base.json')
+    const globConfigFile = path.join(tempDir, 'glob.sd.config.json')
+    const globOutputFile = path.join(tempDir, 'glob-vars.css')
+
+    fs.writeFileSync(
+      topLevelToken,
+      JSON.stringify({ color: { brand: { value: '#000000' } } }),
+    )
+    fs.writeFileSync(
+      globConfigFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'glob-vars.css',
+                format: 'css/variables',
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [tokensDirectory.replace(/\\/g, '/') + '/**/*.json'],
+      }),
+    )
+
+    const plugin = vitePlugin({
+      config: globConfigFile,
+      silent: true,
+    })
+
+    await callBuildStart(plugin)
+    expect(fs.readFileSync(globOutputFile, 'utf-8')).toContain(
+      '--color-brand: #000000;',
+    )
+
+    fs.writeFileSync(
+      topLevelToken,
+      JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+    )
+    await callWatchChange(plugin, topLevelToken)
+
+    expect(fs.readFileSync(globOutputFile, 'utf-8')).toContain(
+      '--color-brand: #ff0000;',
+    )
+  })
+
   it('watchChange does not rebuild when the changed file is not a watched source', async () => {
     const plugin = vitePlugin({
       config: configFile,
