@@ -123,6 +123,44 @@ function unwrapDefault(value: unknown): unknown {
 // temporary file.
 let temporaryFileCounter = 0
 
+// Whether the freshly rendered `temporary` holds exactly what `destination`
+// already holds. A rebuild whose inputs did not change renders byte-identical
+// output, and renaming that over the destination is a filesystem event the
+// host bundler reacts to — which is the whole of the rebuild loop, since
+// consuming code imports the generated file and every regenerate is therefore
+// a module-graph change. Comparing the two files rather than the `data`
+// argument keeps this indifferent to whether the caller passed a string, a
+// buffer or a stream, and to the encoding it passed with it.
+//
+// A destination that cannot be read is not identical, which covers the
+// ordinary case of it not existing yet.
+async function rendersWhatIsAlreadyThere(
+  temporary: string,
+  destination: string,
+): Promise<boolean> {
+  try {
+    const [existing, rendered] = await Promise.all([
+      fs.promises.readFile(destination),
+      fs.promises.readFile(temporary),
+    ])
+
+    return existing.equals(rendered)
+  } catch {
+    return false
+  }
+}
+
+function rendersWhatIsAlreadyThereSync(
+  temporary: string,
+  destination: string,
+): boolean {
+  try {
+    return fs.readFileSync(destination).equals(fs.readFileSync(temporary))
+  } catch {
+    return false
+  }
+}
+
 function temporaryPathFor(destination: string): string {
   const extension = path.extname(destination)
 
@@ -147,6 +185,16 @@ const writeFileAtomic: typeof fs.promises.writeFile = async (
 
   try {
     await fs.promises.writeFile(temporary, data, options)
+
+    // The check sits in front of the rename rather than in place of it: the
+    // temporary file is still written, so a destination that does need
+    // replacing is still replaced in one atomic step and a concurrent reader
+    // still never sees a partial file.
+    if (await rendersWhatIsAlreadyThere(temporary, file)) {
+      discardTemporaryFile(temporary)
+      return
+    }
+
     await fs.promises.rename(temporary, file)
   } catch (err) {
     discardTemporaryFile(temporary)
@@ -164,6 +212,12 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
 
   try {
     fs.writeFileSync(temporary, data, options)
+
+    if (rendersWhatIsAlreadyThereSync(temporary, file)) {
+      discardTemporaryFile(temporary)
+      return
+    }
+
     fs.renameSync(temporary, file)
   } catch (err) {
     discardTemporaryFile(temporary)
@@ -211,6 +265,15 @@ export const unpluginFactory: UnpluginFactory<
   // produced it, so without subtracting this set a supported layout rebuilds
   // on its own writes for as long as the dev server runs.
   const generatedDestinations = new Set<string>()
+
+  // Whether `watchChange` has fired since the last `buildStart`, and whether
+  // anything has been compiled yet. Rollup, rolldown and webpack all run
+  // `watchChange` for every changed file and only then re-enter `buildStart`
+  // — unplugin's webpack adapter awaits both in one `make` tap — so a flag
+  // raised in the first is still standing in the second, and is what tells it
+  // this is a watch rebuild rather than the first build of the process.
+  let watchRebuild = false
+  let hasCompiled = false
 
   // Whether a changed file is a token or config source rather than something
   // this plugin just wrote. Both watch entry points ask through here, so
@@ -549,7 +612,25 @@ export const unpluginFactory: UnpluginFactory<
         this.addWatchFile(file)
       }
 
+      // Every watch rebuild re-enters this hook, and compiling here as well as
+      // in `watchChange` is what closed the loop: consuming code imports the
+      // generated file, so writing it is itself a module-graph change, which
+      // re-enters `buildStart`, which writes it again. `watchChange` has
+      // already run for every file in this cycle and rebuilt if any of them
+      // was a source, so the only thing left for a re-entry to do is the
+      // re-registration above.
+      //
+      // `hasCompiled` is the floor under that: a host that fires
+      // `watchChange` without ever re-entering here would otherwise leave the
+      // flag standing, and no first compile of a process may ever be skipped —
+      // the tokens have to exist before the build that consumes them.
+      if (watchRebuild && hasCompiled) {
+        watchRebuild = false
+        return
+      }
+
       await runBuilds(resolved)
+      hasCompiled = true
     },
 
     name: 'unplugin-style-dictionary',
@@ -602,6 +683,10 @@ export const unpluginFactory: UnpluginFactory<
     // than the hook made to lie about finishing.
     // oxlint-disable-next-line typescript/no-misused-promises
     async watchChange(id) {
+      // Raised before any decision about `id`, because whatever this change
+      // was, the host is now on its way back into `buildStart`.
+      watchRebuild = true
+
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
 
@@ -615,6 +700,7 @@ export const unpluginFactory: UnpluginFactory<
       if (!isWatchedSource(id, watchFiles)) return
 
       await runBuilds(resolved, path.basename(id))
+      hasCompiled = true
 
       for (const file of watchFiles) {
         this.addWatchFile(file)

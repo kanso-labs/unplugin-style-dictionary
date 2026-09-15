@@ -3,11 +3,13 @@ import type { Plugin } from 'vite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import * as rollup from 'rollup'
 import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import packageJson from '../package.json' with { type: 'json' }
 import { matchesWatchedFile } from '../src/index.ts'
+import rollupPlugin from '../src/rollup.ts'
 import vitePlugin from '../src/vite.ts'
 
 interface BuildContext {
@@ -245,14 +247,26 @@ describe('unplugin-style-dictionary (vite target)', () => {
     // Enough tokens that writing the output is slow enough to be caught
     // halfway: with a handful of tokens the write finishes within a single
     // tick and the race is invisible.
-    const color: Record<string, { value: string }> = {}
-    for (let index = 0; index < 4000; index++) {
-      color[`swatch${index}`] = {
-        value: `#${(index % 0xffffff).toString(16).padStart(6, '0')}`,
+    //
+    // One swatch varies, and the rebuild loop below alternates it. That is
+    // load-bearing: a write whose bytes match the destination skips the
+    // rename, so a loop of identical rebuilds would leave the very path this
+    // test exists to cover unexercised and pass without touching it.
+    const writeTokens = (marker: string) => {
+      const color: Record<string, { value: string }> = {
+        marker: { value: marker },
       }
+      for (let index = 0; index < 4000; index++) {
+        color[`swatch${index}`] = {
+          value: `#${(index % 0xffffff).toString(16).padStart(6, '0')}`,
+        }
+      }
+
+      fs.writeFileSync(concurrentTokenFile, JSON.stringify({ color }))
     }
 
-    fs.writeFileSync(concurrentTokenFile, JSON.stringify({ color }))
+    const markers = ['#000000', '#ffffff']
+    writeTokens(markers[0])
     fs.writeFileSync(
       concurrentConfigFile,
       JSON.stringify({
@@ -277,11 +291,16 @@ describe('unplugin-style-dictionary (vite target)', () => {
       silent: true,
     })
 
-    // Build once so there is a complete file to compare every later read
-    // against. The tokens never change, so every rebuild must produce this
-    // exact content — anything else the reader sees is a partial write.
-    await callBuildStart(plugin)
-    const expected = fs.readFileSync(concurrentOutputFile, 'utf-8')
+    // Build once per marker so there is a complete file for each of the two
+    // states the loop alternates between. Every read must land on one of them
+    // exactly — anything else is a partial write.
+    const complete: string[] = []
+    for (const marker of markers) {
+      writeTokens(marker)
+      await callBuildStart(plugin)
+      complete.push(fs.readFileSync(concurrentOutputFile, 'utf-8'))
+    }
+    expect(complete[0]).not.toBe(complete[1])
 
     const failures: string[] = []
     let reads = 0
@@ -302,7 +321,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
           continue
         }
 
-        if (content !== expected) {
+        if (!complete.includes(content)) {
           // Report it the way a consumer meets it — as a parse failure —
           // together with how much of the file this read actually saw.
           let reason = 'parsed, but the content differs'
@@ -312,7 +331,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
             reason = err instanceof Error ? err.message : String(err)
           }
           failures.push(
-            `${reason} (read ${content.length} of ${expected.length} bytes)`,
+            `${reason} (read ${content.length} bytes, expected ${complete[0].length} or ${complete[1].length})`,
           )
         }
 
@@ -322,6 +341,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })()
 
     for (let index = 0; index < rebuilds; index++) {
+      writeTokens(markers[index % markers.length])
       await callBuildStart(plugin)
     }
     state.building = false
@@ -707,4 +727,143 @@ describe('the exports map', () => {
   it('ships the directory every entry point resolves into', () => {
     expect(packageJson.files).toContain('dist')
   })
+})
+
+const settle = async (ms: number) => {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Every other test in this file drives the Vite target through a hand-built
+// plugin context. This one runs a real second host, because the defect it pins
+// is invisible without one: it lives in how a bundler re-enters `buildStart`
+// on every watch rebuild, which no stub can reproduce.
+describe('under a real rollup watcher', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-rollup-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  it('rebuilds once for one token edit, then stops', async () => {
+    // The generated file is imported by the entry, so it is in rollup's module
+    // graph and every regenerate is itself a change rollup reacts to. That is
+    // the cycle: write the output, the host rebuilds, the plugin compiles
+    // again, the output is written again.
+    const tokensDirectory = path.join(tempDir, 'tokens')
+    const generatedDirectory = path.join(tempDir, 'generated')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+    fs.mkdirSync(generatedDirectory, { recursive: true })
+
+    const tokenSource = path.join(tokensDirectory, 'color.json')
+    const configFile = path.join(tempDir, 'sd.config.json')
+    const entry = path.join(tempDir, 'entry.js')
+    const outputDirectory = path.join(tempDir, 'dist')
+
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#000000' } } }),
+    )
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: generatedDirectory.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'tokens.js',
+                format: 'javascript/es6',
+              },
+            ],
+            transformGroup: 'js',
+          },
+        },
+        // A literal path rather than a glob, so what a watcher does with an
+        // unexpanded pattern is not a confound here.
+        source: [tokenSource.replace(/\\/g, '/')],
+      }),
+    )
+    // The entry uses a token export rather than importing for side effects,
+    // so rollup cannot tree-shake the generated module out of the bundle and
+    // the assertion below is about what a consumer would actually receive.
+    fs.writeFileSync(
+      entry,
+      [
+        "import { ColorBrand } from './generated/tokens.js'",
+        'export const brand = ColorBrand',
+        '',
+      ].join('\n'),
+    )
+
+    let bundles = 0
+    const errors: string[] = []
+
+    const watcher = rollup.watch({
+      input: entry,
+      output: { dir: outputDirectory, format: 'es' },
+      plugins: [rollupPlugin({ config: configFile, silent: true })],
+      watch: { buildDelay: 50 },
+    })
+
+    watcher.on('event', (event) => {
+      if (event.code === 'ERROR') errors.push(event.error.message)
+      if (event.code === 'BUNDLE_END') {
+        bundles++
+        void event.result.close()
+      }
+    })
+
+    // A second listener, so the wait below is driven by the watcher rather
+    // than by a fixed delay: a slow machine lengthens this test instead of
+    // failing it.
+    const firstBundle = new Promise<void>((resolve) => {
+      watcher.on('event', (event) => {
+        if (event.code === 'BUNDLE_END') resolve()
+      })
+    })
+
+    try {
+      await Promise.race([firstBundle, settle(15000)])
+      expect(errors).toEqual([])
+      expect(bundles).toBe(1)
+
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+      )
+
+      await settle(3000)
+      const afterEdit = bundles
+      await settle(3000)
+
+      // Converged is the property that matters, and it is what the loop
+      // violated: before the fix this ran at about ten bundles a second and
+      // the count was still climbing after every idle window.
+      expect(bundles).toBe(afterEdit)
+
+      // Bounded, too, rather than merely stopping eventually. Three is what a
+      // settled run costs: the initial bundle, the rebuild the token edit
+      // earns, and one more because the plugin writes the generated file
+      // while rollup is already watching it, so the write it just caused is a
+      // real module-graph change rollup has to see. That last one renders
+      // identical bytes the next time round and stops there. The bound is
+      // asserted rather than the exact number because the watcher may batch
+      // the second and third into one.
+      expect(afterEdit).toBeLessThanOrEqual(3)
+
+      // The edit still reached the generated file and the bundle, so the
+      // convergence is not the plugin having stopped working.
+      expect(
+        fs.readFileSync(path.join(generatedDirectory, 'tokens.js'), 'utf-8'),
+      ).toContain('#ff0000')
+      expect(
+        fs.readFileSync(path.join(outputDirectory, 'entry.js'), 'utf-8'),
+      ).toContain('#ff0000')
+    } finally {
+      await watcher.close()
+    }
+  }, 30000)
 })
