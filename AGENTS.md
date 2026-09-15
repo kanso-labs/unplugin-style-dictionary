@@ -243,9 +243,10 @@ they can run in parallel worktrees.
 ### Every item carries ten fields, and none of them is optional
 
 They come from three different places, which is the whole difficulty: five are
-the project's own, three are set on the issue or the pull request, and two are
-GitHub's native issue fields, which live in the issue's sidebar and nowhere
-else. Nothing joins them up, so each is set in its own place.
+the project's own, three are set on the issue (a pull request carries two of
+them, the labels and the milestone), and two are GitHub's native issue fields,
+which live in the issue's sidebar and nowhere else. Nothing joins them up, so
+each is set in its own place.
 
 | Field     | Set on         | Values                                                     |
 | --------- | -------------- | ---------------------------------------------------------- |
@@ -255,7 +256,7 @@ else. Nothing joins them up, so each is set in its own place.
 | Area      | Project item   | Watching, Compile, Config, Targets, Options, Packaging, CI |
 | Size      | Project item   | S, M, L                                                    |
 | Milestone | Issue, PR      | `v1.0.0`                                                   |
-| Type      | Issue, PR      | Feature, Bug, Task                                         |
+| Type      | Issue          | Feature, Bug, Task                                         |
 | Labels    | Issue, PR      | one `kind:`, one `area:`                                   |
 | Priority  | Issue (native) | Urgent, High, Medium, Low                                  |
 | Effort    | Issue (native) | High, Medium, Low                                          |
@@ -303,31 +304,34 @@ every issue, but the plan schedules nothing by date — it is ordered by Phase a
 worked in that order. Filling them would mean inventing dates that nothing
 checks and nothing honours.
 
-**A pull request takes the three issue-side fields, and is not a project item.**
-The board is the plan, and the plan is made of issues; a board holding every
-merged pull request would bury the items it exists to order under history. What
-connects the two is already there — `Linked pull requests` is a column on the
-board, so the pull request that closes an item shows against it without being an
-item itself. The labels, the type and the milestone are what make a pull request
-findable from outside the board, which is all it needed.
+**A pull request takes the labels and the milestone, and is not a project
+item.** The board is the plan, and the plan is made of issues; a board holding
+every merged pull request would bury the items it exists to order under history.
+What connects the two is already there — `Linked pull requests` is a column on
+the board, so the pull request that closes an item shows against it without
+being an item itself. The labels and the milestone are what make a pull request
+findable from outside the board, which is all it needed. It takes no type: issue
+types are an Issue-only construct — `PullRequest` exposes no such field in
+GraphQL, and `is:pr type:Task` matches nothing.
 
 Where its two labels come from depends on whether an issue stands behind it:
 
 - **A pull request that closes a plan issue inherits that issue's Kind and
-  Area**, so it carries the same two labels and the same type. It is the work
-  the issue describes, and giving it a second opinion would only split one thing
-  across two answers.
+  Area**, so it carries the same two labels. It is the work the issue describes,
+  and giving it a second opinion would only split one thing across two answers.
 - **A pull request with nothing behind it reads its Kind off its Conventional
   Commit type** — `feat` is a Feature, `fix` a Fix, `perf` a Perf, `docs` Docs,
   `test` a Test, and `chore`, `ci` and `build` are Tooling. Its Area is the part
   of the plugin its scope names: `fix(watch)` is `area:watching`, `ci(lint)` is
   `area:ci`.
 
-**A dependency bump carries none of this.** Renovate opens it as `deps:`, which
-is the type release-please reads and the reason it releases at all, and
-automerges it; it is not the plan's work and takes neither labels, nor the type,
-nor the milestone. The `chore(main): release …` pull request release-please
-opens is the same: it is the plan being shipped, not an item in it.
+**A dependency bump carries the label pair and nothing else.** Renovate attaches
+`kind:tooling` and `area:packaging` to every pull request it opens, through the
+`labels` key in `.github/renovate.json`, so a bump is findable from the issue
+list and from search; it takes no milestone and no project item, on purpose —
+bumps outnumber the plan's own pull requests, and on the `v1.0.0` milestone they
+would drown the only question it answers. The `chore(main): release …` pull
+request is release-please's, and carries only its own `autorelease:` labels.
 
 ### What an issue says
 
