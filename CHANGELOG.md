@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.29](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.28...unplugin-style-dictionary-v0.4.29) (2026-09-15)
+
+
+### Bug Fixes
+
+* **watch:** expand globs to concrete paths before registering them ([#237](https://github.com/kanso-labs/unplugin-style-dictionary/issues/237)) ([33503af](https://github.com/kanso-labs/unplugin-style-dictionary/commit/33503af4d506b5a5ee9118bcc8c4565beeb1fc0d))
+* **watch:** match watch patterns with real glob semantics ([#234](https://github.com/kanso-labs/unplugin-style-dictionary/issues/234)) ([4c85431](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4c85431c967fd708b5240dd91554e21d024379fa))
+* **watch:** never treat generated output as a watched source ([#235](https://github.com/kanso-labs/unplugin-style-dictionary/issues/235)) ([63d8f21](https://github.com/kanso-labs/unplugin-style-dictionary/commit/63d8f2177d57a9da2e380a4ffc0b2b78583a0041))
+* **watch:** stop buildStart recompiling on every watch re-entry ([#236](https://github.com/kanso-labs/unplugin-style-dictionary/issues/236)) ([b161361](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b161361a674fe7598ba71284f638f94a69039246))
+
+
+### Dependencies
+
+* update dependency eslint-plugin-perfectionist to v5.11.1 ([#181](https://github.com/kanso-labs/unplugin-style-dictionary/issues/181)) ([5c7b460](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5c7b4602837989b5a6b4fb8be30c9d45d38fdc47))
+* update vitest to v5.0.1 ([#182](https://github.com/kanso-labs/unplugin-style-dictionary/issues/182)) ([a518c75](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a518c75526198be9e5992fb8437b6bf8e4044bf1))
+
 ## [0.4.28](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.27...unplugin-style-dictionary-v0.4.28) (2026-09-14)
 
 
