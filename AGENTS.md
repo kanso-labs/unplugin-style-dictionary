@@ -548,11 +548,23 @@ filesystem shim and turns path resolution off for every read.
 `tests/index.test.ts` pins this with a concurrent reader; a single clean build
 proves nothing, since the window is only tens of milliseconds wide.
 
-**Vite needs the `configureServer` escape hatch, and that is not redundancy.**
-Token sources are plain JSON and JS files sitting outside the module graph, and
-Vite does not reliably invoke `watchChange` while serving. `watchChange` alone
-covers the targets that run a persistent watcher of their own, such as
-`rollup --watch`; the Vite dev server needs both.
+**The `configureServer` escape hatch is redundancy, deliberately kept.** It used
+to be justified by Vite not reliably invoking `watchChange` while serving. That
+is not true of any Vite this package supports: 6, 7 and 8 all call
+`pluginContainer.watchChange` from their own file-change handler, and with
+either path stubbed out an edit still rebuilds exactly once. What keeps both is
+that the declared peer range is wider than the three versions that were
+measured, and that a duplicate trigger now costs nothing.
+
+**One scheduler is what makes that true, and it is load-bearing beyond the
+duplication.** Both watch entry points call `schedule` rather than `runBuilds`:
+a trailing debounce collapses a burst — an editor's save-all, a checkout, a
+formatter rewriting a directory — into one rebuild, and a single in-flight chain
+means a trigger arriving mid-build queues one follow-up instead of starting a
+second build beside it. Without it, one token edit under a dev server produced
+two overlapping builds and a four-file change produced ten. That overlap is the
+same one `runBuilds` avoids internally by building its configurations one after
+another, reintroduced one level up.
 
 **A one-shot build only compiles once, in `buildStart`.** Anything without a
 persistent watch mode — `rolldown build` or `tsdown` with no `--watch` — gets no

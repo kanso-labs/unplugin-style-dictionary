@@ -1,4 +1,5 @@
 import type { Plugin } from 'vite'
+import type { MockInstance } from 'vitest'
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -671,6 +672,156 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(watched).toContain(globConfigFile.replace(/\\/g, '/'))
   })
 
+  // A burst of watcher events is one logical change, and a dev server produces
+  // bursts constantly: an editor's save-all, a branch checkout, a formatter
+  // rewriting a directory. Each event used to start its own Style Dictionary
+  // build, all of them overlapping.
+  //
+  // Counted through the plugin's own rebuild line rather than by instrumenting
+  // anything, because that line is exactly what a consumer sees: before this,
+  // one logical change printed it once per file.
+  it('coalesces a burst of watcher events into one rebuild', async () => {
+    const tokensDirectory = path.join(tempDir, 'burst')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+
+    const tokenFiles = ['one', 'two', 'three', 'four'].map((name, index) => {
+      const burstToken = path.join(tokensDirectory, `${name}.json`)
+      fs.writeFileSync(
+        burstToken,
+        JSON.stringify({ color: { [name]: { value: `#00000${index}` } } }),
+      )
+      return burstToken
+    })
+
+    const burstConfigFile = path.join(tempDir, 'burst.config.json')
+    fs.writeFileSync(
+      burstConfigFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'burst.css',
+                format: 'css/variables',
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [tokensDirectory.replace(/\\/g, '/') + '/*.json'],
+      }),
+    )
+
+    // Not silent: the rebuild line is what this counts.
+    const plugin = vitePlugin({ config: burstConfigFile })
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(plugin)
+      logSpy.mockClear()
+
+      // Four files rewritten as one logical change, then every trigger
+      // delivered without waiting for the previous one — which is how a
+      // watcher delivers them.
+      for (const [index, burstToken] of tokenFiles.entries()) {
+        fs.writeFileSync(
+          burstToken,
+          JSON.stringify({ color: { [`c${index}`]: { value: '#ff0000' } } }),
+        )
+      }
+      await Promise.all(
+        tokenFiles.map(async (burstToken) =>
+          callWatchChange(plugin, burstToken),
+        ),
+      )
+
+      expect(countRebuildLines(logSpy)).toBe(1)
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it('never has two Style Dictionary builds running at once', async () => {
+    // `runBuilds` builds its configurations one after another so two
+    // instances never write the same destination at once. Nothing serialised
+    // the calls to it, which reintroduced the overlap one level up — so this
+    // asserts the invariant where it was actually broken.
+    const tokensDirectory = path.join(tempDir, 'serial')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+
+    const bulkToken = path.join(tokensDirectory, 'bulk.json')
+    const serialConfigFile = path.join(tempDir, 'serial.config.json')
+    fs.writeFileSync(
+      bulkToken,
+      JSON.stringify({ color: { brand: { value: '#000000' } } }),
+    )
+    fs.writeFileSync(
+      serialConfigFile,
+      JSON.stringify({
+        platforms: {
+          json: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'serial.flat.json',
+                format: 'json/flat',
+              },
+            ],
+            transformGroup: 'js',
+          },
+        },
+        source: [bulkToken.replace(/\\/g, '/')],
+      }),
+    )
+
+    const plugin = vitePlugin({
+      config: serialConfigFile,
+      silent: true,
+    })
+    await callBuildStart(plugin)
+
+    let inside = 0
+    let mostAtOnce = 0
+
+    // The build is replaced by a stand-in of a known length rather than timed
+    // as it is. A real build of a large dictionary is slow enough, but most of
+    // that is synchronous, so a timer scheduled beside it does not reliably
+    // fire before it finishes — which would leave this passing whether the
+    // guard were there or not. What is under test is the scheduling, so the
+    // window it schedules into is the thing worth controlling.
+    const BUILD_MS = 300
+    const buildSpy = vi
+      .spyOn(StyleDictionary.prototype, 'buildAllPlatforms')
+      .mockImplementation(async function (this: StyleDictionary) {
+        inside++
+        mostAtOnce = Math.max(mostAtOnce, inside)
+        try {
+          await settle(BUILD_MS)
+          return this
+        } finally {
+          inside--
+        }
+      })
+
+    try {
+      // Past the debounce, so the two are not merged into one rebuild, and
+      // well inside the build above, so without the in-flight chain the
+      // second starts beside the first.
+      const first = callWatchChange(plugin, bulkToken)
+      await settle(150)
+      const second = callWatchChange(plugin, bulkToken)
+      await Promise.all([first, second])
+
+      expect(mostAtOnce).toBe(1)
+      // Not a vacuous pass: both triggers really did reach a build, so the
+      // one-at-a-time result is serialisation rather than coalescing.
+      expect(buildSpy.mock.calls.length).toBe(2)
+    } finally {
+      buildSpy.mockRestore()
+    }
+  }, 30000)
+
   it('watchChange does not rebuild when the changed file is not a watched source', async () => {
     const plugin = vitePlugin({
       config: configFile,
@@ -811,6 +962,13 @@ describe('the exports map', () => {
     expect(packageJson.files).toContain('dist')
   })
 })
+
+// The plugin's own rebuild line is what a consumer sees, so it is what these
+// count: before the scheduler, one logical change printed it once per file.
+const countRebuildLines = (spy: MockInstance<typeof console.log>) =>
+  spy.mock.calls.filter((call) =>
+    String(call[0]).includes('Rebuilt design tokens'),
+  ).length
 
 const settle = async (ms: number) => {
   await new Promise((resolve) => setTimeout(resolve, ms))
