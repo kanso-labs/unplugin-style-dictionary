@@ -508,13 +508,32 @@ mutating an import, registering a global — and the field becomes a lie bundler
 will act on. Nothing enforces it: publint asks for the field and passes either
 way, and no test can see a side effect that has not been written yet.
 
-**The watched-file filter is what stops an infinite rebuild loop.**
-`matchesWatchedFile` guards both the Vite `configureServer` watcher and the
-universal `watchChange` hook. Without it `watchChange` fires for any changed
-file in the host bundler's module graph — including this plugin's own generated
-output, since consuming code imports it. Each regenerate is itself a change, so
-dropping the filter rebuilds forever. `tests/index.test.ts` pins this directly;
-do not "simplify" the guard.
+**Three things stop an infinite rebuild loop, and the filter is only the
+first.** Consuming code imports the generated file, so every regenerate is
+itself a module-graph change the host reacts to, and a loop closes through any
+entry point that compiles without asking whether it should.
+
+1. `matchesWatchedFile` answers whether a changed path matches a watch pattern.
+   Without it `watchChange` fires for any changed file in the module graph and
+   rebuilds on the plugin's own output.
+2. `generatedDestinations` answers what the plugin itself wrote, and
+   `isWatchedSource` subtracts it. The pattern cannot: a `buildPath` inside a
+   `source` directory is a supported layout, and its output matches the very
+   glob that produced it. Both watch entry points ask through `isWatchedSource`
+   rather than the matcher directly.
+3. `buildStart` skips its compile on a watch re-entry, because rollup, rolldown
+   and webpack all re-enter it on every rebuild — unplugin's webpack adapter
+   awaits `watchChange` and then `buildStart` in one `make` tap. `watchChange`
+   has already decided the rebuild for that cycle, and compiling again here is
+   what made every regenerate produce the next one. Under `rollup --watch` that
+   was about ten bundles a second, forever.
+
+Underneath all three, a write whose bytes match the destination skips the
+`rename`, so a rebuild that renders what is already there emits no filesystem
+event at all. That is the backstop for the targets none of the three cover.
+`tests/index.test.ts` pins each of these, the last one through a real
+`rollup.watch()` run rather than a hand-built plugin context. Do not "simplify"
+any of them.
 
 **Generated files go through a temporary file and a `rename` on purpose.** Style
 Dictionary writes each file straight to its destination, which truncates it
