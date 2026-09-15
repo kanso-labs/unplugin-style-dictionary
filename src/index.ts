@@ -270,7 +270,6 @@ const GLOB_CHARACTERS = /[!*?[\]{}]/
 // paths inside it resolve against.
 interface ResolvedConfig {
   config: Config | string
-  dir: string
   file?: string
 }
 
@@ -294,7 +293,12 @@ export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
 > = (options = {}) => {
-  const { failOnError = 'build', logLevel, silent = false } = options
+  const {
+    failOnError = 'build',
+    logLevel,
+    root: rootOption,
+    silent = false,
+  } = options
 
   // `silent` predates `logLevel` and names its quietest level, so it is read
   // as one. `logLevel` wins when a consumer sets both.
@@ -326,7 +330,12 @@ export const unpluginFactory: UnpluginFactory<
   const failsTheBuild = (context: string | undefined): boolean =>
     failOnError === true ||
     (context === undefined ? failOnError === 'build' : failOnError === 'serve')
-  let root = process.cwd()
+  // Where a relative `config` path is looked up. The host sets it below
+  // unless the consumer named one, which is why an explicit option wins: a
+  // layout the host cannot describe is exactly what it is for.
+  let root = rootOption
+    ? path.resolve(process.cwd(), rootOption)
+    : process.cwd()
 
   // Every absolute destination the last completed build wrote, spelled with
   // forward slashes so it compares against a normalised watcher path. This is
@@ -455,16 +464,9 @@ export const unpluginFactory: UnpluginFactory<
     return configs.map((conf) => {
       if (typeof conf === 'string') {
         const fullPath = path.resolve(root, conf)
-        return {
-          config: fullPath,
-          dir: path.dirname(fullPath),
-          file: fullPath,
-        }
+        return { config: fullPath, file: fullPath }
       } else {
-        return {
-          config: conf,
-          dir: root,
-        }
+        return { config: conf }
       }
     })
   }
@@ -518,9 +520,15 @@ export const unpluginFactory: UnpluginFactory<
       if (configObj) {
         const addPattern = (pattern: unknown) => {
           if (typeof pattern === 'string') {
+            // Against the working directory, because that is where Style
+            // Dictionary resolves it: `combineJSON` globs each pattern with
+            // no `cwd` of its own. Resolving against the configuration file's
+            // directory instead is how the watch list came to name paths the
+            // build never reads — a configuration in a subdirectory built
+            // correctly and watched nothing at all.
             const absolutePattern = path.isAbsolute(pattern)
               ? pattern
-              : path.resolve(item.dir, pattern)
+              : path.resolve(process.cwd(), pattern)
             const normalized = absolutePattern.replace(/\\/g, '/')
             filesToWatch.add(normalized)
           }
@@ -872,7 +880,7 @@ export const unpluginFactory: UnpluginFactory<
 
     vite: {
       configResolved(config) {
-        root = config.root || process.cwd()
+        if (rootOption === undefined) root = config.root || process.cwd()
       },
 
       async configureServer(server: ViteDevServer) {
@@ -936,6 +944,16 @@ export const unpluginFactory: UnpluginFactory<
       // before it, so a token file the build itself produced is registered.
       for (const file of await expandPatterns(patterns)) {
         this.addWatchFile(file)
+      }
+    },
+
+    // unplugin calls this inside `apply(compiler)`, one line before it taps
+    // `make`, so the root is in place before the first compile. Without it a
+    // webpack build whose `context` is not the working directory looked for
+    // the configuration in the wrong place and reported ENOENT.
+    webpack(compiler) {
+      if (rootOption === undefined) {
+        root = compiler.options.context ?? process.cwd()
       }
     },
   }

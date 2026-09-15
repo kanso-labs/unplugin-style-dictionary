@@ -77,6 +77,23 @@ export interface UnpluginStyleDictionaryOptions {
   logLevel?: 'info' | 'silent' | 'verbose' | 'warn'
 
   /**
+   * The directory a relative `config` path is looked up in.
+   *
+   * Defaults to the host's own root — Vite's `root`, webpack's `context` —
+   * and to the working directory for rollup and rolldown, which offer none.
+   * A relative value here is resolved against the working directory, and it
+   * takes precedence over whatever the host reports.
+   *
+   * It does not move the paths **inside** a configuration. Style Dictionary
+   * resolves every relative `source`, `include` and `buildPath` against the
+   * working directory, and this plugin reads them the same way, so a
+   * configuration behaves identically here and under Style Dictionary's own
+   * CLI. A configuration kept in a subdirectory therefore names its tokens
+   * relative to where the build runs, not relative to itself.
+   */
+  root?: string
+
+  /**
    * Disable console logging.
    *
    * An alias for `logLevel: 'silent'`, which wins if both are set. A compile
