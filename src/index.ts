@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import zlib from 'node:zlib'
+import picomatch from 'picomatch'
 import StyleDictionary from 'style-dictionary'
 import { createUnplugin } from 'unplugin'
 
@@ -20,26 +21,36 @@ export type * from './types.js'
 // module-graph file, including this plugin's own generated output (since
 // consuming code imports it). Every regenerate is itself a "change", which
 // without filtering re-triggers a rebuild forever.
+//
+// The patterns are Style Dictionary's own `source` and `include` globs, so the
+// filter has to admit exactly what the build reads — which is why the matching
+// is a real globber's rather than hand-rolled. The version this replaces was
+// wrong in both directions at once: it stripped `/**` out of a pattern and
+// prefix-matched the remainder, so `tokens/**/*.json` matched nothing sitting
+// directly in `tokens/` and `tokens/**` matched a `tokens-backup/` sibling,
+// while its regex branch mapped every `*` to `.*` — crossing `/` — and tested
+// it unanchored, so generated output under a watched directory matched its own
+// source glob and rebuilt forever.
+//
+// picomatch rather than `path.matchesGlob`, which would need no dependency at
+// all: that function is documented experimental, and on Node 20 — the floor
+// `engines` declares — it prints `ExperimentalWarning: glob is an experimental
+// feature and might change at any time` into the consumer's build output. The
+// dependency is free in practice, since `unplugin` depends on the same
+// picomatch and is already installed wherever this plugin is. Its `dot: false`
+// default is deliberate: it is what glob, and so Style Dictionary, reads
+// sources with, so a dotfile is invisible to the filter and to the build alike.
 export function matchesWatchedFile(file: string, patterns: string[]): boolean {
   const normalizedFile = file.replace(/\\/g, '/')
 
   return patterns.some((pattern) => {
-    // If the pattern is an exact file path
-    if (pattern === normalizedFile) return true
+    const normalizedPattern = pattern.replace(/\\/g, '/')
 
-    // If the pattern is a glob, we check if the file matches it.
-    // Note: A simple string match or simple glob matcher can be used here.
-    // For simplicity and correctness, since token source paths are usually globs,
-    // we can match based on path directory containment or general matching.
-    // Let's implement a robust matchesGlob check or check if it's one of the token files.
-    // Chokidar triggers on actual files, so we want to check if the changed file matches
-    // any of the config files or token files/globs.
+    // A config file reaches this function as its own literal path, which is
+    // both the common case and the one shape that is not a glob at all.
     return (
-      normalizedFile.startsWith(pattern.replace(/\/\*\*/g, '')) ||
-      (pattern.includes('*') &&
-        new RegExp(
-          pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'),
-        ).test(normalizedFile))
+      normalizedPattern === normalizedFile ||
+      picomatch.isMatch(normalizedFile, normalizedPattern)
     )
   })
 }
@@ -94,11 +105,16 @@ function unwrapDefault(value: unknown): unknown {
 // It has to be a sibling of the destination, because `rename` is only atomic
 // within one filesystem and the system temp directory is often a different
 // mount. The final extension is dropped rather than kept, so the temporary
-// file cannot match a pattern written for the generated file's own extension —
-// `matchesWatchedFile` tests its globs unanchored, and a leftover
-// `vars.css.tmp` would match a `*.css` watch. The pid and counter make the
-// name unique, so two writes of the same destination — parallel platforms in
-// one build, or two builds overlapping — never share a temporary file.
+// file cannot match a pattern written for the generated file's own extension.
+// That was load-bearing while `matchesWatchedFile` tested its globs
+// unanchored, where a leftover `vars.css.tmp` matched a `*.css` watch; it is
+// belt-and-braces now that the matcher anchors and, like the globber Style
+// Dictionary reads sources with, does not match the leading dot this name
+// already starts with. Both stay, because a temporary file only outlives its
+// rename when a write failed, and hiding one costs a string. The pid and
+// counter make the name unique, so two writes of the same destination —
+// parallel platforms in one build, or two builds overlapping — never share a
+// temporary file.
 let temporaryFileCounter = 0
 
 function temporaryPathFor(destination: string): string {
