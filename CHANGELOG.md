@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.5.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.29...unplugin-style-dictionary-v0.5.0) (2026-09-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **options:** add failOnError so a broken token set cannot ship green ([#242](https://github.com/kanso-labs/unplugin-style-dictionary/issues/242))
+
+### Features
+
+* **options:** add failOnError so a broken token set cannot ship green ([#242](https://github.com/kanso-labs/unplugin-style-dictionary/issues/242)) ([7753234](https://github.com/kanso-labs/unplugin-style-dictionary/commit/77532341065891e2fdf8341cf2f67470548a900f))
+* **options:** add logLevel and stop forcing verbosity to silent ([#243](https://github.com/kanso-labs/unplugin-style-dictionary/issues/243)) ([de435b1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/de435b14c5a659669273057be70b1da81f5909ee))
+
+
+### Bug Fixes
+
+* **build:** initialise Style Dictionary once, inside the try ([#241](https://github.com/kanso-labs/unplugin-style-dictionary/issues/241)) ([45eab36](https://github.com/kanso-labs/unplugin-style-dictionary/commit/45eab36cc65b88ad5eeea5d6dc84b4ec84a39c78))
+* **config:** resolve the build and the watch list against one base ([#244](https://github.com/kanso-labs/unplugin-style-dictionary/issues/244)) ([5489ee7](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5489ee742522b696eb88d0226c399505860a7fa8))
+* **watch:** coalesce and serialise rebuilds behind one scheduler ([#238](https://github.com/kanso-labs/unplugin-style-dictionary/issues/238)) ([1f7e8ad](https://github.com/kanso-labs/unplugin-style-dictionary/commit/1f7e8ad84d3310d542d3f606a3b766bcdb73b8ba))
+
+
+### Dependencies
+
+* update dependency @types/node to v26.6.0 ([#240](https://github.com/kanso-labs/unplugin-style-dictionary/issues/240)) ([f87b95d](https://github.com/kanso-labs/unplugin-style-dictionary/commit/f87b95d9409f0cbd0a0bdb3b03c10bdc269b4d6c))
+
 ## [0.4.29](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.28...unplugin-style-dictionary-v0.4.29) (2026-09-15)
 
 
