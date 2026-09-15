@@ -830,22 +830,25 @@ describe('unplugin-style-dictionary (vite target)', () => {
   it.each([
     {
       contents: undefined,
+      failsWith: /ENOENT|no such file/i,
       id: 'missing',
       label: 'a config path that does not exist',
     },
     {
       contents: '{ "platforms": {',
+      failsWith: /JSON5|invalid/i,
       id: 'malformed',
       label: 'a config whose JSON is half-written',
     },
     {
       contents: 'module.exports = { source: [] }',
+      failsWith: /JSON5|invalid/i,
       id: 'cjs',
       label: 'a .cjs config, which is not a Style Dictionary format',
     },
   ])(
     'reports $label rather than crashing the host',
-    async ({ contents, id }) => {
+    async ({ contents, failsWith, id }) => {
       const brokenConfigFile = path.join(
         tempDir,
         `broken-${id}.${id === 'cjs' ? 'cjs' : 'json'}`,
@@ -862,8 +865,10 @@ describe('unplugin-style-dictionary (vite target)', () => {
       try {
         const plugin = vitePlugin({ config: brokenConfigFile })
 
-        // Settling at all is half the assertion: this is what used to hang.
-        await callBuildStart(plugin)
+        // Settling at all is half the assertion — this is what used to hang —
+        // and rejecting is the other half, since a configuration that cannot
+        // be loaded must not leave the host building.
+        await expect(callBuildStart(plugin)).rejects.toThrow(failsWith)
 
         // A rejection is reported a tick after it is orphaned, so give it one.
         await settle(50)
@@ -881,6 +886,119 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     },
     15000,
+  )
+
+  // A token set with a broken reference compiles to nothing usable, and the
+  // plugin used to log that and return. Every target then exited 0 and shipped
+  // whatever the previous run had written.
+  const writeBrokenReferenceFixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(directory, { recursive: true })
+
+    const brokenToken = path.join(directory, 'color.json')
+    const brokenConfig = path.join(tempDir, `${name}.config.json`)
+
+    fs.writeFileSync(
+      brokenToken,
+      JSON.stringify({ color: { primary: { value: '{color.nothing.here}' } } }),
+    )
+    fs.writeFileSync(
+      brokenConfig,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: `${name}.css`,
+                format: 'css/variables',
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [brokenToken.replace(/\\/g, '/')],
+      }),
+    )
+
+    return { config: brokenConfig, token: brokenToken }
+  }
+
+  it('fails the one-shot build when the token set is broken', async () => {
+    const { config } = writeBrokenReferenceFixture('broken-reference')
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(
+        callBuildStart(vitePlugin({ config, silent: true })),
+      ).rejects.toThrow(/reference/i)
+
+      // Reported as well as thrown, and `silent` does not hide it: a build
+      // that ships nothing usable must not also say nothing.
+      const messages = errorSpy.mock.calls.map((call) => String(call[0]))
+      expect(
+        messages.some((message) =>
+          message.includes('Compilation failed after'),
+        ),
+      ).toBe(true)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('lets a dev server survive the same broken token set', async () => {
+    // The default is `'build'`, so a watch-triggered rebuild reports and
+    // carries on. A half-typed token file mid-session should not take the
+    // server down with it.
+    const { config, token } = writeBrokenReferenceFixture('broken-on-rebuild')
+
+    // Start from a token set that compiles, so the failure is introduced by
+    // the edit rather than present from the beginning.
+    fs.writeFileSync(
+      token,
+      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+    )
+
+    const plugin = vitePlugin({ config, silent: true })
+    await callBuildStart(plugin)
+
+    fs.writeFileSync(
+      token,
+      JSON.stringify({ color: { primary: { value: '{color.nothing.here}' } } }),
+    )
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(callWatchChange(plugin, token)).resolves.toBeDefined()
+
+      const messages = errorSpy.mock.calls.map((call) => String(call[0]))
+      expect(
+        messages.some((message) =>
+          message.includes('Compilation failed after'),
+        ),
+      ).toBe(true)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it.each([
+    { failOnError: false as const, label: 'false' },
+    { failOnError: 'serve' as const, label: "'serve'" },
+  ])(
+    'does not fail the one-shot build under $label',
+    async ({ failOnError }) => {
+      const { config } = writeBrokenReferenceFixture(`tolerant-${failOnError}`)
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(
+          callBuildStart(vitePlugin({ config, failOnError, silent: true })),
+        ).resolves.toBeDefined()
+      } finally {
+        errorSpy.mockRestore()
+      }
+    },
   )
 
   it('initialises Style Dictionary once, so a preprocessor runs once', async () => {

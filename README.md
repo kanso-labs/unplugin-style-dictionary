@@ -185,6 +185,26 @@ export default defineConfig({
 })
 ```
 
+## Failing the Build
+
+A token compile that fails stops the build. `vite build`, `rollup` and `webpack`
+exit non-zero with Style Dictionary's own message, rather than finishing green
+and shipping whatever the previous run wrote.
+
+A watch-triggered rebuild only reports the failure, so a dev server survives a
+half-typed token file. `failOnError` moves that line:
+
+```typescript
+StyleDictionary({
+  config: 'sd.config.json',
+  // 'build' is the default. 'serve' fails rebuilds instead, true fails both,
+  // false restores the old report-and-continue behaviour.
+  failOnError: true,
+})
+```
+
+A failure is always reported, whatever `failOnError` and `silent` are set to.
+
 ## Options Reference
 
 ```typescript
@@ -217,7 +237,26 @@ export interface UnpluginStyleDictionaryOptions {
   watch?: string | string[]
 
   /**
+   * Whether a compile that fails should throw rather than only be reported.
+   *
+   * - 'build' (the default) throws on the one-shot compile in buildStart, and
+   *   only reports a failed watch rebuild.
+   * - 'serve' is the reverse: a failed rebuild is thrown to whatever awaited
+   *   it. Vite's dev server has no build to fail, so there it is reported.
+   * - true throws on both, false on neither.
+   *
+   * Reporting happens either way, and is not suppressed by 'silent'.
+   *
+   * @default 'build'
+   */
+  failOnError?: 'build' | 'serve' | boolean
+
+  /**
    * Disable console logging.
+   *
+   * Suppresses the progress lines and the size table. A compile that fails is
+   * always reported.
+   *
    * @default false
    */
   silent?: boolean

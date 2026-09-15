@@ -33,7 +33,32 @@ export interface UnpluginStyleDictionaryOptions {
     | string[]
 
   /**
+   * Whether a compile that fails should throw rather than only be reported.
+   *
+   * A failed compile used to be logged and swallowed, so `vite build`,
+   * `rollup` and `webpack` all exited 0 and shipped whatever the previous
+   * run had written — the stale values, presented as current.
+   *
+   * - `'build'` (the default) throws on the one-shot compile that runs in
+   *   `buildStart`, and only reports a failed watch rebuild, so a dev server
+   *   survives a half-typed token file.
+   * - `'serve'` is the reverse: a failed rebuild is thrown to whatever awaited
+   *   it, which is the host under `rollup --watch`. Vite's dev server has no
+   *   build to fail, so there it is reported and the server keeps serving.
+   * - `true` throws on both, `false` on neither.
+   *
+   * Reporting happens either way, and is not suppressed by `silent`.
+   *
+   * @default 'build'
+   */
+  failOnError?: 'build' | 'serve' | boolean
+
+  /**
    * Disable console logging.
+   *
+   * Suppresses the progress lines and the size table. A compile that fails is
+   * always reported.
+   *
    * @default false
    */
   silent?: boolean
