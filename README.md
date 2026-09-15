@@ -185,6 +185,34 @@ export default defineConfig({
 })
 ```
 
+## Where Paths Are Resolved From
+
+Two bases, and which one applies depends on whose path it is.
+
+**The `config` option is the plugin's**, so a relative path is looked up under
+the host's root: Vite's `root`, webpack's `context`, and the working directory
+for rollup and rolldown, which report none. `root` overrides that.
+
+**Everything inside a Style Dictionary configuration is Style Dictionary's**, so
+`source`, `include` and `buildPath` are resolved against the working directory.
+That is what Style Dictionary itself does — `combineJSON` globs each pattern
+with no directory of its own — so a configuration behaves the same here as it
+does under the Style Dictionary CLI.
+
+The consequence worth knowing: a configuration kept in a subdirectory names its
+tokens relative to where the build runs, not relative to itself.
+
+```jsonc
+// tokens/config/sd.config.json, with the build run from the project root
+{
+  // read from <project root>/tokens, not from tokens/config/tokens
+  "source": ["tokens/**/*.json"],
+}
+```
+
+Absolute paths sidestep the question entirely, and are worth reaching for when
+the build might be run from more than one directory.
+
 ## Logging
 
 Style Dictionary says useful things while it builds — a name collision, a
@@ -277,6 +305,19 @@ export interface UnpluginStyleDictionaryOptions {
    * @default 'build'
    */
   failOnError?: 'build' | 'serve' | boolean
+
+  /**
+   * The directory a relative config path is looked up in.
+   *
+   * Defaults to the host's own root — Vite's root, webpack's context — and to
+   * the working directory for rollup and rolldown, which offer none. A
+   * relative value here is resolved against the working directory, and it
+   * takes precedence over whatever the host reports.
+   *
+   * It does not move the paths inside a configuration. See "Where paths are
+   * resolved from" below.
+   */
+  root?: string
 
   /**
    * How much this plugin and Style Dictionary say while building.

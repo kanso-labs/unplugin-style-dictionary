@@ -608,6 +608,135 @@ describe('unplugin-style-dictionary (vite target)', () => {
     },
   )
 
+  // The existing fixtures keep the configuration and the tokens in one
+  // directory, which is the single arrangement where the two bases coincide —
+  // and why nothing here caught the plugin reading token patterns against the
+  // configuration file's own directory while Style Dictionary read them
+  // against the working directory.
+  const writeNestedConfig = (name: string, source: string[]) => {
+    const configDirectory = path.join(tempDir, name, 'config')
+    fs.mkdirSync(configDirectory, { recursive: true })
+
+    const nestedConfig = path.join(configDirectory, 'sd.config.json')
+    fs.writeFileSync(
+      nestedConfig,
+      JSON.stringify({
+        platforms: {
+          css: {
+            // Absolute: this fixture does not move the working directory, and
+            // a relative build path would resolve against the repository.
+            buildPath: path.join(tempDir, name).replace(/\\/g, '/') + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source,
+      }),
+    )
+
+    return nestedConfig
+  }
+
+  it('builds and watches the same files for a nested config', async () => {
+    // Relative token patterns only mean anything against a working directory,
+    // so this one moves there — which is what a consumer running their
+    // bundler from the project root is doing.
+    const projectRoot = path.join(tempDir, 'nested-project')
+    const tokensDirectory = path.join(projectRoot, 'tokens')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+    fs.writeFileSync(
+      path.join(tokensDirectory, 'color.json'),
+      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+    )
+
+    const configDirectory = path.join(projectRoot, 'tokens', 'config')
+    fs.mkdirSync(configDirectory, { recursive: true })
+    const nestedConfig = path.join(configDirectory, 'sd.config.json')
+    fs.writeFileSync(
+      nestedConfig,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: 'build/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: ['tokens/**/*.json'],
+      }),
+    )
+
+    const originalCwd = process.cwd()
+    process.chdir(projectRoot)
+    try {
+      // Every path below is derived from the working directory rather than
+      // from `projectRoot`. On macOS the system temp directory is reached
+      // through a symlink, so the two spell the same directory differently,
+      // and a watcher reports whichever the host is actually standing in.
+      const here = process.cwd()
+      const generated = path.join(here, 'build', 'vars.css')
+      const editedToken = path.join(here, 'tokens', 'color.json')
+
+      const plugin = vitePlugin({
+        config: 'tokens/config/sd.config.json',
+        silent: true,
+      })
+      const watched = await callBuildStart(plugin)
+
+      // The output lands where a reader of the configuration would expect.
+      expect(fs.existsSync(generated)).toBe(true)
+      expect(fs.readFileSync(generated, 'utf-8')).toContain(
+        '--color-primary: #0070f3;',
+      )
+
+      // And every registered path exists, where the watch list used to name a
+      // directory that never had.
+      for (const registered of watched) {
+        expect(fs.existsSync(registered)).toBe(true)
+      }
+
+      // The list is not merely plausible: an edit to a token the build read
+      // is recognised as a source and rebuilds. Against a real dev server
+      // this is exactly what stayed dead — the event arrived and the filter
+      // rejected it, because the pattern it was tested against pointed
+      // somewhere else.
+      fs.writeFileSync(
+        editedToken,
+        JSON.stringify({ color: { primary: { value: '#ff0000' } } }),
+      )
+      await callWatchChange(plugin, editedToken)
+
+      expect(fs.readFileSync(generated, 'utf-8')).toContain(
+        '--color-primary: #ff0000;',
+      )
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
+  it('looks a relative config path up under the root option', async () => {
+    const nestedConfig = writeNestedConfig('root-option', [
+      path.join(tempDir, 'tokens.json').replace(/\\/g, '/'),
+    ])
+    const relativeToRoot = path.relative(tempDir, nestedConfig)
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({ config: relativeToRoot, root: tempDir, silent: true }),
+      )
+
+      // Without the option the path is read against the working directory and
+      // the configuration is simply not there.
+      const messages = errorSpy.mock.calls.map((call) => String(call[0]))
+      expect(
+        messages.filter((message) => message.includes('Failed to parse')),
+      ).toEqual([])
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
   it('registers concrete paths for a glob source, never the pattern', async () => {
     // The shape README.md documents. Every watcher in play takes filenames:
     // Vite's chokidar and rollup's FileWatcher are built with
