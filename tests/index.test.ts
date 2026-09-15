@@ -1043,6 +1043,110 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(preprocessorRuns).toBe(1)
   })
 
+  // A filter that matches nothing is the sharpest case: Style Dictionary
+  // writes no file and says so, and that sentence used to be the one thing the
+  // plugin suppressed — so a build that produced nothing reported success.
+  const unmatchableFilterConfig = (destination: string) => ({
+    log: { verbosity: 'verbose' as const },
+    platforms: {
+      css: {
+        buildPath: tempDir.replace(/\\/g, '/') + '/',
+        files: [
+          {
+            destination,
+            filter: () => false,
+            format: 'css/variables',
+          },
+        ],
+        transformGroup: 'css',
+      },
+    },
+    source: [tokenFile.replace(/\\/g, '/')],
+  })
+
+  it("lets the configuration's own log.verbosity through", async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({ config: unmatchableFilterConfig('unmatched.css') }),
+      )
+
+      const said = logSpy.mock.calls.map((call) => String(call[0])).join('\n')
+      expect(said).toContain('No tokens for unmatched.css. File not created.')
+    } finally {
+      logSpy.mockRestore()
+    }
+
+    // And the file really was not written, so the message is the only way a
+    // consumer would know.
+    expect(fs.existsSync(path.join(tempDir, 'unmatched.css'))).toBe(false)
+  })
+
+  it.each([
+    { label: 'logLevel: silent', options: { logLevel: 'silent' as const } },
+    { label: 'silent: true', options: { silent: true } },
+  ])('says nothing under $label', async ({ options }) => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({
+          config: unmatchableFilterConfig('quiet.css'),
+          ...options,
+        }),
+      )
+
+      // Neither Style Dictionary's warning nor the plugin's own lines, even
+      // though the configuration asked for verbose.
+      expect(logSpy.mock.calls).toEqual([])
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it('reports a failure even at the quietest level', async () => {
+    const { config } = writeBrokenReferenceFixture('quiet-failure')
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({ config, failOnError: false, logLevel: 'silent' }),
+      )
+
+      expect(logSpy.mock.calls).toEqual([])
+      const messages = errorSpy.mock.calls.map((call) => String(call[0]))
+      expect(
+        messages.some((message) =>
+          message.includes('Compilation failed after'),
+        ),
+      ).toBe(true)
+    } finally {
+      logSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('under warn, says what Style Dictionary says and nothing of its own', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({
+          config: unmatchableFilterConfig('warn-level.css'),
+          logLevel: 'warn',
+        }),
+      )
+
+      const said = logSpy.mock.calls.map((call) => String(call[0])).join('\n')
+      expect(said).toContain('No tokens for warn-level.css. File not created.')
+
+      // The plugin's own progress lines are what this level drops.
+      expect(said).not.toContain('Compiling design tokens')
+      expect(said).not.toContain('Compiled successfully')
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
   it('keeps Style Dictionary quiet under silent', async () => {
     // Style Dictionary prints a collision warning itself, and the first of the
     // two initialisations ran at default verbosity — so its warnings reached

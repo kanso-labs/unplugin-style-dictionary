@@ -294,7 +294,31 @@ export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
 > = (options = {}) => {
-  const { failOnError = 'build', silent = false } = options
+  const { failOnError = 'build', logLevel, silent = false } = options
+
+  // `silent` predates `logLevel` and names its quietest level, so it is read
+  // as one. `logLevel` wins when a consumer sets both.
+  const level = logLevel ?? (silent ? 'silent' : undefined)
+
+  // Whether the plugin keeps its own progress lines and size table to itself.
+  // A failure is reported at every level, which is why this gate is not on the
+  // error branch below.
+  const quiet = level === 'silent' || level === 'warn'
+
+  // What Style Dictionary is told, if anything. `undefined` is the point of
+  // this: it leaves whatever the consumer's own `log.verbosity` asked for
+  // standing, where the plugin used to overwrite it on every build. Style
+  // Dictionary has three levels to this option's four, so `'warn'` and
+  // `'info'` both map to its default — they differ in what the plugin itself
+  // says, not in what Style Dictionary does.
+  const verbosity =
+    level === undefined
+      ? undefined
+      : level === 'verbose'
+        ? 'verbose'
+        : level === 'silent'
+          ? 'silent'
+          : 'default'
 
   // Whether a failure in this compile should be thrown rather than only
   // reported. The two compiles are told apart by `runBuilds`'s `context`,
@@ -369,7 +393,7 @@ export const unpluginFactory: UnpluginFactory<
     !generatedDestinations.has(file.replace(/\\/g, '/')) &&
     matchesWatchedFile(file, patterns)
 
-  // Helper to log if not silent
+  // Helper to log at the configured level
   const log = (
     message: string,
     type: 'error' | 'info' | 'success' = 'info',
@@ -384,7 +408,7 @@ export const unpluginFactory: UnpluginFactory<
       return
     }
 
-    if (silent) return
+    if (quiet) return
     if (type === 'success') {
       console.log(`\x1b[32m${prefix} ${message}\x1b[0m`)
     } else {
@@ -576,10 +600,14 @@ export const unpluginFactory: UnpluginFactory<
         // default verbosity, which is how Style Dictionary's own warnings
         // escaped this plugin's `silent`. `config` defaults to the one the
         // constructor was handed.
-        await sd.extend(undefined, {
-          mutateOriginal: true,
-          verbosity: 'silent',
-        })
+        //
+        // `verbosity` is `undefined` unless a consumer asked for a level, and
+        // Style Dictionary falls through an unset one to the configuration's
+        // own `log.verbosity`. Overwriting it here is what silenced the one
+        // line explaining why a build wrote nothing. `log.warnings` is not
+        // touched either way: a consumer's `warnings: 'error'` turning a
+        // missing output file into a thrown build is their decision.
+        await sd.extend(undefined, { mutateOriginal: true, verbosity })
 
         // Swap in the atomic volume only now that the instance has finished
         // reading its configs and token sources, so every write below lands
@@ -626,7 +654,7 @@ export const unpluginFactory: UnpluginFactory<
           'success',
         )
       } else {
-        if (!silent && generatedFiles.size > 0) {
+        if (!quiet && generatedFiles.size > 0) {
           const fileInfos: Array<{
             coloredPath: string
             gzipSizeStr: string
