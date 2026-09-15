@@ -62,6 +62,17 @@ export function matchesWatchedFile(file: string, patterns: string[]): boolean {
   })
 }
 
+// `catch` binds `unknown`, and a thrown non-Error — a string, a rejected
+// value out of a config module — carries no `.message`. The `as Error` casts
+// this replaces claimed otherwise and printed `undefined` for exactly those
+// cases, which is the least useful thing a failure log can say.
+// A rejected promise must carry an Error, and `catch` binds `unknown`. What
+// Style Dictionary throws is already one; anything else is wrapped rather than
+// handed on raw.
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(errorMessage(error))
+}
+
 // Best-effort cleanup of a temporary file whose write or rename failed. The
 // original failure is what the caller reports, so nothing here may throw.
 function discardTemporaryFile(temporary: string): void {
@@ -72,10 +83,6 @@ function discardTemporaryFile(temporary: string): void {
   }
 }
 
-// `catch` binds `unknown`, and a thrown non-Error — a string, a rejected
-// value out of a config module — carries no `.message`. The `as Error` casts
-// this replaces claimed otherwise and printed `undefined` for exactly those
-// cases, which is the least useful thing a failure log can say.
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -287,7 +294,14 @@ export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
 > = (options = {}) => {
-  const { silent = false } = options
+  const { failOnError = 'build', silent = false } = options
+
+  // Whether a failure in this compile should be thrown rather than only
+  // reported. The two compiles are told apart by `runBuilds`'s `context`,
+  // which only the rebuild paths pass.
+  const failsTheBuild = (context: string | undefined): boolean =>
+    failOnError === true ||
+    (context === undefined ? failOnError === 'build' : failOnError === 'serve')
   let root = process.cwd()
 
   // Every absolute destination the last completed build wrote, spelled with
@@ -360,11 +374,18 @@ export const unpluginFactory: UnpluginFactory<
     message: string,
     type: 'error' | 'info' | 'success' = 'info',
   ) => {
-    if (silent) return
     const prefix = '[unplugin-style-dictionary]'
+
+    // Ahead of the `silent` gate on purpose. `silent` is about the progress
+    // lines and the size table; a compile that failed is not noise, and
+    // hiding it left a broken token set shipping with nothing said at all.
     if (type === 'error') {
       console.error(`\x1b[31m${prefix} ${message}\x1b[0m`)
-    } else if (type === 'success') {
+      return
+    }
+
+    if (silent) return
+    if (type === 'success') {
       console.log(`\x1b[32m${prefix} ${message}\x1b[0m`)
     } else {
       console.log(`\x1b[36m${prefix} ${message}\x1b[0m`)
@@ -679,6 +700,11 @@ export const unpluginFactory: UnpluginFactory<
         `Compilation failed after ${duration}ms: ${errorMessage(err)}`,
         'error',
       )
+
+      // Reported, and then rethrown so the host stops. Swallowing it left
+      // every target exiting 0 with the previous run's tokens still on disk
+      // and in the bundle — a green build shipping stale values.
+      if (failsTheBuild(context)) throw err
     }
   }
 
@@ -701,7 +727,7 @@ export const unpluginFactory: UnpluginFactory<
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
   let pendingReason: string | undefined
   let inFlight: Promise<void> | undefined
-  let waiting: Array<() => void> = []
+  let waiting: Array<(failure?: { error: unknown }) => void> = []
 
   // Set by `configureServer`. A dev server's watcher is long-lived, so its
   // list has to follow a configuration that changes; every other target
@@ -722,18 +748,32 @@ export const unpluginFactory: UnpluginFactory<
       const resolvers = waiting
       waiting = []
 
+      let failure: undefined | { error: unknown }
+      let compiling = false
+
       try {
         const resolved = await resolveConfigs()
         if (resolved.length > 0) {
+          compiling = true
           await runBuilds(resolved, reason)
+          compiling = false
           hasCompiled = true
           await refreshServerWatchList?.(resolved)
         }
       } catch (err) {
-        log(`Rebuild failed: ${errorMessage(err)}`, 'error')
-      } finally {
-        for (const resolve of resolvers) resolve()
+        failure = { error: err }
+
+        // `runBuilds` reports its own failure before rethrowing, so only the
+        // other things that can throw here — a `config` function of the
+        // consumer's that raises, a watch list that cannot be rebuilt — need
+        // reporting.
+        if (!compiling) log(`Rebuild failed: ${errorMessage(err)}`, 'error')
       }
+
+      // Handed on to whatever awaited this rebuild, which is `watchChange`
+      // and so the host under a watching bundler. Vite's dev-server listener
+      // has no build to fail and catches it.
+      for (const settle of resolvers) settle(failure)
     }
   }
 
@@ -741,8 +781,11 @@ export const unpluginFactory: UnpluginFactory<
   const schedule = async (reason: string): Promise<void> => {
     pendingReason = reason
 
-    const covered = new Promise<void>((resolve) => {
-      waiting.push(resolve)
+    const covered = new Promise<void>((resolve, reject) => {
+      waiting.push((failure) => {
+        if (failure) reject(asError(failure.error))
+        else resolve()
+      })
     })
 
     if (debounceTimer) clearTimeout(debounceTimer)
@@ -830,7 +873,9 @@ export const unpluginFactory: UnpluginFactory<
         server.watcher.on('all', (_event, file) => {
           if (!isWatchedSource(file, targets.patterns)) return
 
-          void schedule(path.basename(file))
+          // A dev server has no build to fail, so a rebuild that throws is
+          // reported by the scheduler and the server keeps serving.
+          void schedule(path.basename(file)).catch(() => {})
         })
       },
     },
