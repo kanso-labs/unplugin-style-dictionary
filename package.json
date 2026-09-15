@@ -67,6 +67,7 @@
   },
   "dependencies": {
     "picomatch": "4.0.7",
+    "tinyglobby": "0.2.17",
     "unplugin": "3.3.0"
   },
   "devDependencies": {

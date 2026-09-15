@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 import zlib from 'node:zlib'
 import picomatch from 'picomatch'
 import StyleDictionary from 'style-dictionary'
+import { glob } from 'tinyglobby'
 import { createUnplugin } from 'unplugin'
 
 import type { UnpluginStyleDictionaryOptions } from './types.js'
@@ -251,6 +252,28 @@ const atomicVolume = Object.create(fs, {
 }) as typeof fs
 /* oxlint-enable typescript/no-unsafe-type-assertion */
 
+// A pattern is a glob when any of these appear in it. Deliberately the set
+// picomatch and tinyglobby act on, since those two are what match and expand
+// here — a path containing one of these characters literally is not
+// distinguishable from a pattern, and would not be matchable either.
+const GLOB_CHARACTERS = /[!*?[\]{}]/
+
+// The leading run of a pattern that contains no glob character —
+// `/p/tokens` for `/p/tokens/**/*.json`. Registering it alongside the files
+// that match today is what makes a token file created tomorrow visible:
+// watching only the current matches can never see a path that did not exist
+// when the watcher was built.
+function staticParentOf(pattern: string): string {
+  const segments = pattern.split('/')
+  const firstGlob = segments.findIndex((segment) =>
+    GLOB_CHARACTERS.test(segment),
+  )
+
+  return firstGlob === -1
+    ? path.posix.dirname(pattern)
+    : segments.slice(0, firstGlob).join('/')
+}
+
 export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
@@ -274,6 +297,47 @@ export const unpluginFactory: UnpluginFactory<
   // this is a watch rebuild rather than the first build of the process.
   let watchRebuild = false
   let hasCompiled = false
+
+  // What a watcher is handed, and what a changed path is tested against, are
+  // not the same list, and conflating them is why a glob source was watched by
+  // nothing at all. Every watcher in play takes filenames rather than
+  // patterns: Vite's chokidar and rollup's `FileWatcher` are both constructed
+  // with `disableGlobbing: true`, Vite's `addWatchFile` drops anything that
+  // fails `fs.existsSync`, and webpack never globs `fileDependencies`. So the
+  // patterns stay for matching and the paths are expanded for registering.
+  const expandPatterns = async (patterns: string[]): Promise<string[]> => {
+    const paths = new Set<string>()
+    const globs: string[] = []
+
+    for (const pattern of patterns) {
+      if (GLOB_CHARACTERS.test(pattern)) {
+        globs.push(pattern)
+
+        // Watching the directory as well as its current contents. chokidar
+        // reports a creation inside a watched directory, which is the only
+        // way a token file added later is ever noticed.
+        const parent = staticParentOf(pattern)
+        if (parent && fs.existsSync(parent)) paths.add(parent)
+      } else {
+        paths.add(pattern)
+      }
+    }
+
+    if (globs.length > 0) {
+      try {
+        // tinyglobby matches with picomatch, which is what
+        // `matchesWatchedFile` tests with, so what is registered here and what
+        // is accepted there cannot disagree.
+        for (const match of await glob(globs, { absolute: true })) {
+          paths.add(match.replace(/\\/g, '/'))
+        }
+      } catch (err) {
+        log(`Failed to expand watch patterns: ${errorMessage(err)}`, 'error')
+      }
+    }
+
+    return Array.from(paths)
+  }
 
   // Whether a changed file is a token or config source rather than something
   // this plugin just wrote. Both watch entry points ask through here, so
@@ -354,13 +418,13 @@ export const unpluginFactory: UnpluginFactory<
   }
 
   // Parse token files to watch
-  const getWatchFiles = async (
+  const getWatchTargets = async (
     resolvedConfigs: Array<{
       config: Config | string
       dir: string
       file?: string
     }>,
-  ): Promise<string[]> => {
+  ): Promise<{ paths: string[]; patterns: string[] }> => {
     const filesToWatch = new Set<string>()
 
     for (const item of resolvedConfigs) {
@@ -445,7 +509,9 @@ export const unpluginFactory: UnpluginFactory<
       }
     }
 
-    return Array.from(filesToWatch)
+    const patterns = Array.from(filesToWatch)
+
+    return { paths: await expandPatterns(patterns), patterns }
   }
 
   // Compile design tokens
@@ -607,8 +673,8 @@ export const unpluginFactory: UnpluginFactory<
       // below via the `vite.configureServer` escape hatch, since token
       // sources are plain JSON/JS files outside the module graph and
       // `watchChange` is not reliably invoked by Vite while serving.
-      const watchFiles = await getWatchFiles(resolved)
-      for (const file of watchFiles) {
+      const { paths } = await getWatchTargets(resolved)
+      for (const file of paths) {
         this.addWatchFile(file)
       }
 
@@ -644,19 +710,22 @@ export const unpluginFactory: UnpluginFactory<
         const resolved = await resolveConfigs()
         if (resolved.length === 0) return
 
-        const filesToWatch = await getWatchFiles(resolved)
+        // Reassigned after every rebuild below, so a configuration that gains
+        // a source is matched against its new patterns rather than the ones
+        // read at start-up.
+        let targets = await getWatchTargets(resolved)
 
         // Watch configuration files and token files
-        server.watcher.add(filesToWatch)
+        server.watcher.add(targets.paths)
 
         // chokidar types its listener as returning void and does not await
         // what it is handed, so handing it an async function left every
         // rejection floating — `runBuilds` catches its own, but
-        // `resolveConfigs` and `getWatchFiles` do not. Launching the work
+        // `resolveConfigs` and `getWatchTargets` do not. Launching the work
         // explicitly and catching here is what keeps a bad config on disk
         // from surfacing as an unhandled rejection that kills the dev server.
         server.watcher.on('all', (_event, file) => {
-          if (!isWatchedSource(file, filesToWatch)) return
+          if (!isWatchedSource(file, targets.patterns)) return
 
           void (async () => {
             try {
@@ -667,8 +736,8 @@ export const unpluginFactory: UnpluginFactory<
 
               // Dynamically update the watch list in case the configurations
               // changed
-              const newWatches = await getWatchFiles(currentResolved)
-              server.watcher.add(newWatches)
+              targets = await getWatchTargets(currentResolved)
+              server.watcher.add(targets.paths)
             } catch (err) {
               log(`Rebuild failed: ${errorMessage(err)}`, 'error')
             }
@@ -690,19 +759,21 @@ export const unpluginFactory: UnpluginFactory<
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
 
-      const watchFiles = await getWatchFiles(resolved)
+      const { patterns } = await getWatchTargets(resolved)
       // Without this check, watchChange fires for *any* changed file in the
       // host bundler's module graph — including our own generated output,
       // since consuming code imports it. Every regenerate is itself a
       // "change", so skipping what is not a source here is what keeps this
       // from rebuilding forever — both the files that match no pattern and
       // the ones that match only because this plugin wrote them.
-      if (!isWatchedSource(id, watchFiles)) return
+      if (!isWatchedSource(id, patterns)) return
 
       await runBuilds(resolved, path.basename(id))
       hasCompiled = true
 
-      for (const file of watchFiles) {
+      // Expanded again after the build rather than reusing the list from
+      // before it, so a token file the build itself produced is registered.
+      for (const file of await expandPatterns(patterns)) {
         this.addWatchFile(file)
       }
     },
