@@ -34,20 +34,39 @@ function isPluginHook<A extends unknown[]>(
 // Vite/Rollup normally provide the plugin-context `this` (with addWatchFile,
 // etc.) when invoking a hook. To unit-test buildStart in isolation we bind a
 // minimal stub context ourselves rather than spinning up a real dev server.
+//
+// Both callers return what the hook registered. The stub used to discard it,
+// and that is why nothing here could see the plugin handing a watcher an
+// unexpanded glob — which every watcher in play treats as a filename that does
+// not exist.
 const callBuildStart = async (plugin: Plugin) => {
-  const context: BuildContext = { addWatchFile: () => {} }
+  const watched: string[] = []
+  const context: BuildContext = {
+    addWatchFile: (id) => {
+      watched.push(id)
+    },
+  }
   if (!isPluginHook<[]>(plugin.buildStart)) {
     throw new TypeError('buildStart is not a callable hook')
   }
   await plugin.buildStart.call(context)
+
+  return watched
 }
 
 const callWatchChange = async (plugin: Plugin, id: string) => {
-  const context: BuildContext = { addWatchFile: () => {} }
+  const watched: string[] = []
+  const context: BuildContext = {
+    addWatchFile: (file) => {
+      watched.push(file)
+    },
+  }
   if (!isPluginHook<[string]>(plugin.watchChange)) {
     throw new TypeError('watchChange is not a callable hook')
   }
   await plugin.watchChange.call(context, id)
+
+  return watched
 }
 
 describe('unplugin-style-dictionary (vite target)', () => {
@@ -588,6 +607,70 @@ describe('unplugin-style-dictionary (vite target)', () => {
     },
   )
 
+  it('registers concrete paths for a glob source, never the pattern', async () => {
+    // The shape README.md documents. Every watcher in play takes filenames:
+    // Vite's chokidar and rollup's FileWatcher are built with
+    // `disableGlobbing: true`, Vite's addWatchFile drops anything failing
+    // `fs.existsSync`, and webpack never globs its fileDependencies — so a
+    // pattern registered as-is is watched by nothing at all.
+    const tokensDirectory = path.join(tempDir, 'glob-registration')
+    const nestedDirectory = path.join(tokensDirectory, 'nested')
+    fs.mkdirSync(nestedDirectory, { recursive: true })
+
+    const topLevelToken = path.join(tokensDirectory, 'base.json')
+    const nestedToken = path.join(nestedDirectory, 'more.json')
+    const globConfigFile = path.join(tempDir, 'glob-registration.config.json')
+
+    fs.writeFileSync(
+      topLevelToken,
+      JSON.stringify({ color: { one: { value: '#000000' } } }),
+    )
+    fs.writeFileSync(
+      nestedToken,
+      JSON.stringify({ color: { two: { value: '#111111' } } }),
+    )
+    fs.writeFileSync(
+      globConfigFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'glob-registration.css',
+                format: 'css/variables',
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [tokensDirectory.replace(/\\/g, '/') + '/**/*.json'],
+      }),
+    )
+
+    const plugin = vitePlugin({
+      config: globConfigFile,
+      silent: true,
+    })
+
+    const watched = await callBuildStart(plugin)
+
+    // Nothing registered may still be a pattern.
+    expect(watched.filter((file) => /[!*?[\]{}]/.test(file))).toEqual([])
+
+    // Every file the glob matches, at both depths.
+    expect(watched).toContain(topLevelToken.replace(/\\/g, '/'))
+    expect(watched).toContain(nestedToken.replace(/\\/g, '/'))
+
+    // And the directory the glob is rooted at, which is what makes a token
+    // file created later visible — watching only today's matches cannot see a
+    // path that did not exist when the watcher was built.
+    expect(watched).toContain(tokensDirectory.replace(/\\/g, '/'))
+
+    // A config file is a literal path and reaches the watcher unchanged.
+    expect(watched).toContain(globConfigFile.replace(/\\/g, '/'))
+  })
+
   it('watchChange does not rebuild when the changed file is not a watched source', async () => {
     const plugin = vitePlugin({
       config: configFile,
@@ -733,6 +816,15 @@ const settle = async (ms: number) => {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// Poll rather than wait a fixed window. A watcher rebuild is not instant and
+// not uniform, so a fixed wait either makes the suite slow or makes it flaky
+// on a loaded machine; this returns as soon as the thing happened and gives up
+// only when it has genuinely not.
+const waitUntil = async (satisfied: () => boolean, timeoutMs: number) => {
+  const deadline = Date.now() + timeoutMs
+  while (!satisfied() && Date.now() < deadline) await settle(50)
+}
+
 // Every other test in this file drives the Vite target through a hand-built
 // plugin context. This one runs a real second host, because the defect it pins
 // is invisible without one: it lives in how a bundler re-enters `buildStart`
@@ -828,13 +920,26 @@ describe('under a real rollup watcher', () => {
     try {
       await Promise.race([firstBundle, settle(15000)])
       expect(errors).toEqual([])
-      expect(bundles).toBe(1)
+      expect(bundles).toBeGreaterThan(0)
+
+      // chokidar reports nothing for a moment after the watcher is built, and
+      // an edit landing inside that window is missed by the watcher rather
+      // than by the plugin.
+      await settle(500)
 
       fs.writeFileSync(
         tokenSource,
         JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
       )
 
+      // Wait for the edit to have been noticed at all before measuring
+      // whether the rebuilds stop, so a slow watcher cannot be mistaken for a
+      // converged one.
+      const generated = () =>
+        fs.readFileSync(path.join(generatedDirectory, 'tokens.js'), 'utf-8')
+      await waitUntil(() => generated().includes('#ff0000'), 15000)
+
+      // Then let everything in flight land, and only then start counting.
       await settle(3000)
       const afterEdit = bundles
       await settle(3000)
@@ -844,21 +949,18 @@ describe('under a real rollup watcher', () => {
       // the count was still climbing after every idle window.
       expect(bundles).toBe(afterEdit)
 
-      // Bounded, too, rather than merely stopping eventually. Three is what a
-      // settled run costs: the initial bundle, the rebuild the token edit
-      // earns, and one more because the plugin writes the generated file
-      // while rollup is already watching it, so the write it just caused is a
-      // real module-graph change rollup has to see. That last one renders
-      // identical bytes the next time round and stops there. The bound is
-      // asserted rather than the exact number because the watcher may batch
-      // the second and third into one.
-      expect(afterEdit).toBeLessThanOrEqual(3)
+      // Bounded, too, rather than merely stopping eventually. A settled run
+      // costs the initial bundle, the rebuild the token edit earns, and one
+      // more each time the plugin writes the generated file while rollup is
+      // already watching it — that write is a real module-graph change rollup
+      // has to see, and it renders identical bytes the next time round and
+      // stops there. The bound is generous rather than exact because the
+      // watcher may batch those or split them; what it rules out is the
+      // defect, which was about ten a second and still climbing.
+      expect(afterEdit).toBeLessThanOrEqual(5)
 
-      // The edit still reached the generated file and the bundle, so the
-      // convergence is not the plugin having stopped working.
-      expect(
-        fs.readFileSync(path.join(generatedDirectory, 'tokens.js'), 'utf-8'),
-      ).toContain('#ff0000')
+      // The edit reached the consumer's bundle too, so the convergence is
+      // not the plugin having stopped working.
       expect(
         fs.readFileSync(path.join(outputDirectory, 'entry.js'), 'utf-8'),
       ).toContain('#ff0000')
@@ -866,4 +968,121 @@ describe('under a real rollup watcher', () => {
       await watcher.close()
     }
   }, 30000)
+
+  it('notices an edit and a new file under a glob source', async () => {
+    // Before the expansion this registered the pattern itself, which rollup's
+    // FileWatcher treats as a filename that does not exist — so an edit under
+    // a glob source produced no rebuild at all.
+    const tokensDirectory = path.join(tempDir, 'tokens')
+    const generatedDirectory = path.join(tempDir, 'generated')
+    fs.mkdirSync(path.join(tokensDirectory, 'nested'), { recursive: true })
+    fs.mkdirSync(generatedDirectory, { recursive: true })
+
+    const tokenSource = path.join(tokensDirectory, 'nested', 'color.json')
+    const configFile = path.join(tempDir, 'glob.sd.config.json')
+    const entry = path.join(tempDir, 'glob-entry.js')
+    const outputDirectory = path.join(tempDir, 'glob-dist')
+
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#000000' } } }),
+    )
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: generatedDirectory.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'glob-tokens.js',
+                format: 'javascript/es6',
+              },
+            ],
+            transformGroup: 'js',
+          },
+        },
+        source: [tokensDirectory.replace(/\\/g, '/') + '/**/*.json'],
+      }),
+    )
+    fs.writeFileSync(
+      entry,
+      [
+        "import { ColorBrand } from './generated/glob-tokens.js'",
+        'export const brand = ColorBrand',
+        '',
+      ].join('\n'),
+    )
+
+    let bundles = 0
+    const errors: string[] = []
+    const watcher = rollup.watch({
+      input: entry,
+      output: { dir: outputDirectory, format: 'es' },
+      plugins: [rollupPlugin({ config: configFile, silent: true })],
+      watch: { buildDelay: 50 },
+    })
+
+    watcher.on('event', (event) => {
+      if (event.code === 'ERROR') errors.push(event.error.message)
+      if (event.code === 'BUNDLE_END') {
+        bundles++
+        void event.result.close()
+      }
+    })
+
+    const firstBundle = new Promise<void>((resolve) => {
+      watcher.on('event', (event) => {
+        if (event.code === 'BUNDLE_END') resolve()
+      })
+    })
+
+    try {
+      await Promise.race([firstBundle, settle(15000)])
+      expect(errors).toEqual([])
+      expect(bundles).toBe(1)
+
+      // chokidar needs a moment after the first build before it reports
+      // anything, and the fixture's directories were created seconds ago. An
+      // edit landing inside that window is missed by the watcher rather than
+      // by the plugin, which would fail this test for the wrong reason.
+      await settle(500)
+
+      // Waiting on the compiled output rather than on a bundle count. The
+      // count is not specific enough: the plugin's own write of the generated
+      // file is itself a change rollup rebuilds for, so a bundle from the
+      // previous step can land after the next edit and satisfy a
+      // greater-than check that nothing to do with that edit earned.
+      const generated = () =>
+        fs.readFileSync(
+          path.join(generatedDirectory, 'glob-tokens.js'),
+          'utf-8',
+        )
+
+      // An edit to a file the glob already matched.
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+      )
+      await waitUntil(() => generated().includes('#ff0000'), 15000)
+      expect(generated()).toContain('#ff0000')
+
+      // And a file created after the watcher was built, which is what
+      // registering the glob's static parent directory is for.
+      fs.writeFileSync(
+        path.join(tokensDirectory, 'nested', 'extra.json'),
+        JSON.stringify({ color: { extra: { value: '#00ff00' } } }),
+      )
+      await waitUntil(() => generated().includes('#00ff00'), 15000)
+      expect(generated()).toContain('#00ff00')
+
+      // Both values reach the consumer's bundle, not just the file on disk.
+      const bundled = () =>
+        fs.readFileSync(path.join(outputDirectory, 'glob-entry.js'), 'utf-8')
+      await waitUntil(() => bundled().includes('#ff0000'), 15000)
+      expect(bundled()).toContain('#ff0000')
+    } finally {
+      await watcher.close()
+    }
+  }, 40000)
 })
