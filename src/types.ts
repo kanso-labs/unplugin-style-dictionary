@@ -54,10 +54,33 @@ export interface UnpluginStyleDictionaryOptions {
   failOnError?: 'build' | 'serve' | boolean
 
   /**
+   * How much this plugin and Style Dictionary say while building.
+   *
+   * Style Dictionary's own warnings — a name collision, a reference that
+   * cannot be resolved, `No tokens for vars.css. File not created.` — used to
+   * be suppressed unconditionally, because the plugin overwrote
+   * `log.verbosity` on the way past. Leave this unset and whatever the
+   * configuration asked for stands.
+   *
+   * - `'silent'` — nothing from either.
+   * - `'warn'` — Style Dictionary's warnings, and nothing from the plugin.
+   * - `'info'` — the above, plus the plugin's progress lines and size table.
+   * - `'verbose'` — the above, with Style Dictionary naming what it warned
+   *   about rather than pointing at its own `--verbose` flag.
+   *
+   * A compile that fails is reported at every level, so there is no
+   * `'error'`: `'silent'` is the quietest and still reports a failure.
+   *
+   * @default undefined, which prints the plugin's own lines and leaves the
+   * configuration's `log.verbosity` alone
+   */
+  logLevel?: 'info' | 'silent' | 'verbose' | 'warn'
+
+  /**
    * Disable console logging.
    *
-   * Suppresses the progress lines and the size table. A compile that fails is
-   * always reported.
+   * An alias for `logLevel: 'silent'`, which wins if both are set. A compile
+   * that fails is always reported.
    *
    * @default false
    */

@@ -185,6 +185,33 @@ export default defineConfig({
 })
 ```
 
+## Logging
+
+Style Dictionary says useful things while it builds — a name collision, a
+reference it could not resolve, `No tokens for vars.css. File not created.` —
+and the plugin used to suppress all of it by overwriting `log.verbosity` on the
+way past. It no longer touches that setting unless asked, so whatever your
+configuration sets now reaches you.
+
+`logLevel` overrides it from the plugin side:
+
+```typescript
+StyleDictionary({
+  config: 'sd.config.json',
+  // 'silent' | 'warn' | 'info' | 'verbose'. Unset leaves your config's own
+  // log.verbosity alone, which is the default.
+  logLevel: 'warn',
+})
+```
+
+`'warn'` is the level worth knowing about: Style Dictionary's warnings without
+the plugin's own progress lines and size table. `silent: true` is an alias for
+`'silent'`.
+
+A compile that fails is reported at every level, including `'silent'`, which is
+why there is no `'error'`. `log.warnings` is never touched: if your
+configuration turns a warning into a thrown build, that stays your decision.
+
 ## Failing the Build
 
 A token compile that fails stops the build. `vite build`, `rollup` and `webpack`
@@ -252,10 +279,25 @@ export interface UnpluginStyleDictionaryOptions {
   failOnError?: 'build' | 'serve' | boolean
 
   /**
+   * How much this plugin and Style Dictionary say while building.
+   *
+   * - 'silent' — nothing from either.
+   * - 'warn' — Style Dictionary's warnings, and nothing from the plugin.
+   * - 'info' — the above, plus the plugin's progress lines and size table.
+   * - 'verbose' — the above, with Style Dictionary naming what it warned about.
+   *
+   * Leave it unset and the configuration's own log.verbosity stands.
+   * A compile that fails is reported at every level.
+   *
+   * @default undefined
+   */
+  logLevel?: 'info' | 'silent' | 'verbose' | 'warn'
+
+  /**
    * Disable console logging.
    *
-   * Suppresses the progress lines and the size table. A compile that fails is
-   * always reported.
+   * An alias for logLevel: 'silent', which wins if both are set. A compile
+   * that fails is always reported.
    *
    * @default false
    */
