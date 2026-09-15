@@ -258,6 +258,15 @@ const atomicVolume = Object.create(fs, {
 // distinguishable from a pattern, and would not be matchable either.
 const GLOB_CHARACTERS = /[!*?[\]{}]/
 
+// A configuration as `resolveConfigs` hands it on: either the object the
+// consumer passed or the path it was read from, plus the directory relative
+// paths inside it resolve against.
+interface ResolvedConfig {
+  config: Config | string
+  dir: string
+  file?: string
+}
+
 // The leading run of a pattern that contains no glob character —
 // `/p/tokens` for `/p/tokens/**/*.json`. Registering it alongside the files
 // that match today is what makes a token file created tomorrow visible:
@@ -363,9 +372,7 @@ export const unpluginFactory: UnpluginFactory<
   }
 
   // Resolve config file paths / objects
-  const resolveConfigs = async (): Promise<
-    Array<{ config: Config | string; dir: string; file?: string }>
-  > => {
+  const resolveConfigs = async (): Promise<ResolvedConfig[]> => {
     let rawConfig = options.config
 
     // If config is not defined, look for default configuration files
@@ -419,11 +426,7 @@ export const unpluginFactory: UnpluginFactory<
 
   // Parse token files to watch
   const getWatchTargets = async (
-    resolvedConfigs: Array<{
-      config: Config | string
-      dir: string
-      file?: string
-    }>,
+    resolvedConfigs: ResolvedConfig[],
   ): Promise<{ paths: string[]; patterns: string[] }> => {
     const filesToWatch = new Set<string>()
 
@@ -516,7 +519,7 @@ export const unpluginFactory: UnpluginFactory<
 
   // Compile design tokens
   const runBuilds = async (
-    resolvedConfigs: Array<{ config: Config | string; dir: string }>,
+    resolvedConfigs: ResolvedConfig[],
     context?: string,
   ) => {
     const startTime = Date.now()
@@ -662,6 +665,82 @@ export const unpluginFactory: UnpluginFactory<
     }
   }
 
+  // One rebuild per burst of watcher events, and never two at once.
+  //
+  // Two things went wrong without this. A single token edit under Vite's dev
+  // server reached both the `configureServer` listener and `watchChange` —
+  // Vite 6, 7 and 8 all invoke plugin `watchChange` while serving — and each
+  // started its own build, so one write produced two. And nothing serialised
+  // them: a four-file change started one build per file, all overlapping.
+  // `runBuilds` builds its configurations one after another precisely so two
+  // instances never write the same destination at once, and concurrent calls
+  // to it reintroduced that one level up.
+  //
+  // The trailing debounce collapses the burst; the in-flight chain means a
+  // trigger arriving mid-build queues exactly one follow-up rather than
+  // starting a second build beside it.
+  const REBUILD_DEBOUNCE_MS = 50
+
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined
+  let pendingReason: string | undefined
+  let inFlight: Promise<void> | undefined
+  let waiting: Array<() => void> = []
+
+  // Set by `configureServer`. A dev server's watcher is long-lived, so its
+  // list has to follow a configuration that changes; every other target
+  // re-registers on each build through `addWatchFile` instead.
+  let refreshServerWatchList:
+    | ((resolved: ResolvedConfig[]) => Promise<void>)
+    | undefined
+
+  const drain = async (): Promise<void> => {
+    // A loop rather than a single pass: anything scheduled while the build
+    // below is running is picked up here instead of starting a second one.
+    while (pendingReason !== undefined) {
+      const reason = pendingReason
+      pendingReason = undefined
+
+      // Captured before the await, so a trigger arriving mid-build waits for
+      // the next pass rather than being told this one covered it.
+      const resolvers = waiting
+      waiting = []
+
+      try {
+        const resolved = await resolveConfigs()
+        if (resolved.length > 0) {
+          await runBuilds(resolved, reason)
+          hasCompiled = true
+          await refreshServerWatchList?.(resolved)
+        }
+      } catch (err) {
+        log(`Rebuild failed: ${errorMessage(err)}`, 'error')
+      } finally {
+        for (const resolve of resolvers) resolve()
+      }
+    }
+  }
+
+  // Resolves once a rebuild covering this trigger has finished.
+  const schedule = async (reason: string): Promise<void> => {
+    pendingReason = reason
+
+    const covered = new Promise<void>((resolve) => {
+      waiting.push(resolve)
+    })
+
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+      debounceTimer = undefined
+      inFlight = (inFlight ?? Promise.resolve()).then(drain)
+    }, REBUILD_DEBOUNCE_MS)
+
+    // A pending rebuild must not be what keeps a process alive; whatever is
+    // watching already is.
+    debounceTimer.unref()
+
+    return covered
+  }
+
   return {
     async buildStart() {
       const resolved = await resolveConfigs()
@@ -669,10 +748,12 @@ export const unpluginFactory: UnpluginFactory<
 
       // Register token/config files with the host bundler's watch mode.
       // Works out of the box wherever the host runs a persistent watcher
-      // (e.g. `rollup --watch`); Vite's dev server is additionally handled
-      // below via the `vite.configureServer` escape hatch, since token
-      // sources are plain JSON/JS files outside the module graph and
-      // `watchChange` is not reliably invoked by Vite while serving.
+      // (e.g. `rollup --watch`). Vite's dev server is additionally handled
+      // below via the `vite.configureServer` escape hatch — not because
+      // `watchChange` is missing there, which it is not on any Vite this
+      // package supports, but because the declared peer range is wider than
+      // what has been measured and the scheduler above makes a duplicate
+      // trigger free.
       const { paths } = await getWatchTargets(resolved)
       for (const file of paths) {
         this.addWatchFile(file)
@@ -718,30 +799,21 @@ export const unpluginFactory: UnpluginFactory<
         // Watch configuration files and token files
         server.watcher.add(targets.paths)
 
+        // Runs once per rebuild rather than once per event, which is why it
+        // is handed to the scheduler rather than done in the listener.
+        refreshServerWatchList = async (rebuilt) => {
+          targets = await getWatchTargets(rebuilt)
+          server.watcher.add(targets.paths)
+        }
+
         // chokidar types its listener as returning void and does not await
-        // what it is handed, so handing it an async function left every
-        // rejection floating — `runBuilds` catches its own, but
-        // `resolveConfigs` and `getWatchTargets` do not. Launching the work
-        // explicitly and catching here is what keeps a bad config on disk
-        // from surfacing as an unhandled rejection that kills the dev server.
+        // what it is handed, so an async listener left every rejection
+        // floating. `schedule` owns the whole rebuild including its errors,
+        // so there is nothing here left to reject.
         server.watcher.on('all', (_event, file) => {
           if (!isWatchedSource(file, targets.patterns)) return
 
-          void (async () => {
-            try {
-              // Re-resolve configs to handle added/removed configs or changes
-              // to config itself
-              const currentResolved = await resolveConfigs()
-              await runBuilds(currentResolved, path.basename(file))
-
-              // Dynamically update the watch list in case the configurations
-              // changed
-              targets = await getWatchTargets(currentResolved)
-              server.watcher.add(targets.paths)
-            } catch (err) {
-              log(`Rebuild failed: ${errorMessage(err)}`, 'error')
-            }
-          })()
+          void schedule(path.basename(file))
         })
       },
     },
@@ -768,8 +840,7 @@ export const unpluginFactory: UnpluginFactory<
       // the ones that match only because this plugin wrote them.
       if (!isWatchedSource(id, patterns)) return
 
-      await runBuilds(resolved, path.basename(id))
-      hasCompiled = true
+      await schedule(path.basename(id))
 
       // Expanded again after the build rather than reusing the list from
       // before it, so a token file the build itself produced is registered.
