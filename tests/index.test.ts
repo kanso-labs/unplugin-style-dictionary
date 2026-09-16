@@ -1481,6 +1481,26 @@ const countRebuildLines = (spy: MockInstance<typeof console.log>) =>
 
 const posix = (value: string) => value.replace(/\\/g, '/')
 
+// Colour is presentation, and asserting on it would make a palette change look
+// like a regression in the arithmetic.
+// oxlint-disable-next-line no-control-regex
+const ANSI = /\[\d+m/g
+const stripAnsi = (value: string) => value.replace(ANSI, '')
+
+// `<path><padding><size> kB │ gzip: <size> kB`, with the byte counts left
+// loose: sizes move when Style Dictionary changes a header comment, and a test
+// that breaks on that pins the wrong thing.
+const SIZE_LINE = /^\S+ {2,}\d+\.\d{2} kB │ gzip: \d+\.\d{2} kB$/
+
+// A sibling `.tmp` left on disk is the failure the atomic-writer cases look
+// for: the temporary file only outlives its rename when something threw
+// between the two, and one left behind is a file the next glob can pick up.
+const temporaries = (directory: string) =>
+  fs
+    .readdirSync(path.join(directory, 'out'), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.tmp'))
+    .map((entry) => entry.name)
+
 const settle = async (ms: number) => {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -2406,4 +2426,234 @@ describe('when a configuration cannot be used', () => {
       ),
     ).toBe(true)
   }, 30000)
+})
+
+// Every plugin in this suite used to pass `silent: true`, so the size and gzip
+// reporter — sixty lines of arithmetic and column alignment, and the only
+// thing a consumer sees on an ordinary build — never executed once.
+describe('the size reporter', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-reporter-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // Two platforms writing to paths of very different lengths, which is what
+  // makes the alignment column observable at all.
+  const writeFixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(path.join(directory, 'tokens'), { recursive: true })
+
+    fs.writeFileSync(
+      path.join(directory, 'tokens', 'color.json'),
+      JSON.stringify({ color: { brand: { value: '#0070f3' } } }),
+    )
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+          js: {
+            buildPath:
+              posix(path.join(directory, 'out', 'deeply', 'nested')) + '/',
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+
+    return { configFile, directory }
+  }
+
+  it('prints one aligned line per generated file, with sizes and gzip', async () => {
+    const { configFile, directory } = writeFixture('reporting')
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      // `root` is what the displayed paths are relative to, so passing it is
+      // what makes the expected strings independent of the working directory.
+      await callBuildStart(
+        vitePlugin({ config: configFile, root: directory, silent: false }),
+      )
+
+      const lines = logSpy.mock.calls.map((call) => stripAnsi(String(call[0])))
+      const reported = lines.filter((line) => line.includes('gzip:'))
+
+      expect(reported).toHaveLength(2)
+
+      // The shape, rather than the exact byte counts: sizes move when Style
+      // Dictionary changes a header comment, and a test that breaks on that
+      // is pinning the wrong thing.
+      for (const line of reported) {
+        expect(line).toMatch(SIZE_LINE)
+      }
+
+      expect(reported.some((line) => line.startsWith('out/vars.css'))).toBe(
+        true,
+      )
+      expect(
+        reported.some((line) => line.startsWith('out/deeply/nested/tokens.js')),
+      ).toBe(true)
+
+      // The alignment: both size columns begin at the same offset, which is
+      // the whole purpose of the padding arithmetic.
+      const columns = reported.map((line) => line.indexOf('kB'))
+      expect(new Set(columns).size).toBe(1)
+    } finally {
+      logSpy.mockRestore()
+    }
+  }, 30000)
+
+  it('prints nothing at all when silent', async () => {
+    const { configFile, directory } = writeFixture('silent')
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({ config: configFile, root: directory, silent: true }),
+      )
+
+      expect(logSpy.mock.calls).toEqual([])
+    } finally {
+      logSpy.mockRestore()
+    }
+  }, 30000)
+})
+
+// `writeFileSyncAtomic` never runs under Style Dictionary's own writes — it
+// has no synchronous write path — but a custom action receives the same volume
+// and can. The concurrent-reader test pins the async half; this pins that the
+// sync half is installed and behaves the same way.
+describe('the atomic writer', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-atomic-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  const writeFixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(path.join(directory, 'tokens'), { recursive: true })
+    fs.writeFileSync(
+      path.join(directory, 'tokens', 'color.json'),
+      JSON.stringify({ color: { brand: { value: '#0070f3' } } }),
+    )
+
+    return directory
+  }
+
+  it('reaches Style Dictionary custom actions as the sync writer', async () => {
+    const directory = writeFixture('sync-writer')
+
+    // Registered by name rather than inlined: an inline action object throws
+    // `Cannot read properties of undefined (reading 'undo')` on
+    // style-dictionary 5.5.3.
+    let observedName: string | undefined
+    let wroteThrough: string | undefined
+    StyleDictionary.registerAction({
+      // Four parameters, and the volume is the last of them —
+      // `performActions` calls `action.do(dictionary, platform, options, vol)`.
+      do: (_dictionary, platform, _options, vol) => {
+        observedName = vol.writeFileSync.name
+
+        wroteThrough = path.join(String(platform.buildPath), 'from-action.txt')
+        vol.writeFileSync(wroteThrough, 'written by a custom action\n')
+      },
+      name: 'test/write-through-volume',
+      undo: () => {},
+    })
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            actions: ['test/write-through-volume'],
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+
+    await callBuildStart(vitePlugin({ config: configFile, silent: true }))
+
+    // The claim the comment in `src/index.ts` makes, checked rather than
+    // trusted: an action's own writes go through the atomic path too.
+    expect(observedName).toBe('writeFileSyncAtomic')
+    expect(fs.readFileSync(String(wroteThrough), 'utf-8')).toContain(
+      'written by a custom action',
+    )
+    expect(temporaries(directory)).toEqual([])
+  }, 30000)
+
+  it.each([
+    { half: 'async', method: 'rename' as const },
+    { half: 'sync', method: 'renameSync' as const },
+  ])(
+    'leaves no temporary behind when the $half rename fails',
+    async ({ method }) => {
+      const directory = writeFixture(`rename-fails-${method}`)
+      fs.mkdirSync(path.join(directory, 'out'), { recursive: true })
+
+      const actions =
+        method === 'renameSync' ? ['test/write-through-volume'] : undefined
+
+      const configFile = path.join(directory, 'sd.config.json')
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
+          platforms: {
+            css: {
+              ...(actions ? { actions } : {}),
+              buildPath: posix(path.join(directory, 'out')) + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+        }),
+      )
+
+      // The rename is the only step between a written temporary file and a
+      // replaced destination, so failing it is what strands one.
+      const failure = new Error(`forced ${method} failure`)
+      const renameSpy =
+        method === 'rename'
+          ? vi.spyOn(fs.promises, 'rename').mockRejectedValue(failure)
+          : vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+              throw failure
+            })
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(
+          callBuildStart(vitePlugin({ config: configFile, silent: true })),
+        ).rejects.toThrow(/forced .* failure/)
+
+        expect(temporaries(directory)).toEqual([])
+      } finally {
+        errorSpy.mockRestore()
+        renameSpy.mockRestore()
+      }
+    },
+    30000,
+  )
 })
