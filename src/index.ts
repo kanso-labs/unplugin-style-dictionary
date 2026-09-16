@@ -2,6 +2,7 @@ import type { Config } from 'style-dictionary'
 import type { UnpluginFactory } from 'unplugin'
 import type { ViteDevServer } from 'vite'
 
+import JSON5 from 'json5'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -269,6 +270,13 @@ const GLOB_CHARACTERS = /[!*?[\]{}]/
 // parsing the file — the `case` list in its own `loadFile`. They are the only
 // ones Node's permanent module cache applies to, and so the only ones this
 // plugin has to read on the build's behalf.
+//
+// Everything else Style Dictionary parses as JSON5, including `.json`, and
+// this list is what makes the plugin split the same way. Reading the two
+// halves apart is what silently unwatched a whole family of configurations:
+// a `.json5` or `.jsonc` file went down the import branch and failed there
+// while the build succeeded, and a `.json` file carrying a comment or a
+// trailing comma failed strict `JSON.parse` for the same reason.
 const IMPORTED_CONFIG_EXTENSIONS = ['.js', '.mjs', '.ts']
 
 // A configuration as `resolveConfigs` hands it on: either the object the
@@ -277,6 +285,13 @@ const IMPORTED_CONFIG_EXTENSIONS = ['.js', '.mjs', '.ts']
 interface ResolvedConfig {
   config: Config | string
   file?: string
+}
+
+// Whether a config path is one Style Dictionary imports rather than parses.
+function isImportedConfig(file: string): boolean {
+  return IMPORTED_CONFIG_EXTENSIONS.some((extension) =>
+    file.endsWith(extension),
+  )
 }
 
 // The leading run of a pattern that contains no glob character —
@@ -521,13 +536,19 @@ export const unpluginFactory: UnpluginFactory<
       version = Date.now()
     }
 
+    // The dot goes, and that is not cosmetic. `mtimeMs` is fractional, so the
+    // query it produces ends in something that reads as a file extension to
+    // anything deriving a loader from the specifier without stripping the
+    // query first — `sd.config.ts?t=1789565080284.6606` is then a `.6606`
+    // file, and a TypeScript config gets parsed as JavaScript. Replacing the
+    // one dot keeps every distinct mtime a distinct key.
+    const key = String(version).replace('.', '_')
+
     // Sequential on purpose: a config module runs arbitrary code at import
     // time — `registerFormat` and friends — and Style Dictionary's registries
     // are global, so importing several at once would interleave those
     // registrations.
-    return unwrapDefault(
-      await import(`${pathToFileURL(file).href}?t=${version}`),
-    )
+    return unwrapDefault(await import(`${pathToFileURL(file).href}?t=${key}`))
   }
 
   // What a configuration item says, as an object. `report` is what stops the
@@ -542,9 +563,13 @@ export const unpluginFactory: UnpluginFactory<
     if (typeof item.config !== 'string') return item.config
 
     try {
-      const loaded: unknown = item.config.endsWith('.json')
-        ? JSON.parse(fs.readFileSync(item.config, 'utf-8'))
-        : await importConfigModule(item.config)
+      // JSON5 rather than `JSON.parse`, because that is what Style Dictionary
+      // reads these files with — it is a superset, so a plain `.json` config
+      // parses identically and one carrying a comment stops being a config
+      // the build understands and the watch list does not.
+      const loaded: unknown = isImportedConfig(item.config)
+        ? await importConfigModule(item.config)
+        : JSON5.parse(fs.readFileSync(item.config, 'utf-8'))
 
       if (isConfig(loaded)) return loaded
 
@@ -640,23 +665,15 @@ export const unpluginFactory: UnpluginFactory<
   // family becomes an object, because those are exactly the extensions Style
   // Dictionary's own `loadFile` reaches with `import` — the ones whose module
   // record Node then caches forever, and so the only ones a build could read
-  // stale. Anything else stays a path, so which formats load and how they are
-  // parsed is left exactly as it was: `.json` is JSON5 there and `JSON.parse`
-  // here, and handing over the narrower reading would reject a configuration
-  // that builds today.
+  // stale. The JSON5 family stays a path because there is nothing to gain:
+  // those are read from disk on every pass either way, so a build can never
+  // see one as it stood earlier in the process.
   const configForBuild = async (
     item: ResolvedConfig,
   ): Promise<Config | string> => {
     const { config } = item
 
-    if (
-      typeof config !== 'string' ||
-      !IMPORTED_CONFIG_EXTENSIONS.some((extension) =>
-        config.endsWith(extension),
-      )
-    ) {
-      return config
-    }
+    if (typeof config !== 'string' || !isImportedConfig(config)) return config
 
     const loaded = await readConfigObject(item, false)
 
