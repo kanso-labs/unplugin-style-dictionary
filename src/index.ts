@@ -310,6 +310,46 @@ function staticParentOf(pattern: string): string {
     : segments.slice(0, firstGlob).join('/')
 }
 
+// A compile that is running right now, keyed by `buildKey`, so bundler
+// instances in one process wait on each other rather than each starting their
+// own.
+//
+// Generated token files are a side effect on the filesystem, not per-bundler
+// output, and one process routinely holds several instances of this plugin. A
+// single `vitest run` on a project with two test projects and browser mode
+// stands up five Vite servers — the root one, one per project, and one more
+// per project once its HTTP server listens — and every one of them runs
+// `buildStart`. `hasCompiled` cannot see any of that: it is closure state
+// inside the factory, so each instance has its own and each compiles.
+//
+// Module scope is the only place a shared answer can live, since the
+// instances know nothing about each other. It stays a claim about identical
+// work, never about identity: the key carries the root and the resolved
+// configurations, so one script building two packages shares nothing.
+const compilesInFlight = new Map<string, Promise<void>>()
+
+// A stable identity for a set of resolved configurations, or `null` for one
+// that cannot have a stable identity at all.
+//
+// Functions are serialised by source rather than dropped, because a `format`
+// or `transform` written inline is exactly what distinguishes two otherwise
+// identical configurations — and `JSON.stringify` omits a function outright,
+// which would make two different builds look like one.
+function buildKey(root: string, resolved: ResolvedConfig[]): null | string {
+  try {
+    return JSON.stringify(
+      [root, resolved.map((item) => item.file ?? item.config)],
+      (_key, value: unknown) =>
+        typeof value === 'function' ? `[fn]${String(value)}` : value,
+    )
+  } catch {
+    // A configuration that will not serialise — a circular reference, a
+    // BigInt — takes no shared identity rather than a wrong one, and compiles
+    // exactly as it did before.
+    return null
+  }
+}
+
 export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
@@ -911,6 +951,50 @@ export const unpluginFactory: UnpluginFactory<
     log(`Compiled successfully! (${duration}ms)`, 'success')
   }
 
+  // `runBuilds` for the first build of a process, with the compile shared
+  // between every plugin instance that wants the same one.
+  //
+  // An instance arriving while a compile for the same key is running waits on
+  // that compile instead of starting a second. It is the concurrent half that
+  // needs this: an up-to-date check compares what is on disk against the
+  // sources, and two instances that start together have nothing on disk to
+  // compare against yet, so only a shared promise can tell them apart from
+  // two genuinely separate builds.
+  //
+  // The entry is dropped as soon as the compile settles, so this coalesces
+  // rather than caches — a later `buildStart` still compiles. Skipping one
+  // whose output is already current is #212's up-to-date check, and belongs
+  // with it rather than as a second mechanism here.
+  //
+  // A rejection reaches every waiter, which is the point: an instance that
+  // waited on a failed compile must not carry on as though the tokens were
+  // written. Whether that rejection is thrown at all is `failOnError`'s
+  // decision, already made inside `runBuilds`.
+  const compileOnceAcrossInstances = async (
+    resolvedConfigs: ResolvedConfig[],
+  ): Promise<void> => {
+    const key = buildKey(root, resolvedConfigs)
+    if (key === null) {
+      await runBuilds(resolvedConfigs)
+      return
+    }
+
+    const running = compilesInFlight.get(key)
+    if (running) {
+      await running
+      return
+    }
+
+    const compile = runBuilds(resolvedConfigs)
+    compilesInFlight.set(key, compile)
+
+    try {
+      await compile
+    } finally {
+      compilesInFlight.delete(key)
+    }
+  }
+
   // One rebuild per burst of watcher events, and never two at once.
   //
   // Two things went wrong without this. A single token edit under Vite's dev
@@ -1046,7 +1130,7 @@ export const unpluginFactory: UnpluginFactory<
         return
       }
 
-      await runBuilds(resolved)
+      await compileOnceAcrossInstances(resolved)
       hasCompiled = true
     },
 
@@ -1156,7 +1240,7 @@ export const unpluginFactory: UnpluginFactory<
           const resolved = await resolveConfigs()
           if (resolved.length === 0) return
 
-          await runBuilds(resolved)
+          await compileOnceAcrossInstances(resolved)
           hasCompiled = true
         },
       )

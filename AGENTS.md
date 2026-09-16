@@ -583,6 +583,29 @@ two overlapping builds and a four-file change produced ten. That overlap is the
 same one `runBuilds` avoids internally by building its configurations one after
 another, reintroduced one level up.
 
+**The scheduler serialises one plugin instance; `compilesInFlight` serialises
+the process.** They solve the same problem at different scopes and neither
+replaces the other. `hasCompiled` and the scheduler are closure state inside
+`unpluginFactory`, so they see only their own instance — and one process
+routinely holds several. A single `vitest run` with two test projects and
+browser mode stands up five Vite servers, each with its own instance, each
+running `buildStart`; the last two start together. `compilesInFlight` is a
+module-level map keyed by `buildKey`, so the second waits on the first's promise
+instead of starting a second compile onto the same destinations.
+
+It **coalesces rather than caches** — the entry is dropped the moment the
+compile settles, so a later `buildStart` still compiles. Skipping one whose
+output is already current is a different mechanism, and is #212's up-to-date
+check. That division is why this handles only the instances that start together:
+the ones that arrive in turn have output on disk to compare against, and a
+shared promise is the only thing that can speak for the ones that do not.
+
+`buildKey` serialises functions by source rather than letting `JSON.stringify`
+drop them, because an inline `format` or `transform` is exactly what tells two
+otherwise identical configurations apart. It returns `null` for a configuration
+that will not serialise, which opts that one out of sharing rather than giving
+it a wrong identity.
+
 **A one-shot build only compiles once, in `buildStart`.** Anything without a
 persistent watch mode — `rolldown build` or `tsdown` with no `--watch` — gets no
 rebuild-on-change, and that is expected rather than a bug to fix.
