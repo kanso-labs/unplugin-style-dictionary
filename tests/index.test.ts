@@ -2529,6 +2529,89 @@ describe('the size reporter', () => {
       logSpy.mockRestore()
     }
   }, 30000)
+
+  // A fault in the table is a reporting failure, not a compile failure. The
+  // reporter used to sit inside the same `try` as the compile, so a throw
+  // from it was logged as `Compilation failed` and — with `failOnError`
+  // defaulting to `'build'` — rethrown into the host, stopping a bundler over
+  // a build whose every token file was already written and correct.
+  it('survives a fault in its own table without failing the build', async () => {
+    const { configFile, directory } = writeFixture('reporter-throws')
+
+    // `path.relative` is the reporter's first call on each destination, and
+    // it is the only one in that block the per-file `catch` does not cover.
+    // Nothing else in the compile path uses it — neither this plugin nor
+    // Style Dictionary — and the throw is narrowed to `relative(root, …)`,
+    // which is the call shape only the reporter makes. So a pass here cannot
+    // come from having broken something earlier and caught it later.
+    const relative = path.relative
+    let faulted = 0
+    const relativeSpy = vi
+      .spyOn(path, 'relative')
+      .mockImplementation((from, to) => {
+        if (from === directory) {
+          faulted += 1
+          throw new Error('relative is unavailable')
+        }
+
+        return relative(from, to)
+      })
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    try {
+      // On the unfixed plugin this rejects with the reporter's own error, and
+      // that rejection is the whole defect: the hook fails a build that
+      // succeeded.
+      await callBuildStart(
+        vitePlugin({ config: configFile, root: directory, silent: false }),
+      )
+
+      const errors = errorSpy.mock.calls.map((call) => String(call[0]))
+      const printed = logSpy.mock.calls.map((call) =>
+        stripAnsi(String(call[0])),
+      )
+
+      // The fault was actually provoked. Without this the case would pass on
+      // a build that never reached the reporter at all.
+      expect(faulted).toBeGreaterThan(0)
+
+      // Every destination written, and written correctly: Style Dictionary
+      // had finished long before the reporter ran.
+      expect(
+        fs.readFileSync(path.join(directory, 'out', 'vars.css'), 'utf8'),
+      ).toContain('--color-brand: #0070f3;')
+      expect(
+        fs.readFileSync(
+          path.join(directory, 'out', 'deeply', 'nested', 'tokens.js'),
+          'utf8',
+        ),
+      ).toContain('#0070f3')
+
+      // Said, because a table that cannot be printed is worth a line — but
+      // said as what it is.
+      expect(errors.some((line) => line.includes('Compilation failed'))).toBe(
+        false,
+      )
+      expect(
+        errors.some((line) =>
+          line.includes('Failed to report generated file sizes'),
+        ),
+      ).toBe(true)
+
+      // No table, since printing it is what faulted; and the compile still
+      // reported as the success it was.
+      expect(printed.some((line) => SIZE_LINE.test(line))).toBe(false)
+      expect(
+        printed.some((line) => line.includes('Compiled successfully!')),
+      ).toBe(true)
+    } finally {
+      relativeSpy.mockRestore()
+      errorSpy.mockRestore()
+      logSpy.mockRestore()
+    }
+  }, 30000)
 })
 
 // `writeFileSyncAtomic` never runs under Style Dictionary's own writes — it
