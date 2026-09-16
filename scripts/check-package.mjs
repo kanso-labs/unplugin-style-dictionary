@@ -197,6 +197,36 @@ for (const target of targets) {
       throw new Error(`\`default\` is ${typeof namespace.default}`)
     }
   })
+
+  // The options type is erased at runtime, so no `require` or import can see
+  // whether a consumer could have named it — only the emitted declaration
+  // says. Reading the built file rather than the source is the point: this
+  // package has twice shipped declarations that did not match what the source
+  // implied, once when `fixedExtension: false` was dropped and once when a
+  // CommonJS build rewrote the target entries, and both were invisible until
+  // something read `dist/`.
+  check(`the ./${target} subpath declares the options type`, () => {
+    const declaration = fs.readFileSync(
+      new URL(`../dist/${target}.d.ts`, import.meta.url),
+      'utf-8',
+    )
+
+    if (!declaration.includes('UnpluginStyleDictionaryOptions')) {
+      throw new Error('the declaration never mentions the options type')
+    }
+
+    // Naming it in the plugin's own signature is not the same as exporting
+    // it, and the signature import is what made this look fine for so long.
+    if (
+      !/export\s*\{[^}]*\btype UnpluginStyleDictionaryOptions\b/.test(
+        declaration,
+      )
+    ) {
+      throw new Error(
+        'the options type is imported for the signature but never exported',
+      )
+    }
+  })
 }
 
 if (failures.length > 0) {

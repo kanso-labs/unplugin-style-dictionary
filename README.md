@@ -115,6 +115,10 @@ _Note: that path needs Node 20.19+ or 22.12+, the versions that can `require` an
 ES module. Every Node release still in support clears it. Importing from ESM has
 no such floor._
 
+_The subpaths also need a TypeScript `moduleResolution` of `bundler`, `node16`
+or `nodenext`. The deprecated `node10` cannot resolve them, and TypeScript 6
+already warns that it stops working in 7._
+
 ### Config File Formats
 
 A `config` path may be `.json`, `.json5`, `.jsonc`, `.js`, `.mjs` or `.ts`. The
@@ -423,7 +427,9 @@ plugin. As of this unplugin-based rewrite:
   old default export), `/rolldown`, `/rollup`, or `/webpack`.
 - The exported options type is renamed from `VitePluginStyleDictionaryOptions`
   to `UnpluginStyleDictionaryOptions`. The shape of the options (`config`,
-  `watch`, `silent`) is unchanged.
+  `watch`, `silent`) is unchanged. It is exported from every entry point, so it
+  comes from the same specifier as the plugin:
+  `import type { UnpluginStyleDictionaryOptions } from '@kanso-labs/unplugin-style-dictionary/vite'`.
 - Behavior under Vite is unchanged: the same `buildStart`-time compilation and
   dev-server watch/rebuild logic as before.
 

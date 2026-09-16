@@ -2740,3 +2740,27 @@ describe('the atomic writer', () => {
     30000,
   )
 })
+
+// A consumer importing the entry point for their bundler should be able to
+// name the options type from that same specifier. The type is erased at
+// runtime, so nothing about a build or an import can observe it — what the
+// re-export leaves behind is a line in the source and a clause in the emitted
+// declaration, and both are checked: this suite reads the source, and
+// `scripts/check-package.mjs` reads the built `.d.ts` after `npm run build`.
+describe('the options type on every target entry', () => {
+  const targets = ['rolldown', 'rollup', 'vite', 'webpack']
+
+  it.each(targets)(
+    'src/%s.ts re-exports the options type alongside the plugin',
+    (target) => {
+      const source = fs.readFileSync(
+        new URL(`../src/${target}.ts`, import.meta.url),
+        'utf-8',
+      )
+
+      // `export type *` rather than a named re-export, so a type added to
+      // `src/types.ts` travels without a second edit here.
+      expect(source).toContain("export type * from './types.js'")
+    },
+  )
+})
