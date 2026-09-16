@@ -367,7 +367,15 @@ describe('every watching target rebuilds once and then settles', () => {
       expect(await settledCount(() => builds, 1500, 20000)).not.toBeNull()
       expect(errors).toEqual([])
     } finally {
+      // `compiler.watch` is typed as possibly returning nothing, so closing it
+      // is conditional rather than asserted — a watcher that was never created
+      // has nothing to close, and claiming otherwise would be a cast.
       await new Promise<void>((resolve) => {
+        if (!watching) {
+          resolve()
+          return
+        }
+
         watching.close(() => {
           resolve()
         })
