@@ -292,7 +292,13 @@ function staticParentOf(pattern: string): string {
 export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
-> = (options = {}) => {
+> = (options = {}, meta) => {
+  // webpack is the one target whose `buildStart` does not run before the
+  // module graph is resolved: unplugin taps it on `make`, an
+  // `AsyncParallelHook` that `EntryPlugin` taps too. The `webpack` key below
+  // compiles on `beforeCompile` instead, which webpack awaits before the
+  // compilation exists.
+  const isWebpack = meta.framework === 'webpack'
   const {
     failOnError = 'build',
     logLevel,
@@ -855,6 +861,13 @@ export const unpluginFactory: UnpluginFactory<
         this.addWatchFile(file)
       }
 
+      // Registering the watch list is all this hook does on webpack, and it
+      // has to happen here rather than beside the compile: `addWatchFile`
+      // reaches `compilation.fileDependencies`, and `beforeCompile` runs
+      // before there is a compilation to add to. Compiling here as well would
+      // put the race back, and run every webpack build twice.
+      if (isWebpack) return
+
       // Every watch rebuild re-enters this hook, and compiling here as well as
       // in `watchChange` is what closed the loop: consuming code imports the
       // generated file, so writing it is itself a module-graph change, which
@@ -938,7 +951,10 @@ export const unpluginFactory: UnpluginFactory<
       // the ones that match only because this plugin wrote them.
       if (!isWatchedSource(id, patterns)) return
 
-      await schedule(path.basename(id))
+      // Same division as `buildStart`: on webpack the compile belongs to
+      // `beforeCompile`, which has already run for this compilation, so all
+      // that is left is to re-register the watch list below.
+      if (!isWebpack) await schedule(path.basename(id))
 
       // Expanded again after the build rather than reusing the list from
       // before it, so a token file the build itself produced is registered.
@@ -955,6 +971,22 @@ export const unpluginFactory: UnpluginFactory<
       if (rootOption === undefined) {
         root = compiler.options.context ?? process.cwd()
       }
+
+      // `beforeCompile` is awaited before the compilation exists, so the
+      // tokens are on disk before webpack resolves the module that imports
+      // them. Tapped on every compilation rather than only the first: a watch
+      // rebuild needs the same guarantee, and a compile that renders what is
+      // already there skips its own write.
+      compiler.hooks.beforeCompile.tapPromise(
+        'unplugin-style-dictionary',
+        async () => {
+          const resolved = await resolveConfigs()
+          if (resolved.length === 0) return
+
+          await runBuilds(resolved)
+          hasCompiled = true
+        },
+      )
     },
   }
 }
