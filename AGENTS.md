@@ -570,19 +570,22 @@ another, reintroduced one level up.
 persistent watch mode — `rolldown build` or `tsdown` with no `--watch` — gets no
 rebuild-on-change, and that is expected rather than a bug to fix.
 
-**Rolldown does not watch tokens even with a persistent watcher, and
-`addWatchFile` is why.** The README explains the one-shot behaviour by how
-rolldown is usually run, which is true but not the operative reason: under a
-real `rolldown.watch()`, `this.addWatchFile()` is accepted without error and
-acted on by nothing, so a registered token file reaches no hook when it changes.
-Measured on rolldown 1.2.9 — a plugin registering a file outside the module
-graph and then editing it saw no `watchChange` and no second `buildStart`, while
-editing a file _inside_ the graph produced both. So adding more `addWatchFile`
-calls cannot make this target watch tokens, and the two guards that matter there
-are the module-graph ones: the generated file is in rolldown's graph, so every
-regenerate is a change it reacts to. `tests/targets.test.ts` pins both halves —
-the token edit that does not arrive, and the entry edit that does without
-running away.
+**What rolldown does with a token edit depends on the platform, so neither
+answer can be relied on.** `this.addWatchFile()` is accepted by rolldown 1.2.9
+either way, but what happens next is not the same everywhere: on macOS a file
+registered through it is watched by nothing, so a token edit reaches no hook at
+all, while on the Linux CI runner the same edit reached a rebuild and updated
+the generated file. Both were measured on this repository's own fixture — the
+macOS half with a bare probe plugin that saw no `watchChange` and no second
+`buildStart` for a file outside the module graph, and the Linux half as a CI
+failure of a test that had asserted the macOS behaviour.
+
+So do not write a test that asserts a token edit under `rolldown.watch()` either
+arrives or does not, and do not tell a consumer that rolldown watches tokens.
+What holds on both platforms is the module graph: the generated file is in it,
+so every regenerate is a change rolldown reacts to, and the guards that matter
+there are the ones stopping that from becoming a loop. `tests/targets.test.ts`
+asserts only that — an entry edit rebuilds and then settles.
 
 **`release_created` is compared against the string `'true'` on purpose.** The
 output carries the string `"false"` when release-please runs and decides not to

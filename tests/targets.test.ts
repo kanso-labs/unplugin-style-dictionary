@@ -250,12 +250,11 @@ describe('every watching target rebuilds once and then settles', () => {
       fs.rmSync(tempDir, { force: true, recursive: true })
   })
 
-  // Rolldown is the target that compiles once and does not watch tokens, and
-  // the reason is not the one the README gives. `addWatchFile` is accepted by
-  // rolldown 1.2.9 and then acted on by nothing: a file registered through it
-  // is never watched, so a token edit reaches no hook at all. What rolldown
-  // does watch is its own module graph — and the generated file is in it,
-  // which is exactly the shape a rebuild loop closes through.
+  // What rolldown does with a token edit is platform-dependent, so this case
+  // asserts nothing about it — see the note in AGENTS.md. What it does assert
+  // holds everywhere: an edit rolldown certainly sees, to a file in its own
+  // module graph, rebuilds and then stops. The generated file is in that graph
+  // too, which is the shape a rebuild loop closes through.
   it('under a real rolldown watcher', async () => {
     const directory = path.join(tempDir, 'rolldown')
     const { configFile, entry, generated, tokenSource } =
@@ -287,22 +286,22 @@ describe('every watching target rebuilds once and then settles', () => {
       // by the plugin.
       await settle(500)
 
+      // Edited, and then deliberately not asserted on either way. Whether this
+      // reaches a rebuild depends on the platform's watch backend: measured
+      // inert on macOS and delivered on Linux. It is here so the entry edit
+      // below lands on a plugin that has already had a token change to react
+      // to, which is the busier of the two states.
       fs.writeFileSync(
         tokenSource,
         JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
       )
       await settle(1500)
 
-      // Not a rebuild-on-change target, and this is what that costs: the edit
-      // is on disk and the compiled tokens do not have it. Anyone reaching for
-      // more `addWatchFile` calls to fix this should read the note above
-      // first — rolldown drops them.
-      expect(fs.readFileSync(generated, 'utf-8')).toContain('#0070f3')
-
-      // An edit rolldown does see, because the entry is in its module graph.
-      // Every rebuild re-enters `buildStart`, and a `buildStart` that compiles
-      // would write the generated file, which is itself a module-graph change
-      // — the loop that ran at about ten bundles a second, forever.
+      // An edit rolldown certainly sees, because the entry is in its module
+      // graph. Every rebuild re-enters `buildStart`, and a `buildStart` that
+      // compiles would write the generated file, which is itself a
+      // module-graph change — the loop that ran at about ten bundles a second,
+      // forever.
       fs.writeFileSync(
         entry,
         [
