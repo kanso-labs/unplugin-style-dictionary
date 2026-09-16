@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.1](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.5.0...unplugin-style-dictionary-v0.5.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **config:** parse json5 and jsonc configs, and drop the cjs claim ([#250](https://github.com/kanso-labs/unplugin-style-dictionary/issues/250)) ([3c16151](https://github.com/kanso-labs/unplugin-style-dictionary/commit/3c161513a83fae8d9103f5a69f54a0e68f6d54d4))
+* **config:** thread one resolved config object through build and watch ([#248](https://github.com/kanso-labs/unplugin-style-dictionary/issues/248)) ([70a7a44](https://github.com/kanso-labs/unplugin-style-dictionary/commit/70a7a44b6be00a583b3ba91247900ce91553afd7))
+* **webpack:** move the compile off the parallel make hook ([#247](https://github.com/kanso-labs/unplugin-style-dictionary/issues/247)) ([5eef144](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5eef144b65bfdd629d1a585d980f8b0e159f7e5b))
+
+
+### Performance Improvements
+
+* **watch:** test the watch filter before resolving any config ([#249](https://github.com/kanso-labs/unplugin-style-dictionary/issues/249)) ([cfa5645](https://github.com/kanso-labs/unplugin-style-dictionary/commit/cfa56459bce1df22f32824a36e149f8c61ea977f))
+
+
+### Dependencies
+
+* update dependency @types/node to v26.6.1 ([#245](https://github.com/kanso-labs/unplugin-style-dictionary/issues/245)) ([12a196e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/12a196ead7db180aee9565d470e957e20753d701))
+
 ## [0.5.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.4.29...unplugin-style-dictionary-v0.5.0) (2026-09-15)
 
 
