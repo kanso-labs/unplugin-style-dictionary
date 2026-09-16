@@ -41,6 +41,11 @@ _Note: `style-dictionary` and your bundler (`vite`, `rolldown`, `rollup`, or
 `webpack`) are peer dependencies, so you can manage their versions
 independently._
 
+**This package needs Node 22.12 or newer.** The floor is Style Dictionary v5's,
+not this plugin's: every 5.x release declares `engines.node >= 22.0.0`, and it
+is a required peer rather than an optional one, so an older Node cannot install
+a working set at all. Node 20 reached end of life on 30 April 2026.
+
 ## Usage
 
 Import the entry point that matches your bundler.
@@ -117,9 +122,10 @@ what the configuration says.
 Two limits worth knowing before you pick one:
 
 - **A `.ts` config needs Node >= 22.18**, where type stripping is on by default.
-  Below that the build fails with `Could not import TypeScript file`. The
-  package's own engines floor is lower, so this is a per-config requirement
-  rather than a requirement of the plugin.
+  Below that the build fails with `Could not import TypeScript file`. That is
+  higher than the package's own floor of 22.12, so it is a requirement of this
+  one config format rather than of the plugin — and nothing warns at install
+  time, because the package installs happily on 22.12.
 - **`.cjs` is not supported.** Style Dictionary has no branch for that extension
   and parses it as JSON5, which fails on the first `module`. Rename the file to
   `.js` in a CommonJS package, or pass a configuration object.

@@ -23,9 +23,37 @@
 // to `module.exports = fn` and a require() gave the function directly.
 // Nothing but this keeps the README and the package agreeing.
 
+import fs from 'node:fs'
 import { createRequire } from 'node:module'
+import semver from 'semver'
 
 const require = createRequire(import.meta.url)
+
+/**
+ * A package manifest, read from disk rather than through `require`. A
+ * dependency's own `package.json` is not reliably reachable as a specifier —
+ * `require('style-dictionary/package.json')` fails with
+ * ERR_PACKAGE_PATH_NOT_EXPORTED, because its exports map does not list it.
+ * @param {string} relativePath
+ * @returns {{
+ *   engines?: { node?: string }
+ *   peerDependencies?: Record<string, string>
+ *   peerDependenciesMeta?: Record<string, { optional?: boolean }>
+ * }}
+ */
+function readManifest(relativePath) {
+  const url = new URL(relativePath, import.meta.url)
+  /** @type {unknown} */
+  const parsed = JSON.parse(fs.readFileSync(url, 'utf-8'))
+
+  // `JSON.parse` hands back `any`, so the shape is narrowed once here rather
+  // than trusted by every read below.
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new TypeError(`${relativePath} did not parse to an object`)
+  }
+
+  return parsed
+}
 
 const packageName = '@kanso-labs/unplugin-style-dictionary'
 
@@ -90,6 +118,54 @@ console.log('Checking what publint cannot see...')
 // than merely pointing at a file that exists.
 check('the main entry resolves under require()', () => {
   resolvesTo(packageName, '/dist/index.js')
+})
+
+// A declared `engines.node` admitting a Node a required peer refuses is a
+// claim nothing else checks. `^20.19.0 || >=22.12.0` said Node 20 was
+// supported while the required `style-dictionary` peer declares `>=22.0.0` —
+// so npm warned EBADENGINE on every Node 20 install, and refused it outright
+// under `engine-strict=true`, while this package's own metadata invited it.
+//
+// `subset` rather than `intersects`, and the difference is the whole check:
+// `intersects` asks whether *some* version satisfies both, which the broken
+// range passed on the strength of its `>=22.12.0` half alone. What has to hold
+// is that *every* version this package admits is one the peer admits too.
+//
+// Read from the installed copy rather than the registry, so the check needs no
+// network and answers for the versions actually resolved here. Optional peers
+// are skipped: a consumer who never installs one is never subject to its
+// floor, which is the whole meaning of the `peerDependenciesMeta` entry.
+check('engines.node admits no Node a required peer refuses', () => {
+  const manifest = readManifest('../package.json')
+  const declared = manifest.engines?.node
+
+  if (typeof declared !== 'string') {
+    throw new Error('package.json declares no engines.node')
+  }
+
+  const peers = manifest.peerDependencies ?? {}
+  const optional = manifest.peerDependenciesMeta ?? {}
+  /** @type {string[]} */
+  const conflicts = []
+
+  for (const peer of Object.keys(peers)) {
+    if (optional[peer]?.optional === true) continue
+
+    const peerEngines = readManifest(`../node_modules/${peer}/package.json`)
+      .engines?.node
+
+    if (typeof peerEngines !== 'string') continue
+
+    if (!semver.subset(declared, peerEngines, { loose: true })) {
+      conflicts.push(
+        `${peer} requires node ${peerEngines}, which does not admit every version of ${declared}`,
+      )
+    }
+  }
+
+  if (conflicts.length > 0) {
+    throw new Error(conflicts.join('; '))
+  }
 })
 
 check('the main entry evaluates under require()', () => {
