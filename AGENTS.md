@@ -570,6 +570,20 @@ another, reintroduced one level up.
 persistent watch mode — `rolldown build` or `tsdown` with no `--watch` — gets no
 rebuild-on-change, and that is expected rather than a bug to fix.
 
+**Rolldown does not watch tokens even with a persistent watcher, and
+`addWatchFile` is why.** The README explains the one-shot behaviour by how
+rolldown is usually run, which is true but not the operative reason: under a
+real `rolldown.watch()`, `this.addWatchFile()` is accepted without error and
+acted on by nothing, so a registered token file reaches no hook when it changes.
+Measured on rolldown 1.2.9 — a plugin registering a file outside the module
+graph and then editing it saw no `watchChange` and no second `buildStart`, while
+editing a file _inside_ the graph produced both. So adding more `addWatchFile`
+calls cannot make this target watch tokens, and the two guards that matter there
+are the module-graph ones: the generated file is in rolldown's graph, so every
+regenerate is a change it reacts to. `tests/targets.test.ts` pins both halves —
+the token edit that does not arrive, and the entry edit that does without
+running away.
+
 **`release_created` is compared against the string `'true'` on purpose.** The
 output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
