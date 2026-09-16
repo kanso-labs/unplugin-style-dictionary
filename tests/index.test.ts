@@ -2072,3 +2072,338 @@ describe('every supported config file format', () => {
     30000,
   )
 })
+
+// Nothing asserted the watch list itself. `getWatchTargets` was only ever
+// reached with a single JSON config carrying `source` and no `include`, so
+// default discovery, the `include` key and the `watch` option all worked and
+// nothing in the suite would have noticed if any of the three had stopped.
+describe('the watch list a build registers', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-watch-list-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // Literal paths rather than globs throughout, so what is registered is what
+  // the configuration named and expansion is the identity. The glob path has
+  // its own coverage under the rollup watcher.
+  const fixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(path.join(directory, 'tok'), { recursive: true })
+    fs.mkdirSync(path.join(directory, 'base'), { recursive: true })
+
+    const source = path.join(directory, 'tok', 'app.json')
+    const include = path.join(directory, 'base', 'base.json')
+    // Self-contained on purpose: most cases below load the source without the
+    // include, and a token referencing one that is not loaded fails the build
+    // for a reason that has nothing to do with the watch list.
+    fs.writeFileSync(
+      source,
+      JSON.stringify({ color: { app: { value: '#0070f3' } } }),
+    )
+    fs.writeFileSync(
+      include,
+      JSON.stringify({ color: { base: { value: '#101828' } } }),
+    )
+
+    const platforms = {
+      js: {
+        buildPath: posix(directory) + '/',
+        files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+        transformGroup: 'js',
+      },
+    }
+
+    return { directory, include, platforms, source }
+  }
+
+  it('registers the config file, every source and every include', async () => {
+    const { directory, include, platforms, source } = fixture('source-include')
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        include: [posix(include)],
+        platforms,
+        source: [posix(source)],
+      }),
+    )
+
+    const watched = await callBuildStart(
+      vitePlugin({ config: configFile, silent: true }),
+    )
+
+    // Exact rather than `toContain`: a watch list that silently gains an entry
+    // is how the plugin came to watch its own output.
+    expect(new Set(watched)).toEqual(
+      new Set([posix(configFile), posix(include), posix(source)]),
+    )
+  }, 30000)
+
+  it('registers the same list for a config loaded by dynamic import', async () => {
+    const { directory, include, platforms, source } = fixture('esm-config')
+    const configFile = path.join(directory, 'sd.config.mjs')
+    fs.writeFileSync(
+      configFile,
+      `export default ${JSON.stringify({
+        include: [posix(include)],
+        platforms,
+        source: [posix(source)],
+      })}\n`,
+    )
+
+    const watched = await callBuildStart(
+      vitePlugin({ config: configFile, silent: true }),
+    )
+
+    expect(new Set(watched)).toEqual(
+      new Set([posix(configFile), posix(include), posix(source)]),
+    )
+  }, 30000)
+
+  it('registers both configs and both their sources when given two', async () => {
+    const first = fixture('multi-first')
+    const second = fixture('multi-second')
+
+    const firstConfig = path.join(first.directory, 'sd.config.json')
+    const secondConfig = path.join(second.directory, 'sd.config.json')
+    fs.writeFileSync(
+      firstConfig,
+      JSON.stringify({
+        platforms: first.platforms,
+        source: [posix(first.source)],
+      }),
+    )
+    fs.writeFileSync(
+      secondConfig,
+      JSON.stringify({
+        platforms: second.platforms,
+        source: [posix(second.source)],
+      }),
+    )
+
+    const watched = await callBuildStart(
+      vitePlugin({ config: [firstConfig, secondConfig], silent: true }),
+    )
+
+    expect(new Set(watched)).toEqual(
+      new Set([
+        posix(first.source),
+        posix(firstConfig),
+        posix(second.source),
+        posix(secondConfig),
+      ]),
+    )
+  }, 30000)
+
+  it.each([
+    { form: 'a string', watch: (file: string) => file },
+    { form: 'an array', watch: (file: string) => [file] },
+  ])(
+    'appends the watch option given as $form',
+    async ({ watch }) => {
+      const { directory, platforms, source } = fixture(
+        `watch-option-${String(watch('x'))}`,
+      )
+      const configFile = path.join(directory, 'sd.config.json')
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({ platforms, source: [posix(source)] }),
+      )
+
+      const extra = path.join(directory, 'notes.txt')
+      fs.writeFileSync(extra, 'watched because the consumer asked\n')
+
+      const watched = await callBuildStart(
+        vitePlugin({ config: configFile, silent: true, watch: watch(extra) }),
+      )
+
+      expect(new Set(watched)).toEqual(
+        new Set([posix(configFile), posix(extra), posix(source)]),
+      )
+    },
+    30000,
+  )
+
+  // `source` and `include` are documented as arrays and Style Dictionary
+  // rejects anything else, but the watch list is built before the build runs
+  // and handles the bare-string form rather than dropping it silently. That
+  // is the difference between a configuration that fails loudly and one that
+  // fails loudly *and* watches nothing.
+  it('registers a source and an include given as bare strings', async () => {
+    const { directory, include, platforms, source } = fixture('bare-strings')
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        include: posix(include),
+        platforms,
+        source: posix(source),
+      }),
+    )
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const watched = await callBuildStart(
+        vitePlugin({ config: configFile, failOnError: 'serve', silent: true }),
+      )
+
+      expect(new Set(watched)).toEqual(
+        new Set([posix(configFile), posix(include), posix(source)]),
+      )
+    } finally {
+      errorSpy.mockRestore()
+    }
+  }, 30000)
+
+  // Four filenames, not the two `src/types.ts` and the README claim. The
+  // documents are wrong and correcting them is the documentation work's; what
+  // this pins is what the code does.
+  it.each(['sd.config.json', 'config.json', 'sd.config.js', 'sd.config.mjs'])(
+    'discovers %s with no config option at all',
+    async (filename) => {
+      const { directory, platforms, source } = fixture(
+        `discover-${filename.replace(/\./g, '-')}`,
+      )
+      const body = { platforms, source: [posix(source)] }
+      const configFile = path.join(directory, filename)
+      fs.writeFileSync(
+        configFile,
+        filename.endsWith('.json')
+          ? JSON.stringify(body)
+          : `export default ${JSON.stringify(body)}\n`,
+      )
+
+      // `root` is what default discovery resolves against, and passing it is
+      // what keeps this from depending on the working directory.
+      const watched = await callBuildStart(
+        vitePlugin({ root: directory, silent: true }),
+      )
+
+      expect(new Set(watched)).toEqual(
+        new Set([posix(configFile), posix(source)]),
+      )
+    },
+    30000,
+  )
+})
+
+// A configuration that cannot be used has to come out of the plugin as a
+// logged message rather than as silence or as a dead host. Every case here
+// runs with `failOnError: 'serve'`, so the build completes and the assertion
+// is about what was said rather than about what was thrown — the rejection
+// path has its own cases above.
+describe('when a configuration cannot be used', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-config-errors-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  const prepare = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(path.join(directory, 'tok'), { recursive: true })
+
+    const source = path.join(directory, 'tok', 'app.json')
+    fs.writeFileSync(
+      source,
+      JSON.stringify({ color: { app: { value: '#0070f3' } } }),
+    )
+
+    return { directory, source }
+  }
+
+  const buildAndCollect = async (
+    options: NonNullable<Parameters<typeof vitePlugin>[0]>,
+  ) => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // Settling at all is half of every case here: a configuration that
+      // rejects a promise nobody holds used to leave `buildStart` unfinished.
+      await callBuildStart(vitePlugin({ failOnError: 'serve', ...options }))
+
+      return errorSpy.mock.calls.map((call) => String(call[0]))
+    } finally {
+      errorSpy.mockRestore()
+    }
+  }
+
+  it('reports a config path that does not exist', async () => {
+    const { directory } = prepare('missing')
+
+    const messages = await buildAndCollect({
+      config: path.join(directory, 'nope.json'),
+    })
+
+    expect(
+      messages.some((m) => m.includes('Failed to parse config file')),
+    ).toBe(true)
+  }, 30000)
+
+  it('reports a config whose JSON is half-written', async () => {
+    const { directory } = prepare('malformed')
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(configFile, '{ "platforms": {')
+
+    const messages = await buildAndCollect({ config: configFile })
+
+    expect(
+      messages.some((m) => m.includes('Failed to parse config file')),
+    ).toBe(true)
+  }, 30000)
+
+  it('reports a config module whose default export is not an object', async () => {
+    const { directory } = prepare('not-an-object')
+    const configFile = path.join(directory, 'sd.config.mjs')
+    fs.writeFileSync(configFile, "export default 'not a configuration'\n")
+
+    const messages = await buildAndCollect({ config: configFile })
+
+    expect(
+      messages.some((m) =>
+        m.includes('did not resolve to a configuration object'),
+      ),
+    ).toBe(true)
+  }, 30000)
+
+  it('reports a format name Style Dictionary does not know', async () => {
+    const { directory, source } = prepare('unknown-format')
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: posix(directory) + '/',
+            files: [{ destination: 'tokens.js', format: 'nope/not-a-format' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [posix(source)],
+      }),
+    )
+
+    const messages = await buildAndCollect({ config: configFile })
+
+    expect(messages.some((m) => m.includes('Compilation failed'))).toBe(true)
+  }, 30000)
+
+  it('reports having no configuration to compile at all', async () => {
+    const { directory } = prepare('no-config')
+
+    // An empty root, so default discovery finds none of its four filenames.
+    const messages = await buildAndCollect({ root: directory })
+
+    expect(
+      messages.some((m) =>
+        m.includes('No configuration specified and no default config file'),
+      ),
+    ).toBe(true)
+  }, 30000)
+})
