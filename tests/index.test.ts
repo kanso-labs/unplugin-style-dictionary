@@ -1973,3 +1973,102 @@ describe('when a watched change is not a token source', () => {
     expect(calls - afterMatch).toBe(0)
   }, 30000)
 })
+
+// The watch list used to be derived by a different parser from the one the
+// build reads the file with. `.json5` and `.jsonc` went down the import branch
+// and failed there while the build succeeded, and a `.json` config carrying a
+// comment failed strict `JSON.parse` for the same reason — so the config built
+// correctly and then lost every `source` pattern from its watch set, with the
+// parse error logged and the build reported as a success right after it.
+describe('every supported config file format', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-formats-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // Each case writes the same configuration in its own syntax. The JSON family
+  // carries a comment and a trailing comma on purpose: that is the half of
+  // JSON5 a strict parser rejects, and `.json` is the format the README leads
+  // with.
+  const jsonFamily = (directory: string) => `{
+  // a comment, which only a JSON5 parser accepts
+  platforms: {
+    js: {
+      transformGroup: 'js',
+      buildPath: '${posix(directory)}/',
+      files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+    },
+  },
+  source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
+}
+`
+
+  const esmFamily = (directory: string) => `export default {
+  platforms: {
+    js: {
+      transformGroup: 'js',
+      buildPath: '${posix(directory)}/',
+      files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+    },
+  },
+  source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
+}
+`
+
+  // `satisfies` is the point: it is type syntax, so the file only imports at
+  // all where Node strips types.
+  const typescript = (directory: string) =>
+    esmFamily(directory).replace(/\n$/, ' satisfies Record<string, unknown>\n')
+
+  it.each([
+    { extension: 'json', write: jsonFamily },
+    { extension: 'json5', write: jsonFamily },
+    { extension: 'jsonc', write: jsonFamily },
+    { extension: 'js', write: esmFamily },
+    { extension: 'mjs', write: esmFamily },
+    { extension: 'ts', write: typescript },
+  ])(
+    'builds and watches the sources of a .$extension config',
+    async ({ extension, write }) => {
+      const directory = path.join(tempDir, extension)
+      fs.mkdirSync(path.join(directory, 'tokens'), { recursive: true })
+      fs.writeFileSync(
+        path.join(directory, 'tokens', 'color.json'),
+        JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+      )
+
+      const configFile = path.join(directory, `sd.config.${extension}`)
+      fs.writeFileSync(configFile, write(directory))
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const plugin = vitePlugin({ config: configFile, silent: true })
+        const watched = await callBuildStart(plugin)
+
+        // The build half, which was never the broken one for the JSON family.
+        expect(
+          fs.readFileSync(path.join(directory, 'tokens.js'), 'utf-8'),
+        ).toContain('#0070f3')
+
+        // The half that was lost: the config file alone used to be the whole
+        // watch list, so editing a token rebuilt nothing.
+        expect(watched).toContain(posix(configFile))
+        expect(watched).toContain(
+          posix(path.join(directory, 'tokens', 'color.json')),
+        )
+
+        // And nothing was reported while that happened, which is what made it
+        // silent — the parse failure was logged and the build then said it had
+        // succeeded.
+        expect(errorSpy.mock.calls.map((call) => String(call[0]))).toEqual([])
+      } finally {
+        errorSpy.mockRestore()
+      }
+    },
+    30000,
+  )
+})

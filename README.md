@@ -20,7 +20,7 @@ build on Rolldown/tsdown) that both need tokens compiled ahead of them.
   rebuild-on-change is fully supported under Vite's dev server; other targets
   rebuild on change wherever the host bundler itself runs a persistent watch
   mode.
-- **Config flexibility**: Supports file paths (JSON, JS, MJS, CJS, TS),
+- **Config flexibility**: Supports file paths (JSON, JSON5, JSONC, JS, MJS, TS),
   configuration objects, or functions — including registering custom formats at
   config-resolution time.
 - **Atomic writes**: Every generated file is written to a temporary sibling and
@@ -105,6 +105,24 @@ module.exports = {
 _Note: that path needs Node 20.19+ or 22.12+, the versions that can `require` an
 ES module. Every Node release still in support clears it. Importing from ESM has
 no such floor._
+
+### Config File Formats
+
+A `config` path may be `.json`, `.json5`, `.jsonc`, `.js`, `.mjs` or `.ts`. The
+JSON family is parsed as JSON5, so comments and trailing commas are accepted in
+a `.json` file too — that is what Style Dictionary itself does, and the plugin
+reads the file the same way so the watch list and the build never disagree about
+what the configuration says.
+
+Two limits worth knowing before you pick one:
+
+- **A `.ts` config needs Node >= 22.18**, where type stripping is on by default.
+  Below that the build fails with `Could not import TypeScript file`. The
+  package's own engines floor is lower, so this is a per-config requirement
+  rather than a requirement of the plugin.
+- **`.cjs` is not supported.** Style Dictionary has no branch for that extension
+  and parses it as JSON5, which fails on the first `module`. Rename the file to
+  `.js` in a CommonJS package, or pass a configuration object.
 
 ### Multiple Configurations
 
