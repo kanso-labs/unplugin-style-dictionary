@@ -1903,3 +1903,73 @@ ${esmConfig(directory, false)}`,
     expect(fs.existsSync(path.join(directory, 'renamed.js'))).toBe(true)
   }, 30000)
 })
+
+// `watchChange` used to resolve every configuration before it asked whether
+// the changed file mattered, and under Vite the scope this hook sees is the
+// whole project root rather than the module graph. So every unrelated file a
+// dev server noticed ran the consumer's own `config` function — the place the
+// README tells them to register custom formats — and threw the answer away.
+describe('when a watched change is not a token source', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-filter-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  it('does not resolve the config for a file that matches nothing', async () => {
+    const directory = path.join(tempDir, 'filter')
+    fs.mkdirSync(path.join(directory, 'tokens'), { recursive: true })
+
+    const tokenSource = path.join(directory, 'tokens', 'color.json')
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+    )
+
+    // A file the plugin has no interest in, standing in for everything a dev
+    // server's watcher reports from the project root.
+    const unrelated = path.join(directory, 'notes.md')
+    fs.writeFileSync(unrelated, 'nothing to do with tokens\n')
+
+    let calls = 0
+    const plugin = vitePlugin({
+      config: () => {
+        calls += 1
+
+        return {
+          platforms: {
+            js: {
+              buildPath: posix(directory) + '/',
+              files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+              transformGroup: 'js',
+            },
+          },
+          source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+        }
+      },
+      silent: true,
+    })
+
+    await callBuildStart(plugin)
+    const afterBuild = calls
+    expect(afterBuild).toBeGreaterThan(0)
+
+    // A change the plugin does care about still costs a resolution, because a
+    // rebuild needs one — that is what makes the assertion below about the
+    // filter rather than about the function never running.
+    await callWatchChange(plugin, posix(tokenSource))
+    expect(calls).toBeGreaterThan(afterBuild)
+
+    const afterMatch = calls
+    for (let index = 0; index < 5; index += 1) {
+      await callWatchChange(plugin, posix(unrelated))
+    }
+
+    // Unpatched this is five: one full resolution per unrelated file, each of
+    // them running the consumer's function before discarding what it returned.
+    expect(calls - afterMatch).toBe(0)
+  }, 30000)
+})

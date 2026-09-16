@@ -149,6 +149,11 @@ including watch-triggered rebuilds under Vite — so the format is always
 registered before it's needed; re-registering the same format name on every
 rebuild is safe (Style Dictionary silently replaces the existing one).
 
+It runs for builds and for nothing else. A file change that matches no token
+source and no config file does not reach it, so a dev server editing unrelated
+project files leaves it alone — treat it as the place to prepare a build, not as
+a general file-change hook.
+
 ```typescript
 // Named `styleDictionaryPlugin` here to avoid colliding with the `StyleDictionary`
 // class imported from the `style-dictionary` package itself, below.
