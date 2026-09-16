@@ -357,6 +357,20 @@ export const unpluginFactory: UnpluginFactory<
   // on its own writes for as long as the dev server runs.
   const generatedDestinations = new Set<string>()
 
+  // The patterns the last `getWatchTargets` derived. `watchChange` tests a
+  // changed path against these before it resolves anything, so a file the
+  // plugin does not care about costs one glob match instead of a full config
+  // resolution — which, when `config` is a function, is the consumer's own
+  // code, and the place the README tells them to register custom formats.
+  //
+  // It is safe to filter on a list that may be one build out of date because
+  // the list always contains the config files themselves: an edit that adds a
+  // source matches as a config change, which re-resolves and re-derives. The
+  // one thing it cannot see is a `config` function that starts returning
+  // different sources with no file changing at all, and that was never
+  // observable without a rebuild to observe it in.
+  let cachedPatterns: string[] | undefined
+
   // Whether `watchChange` has fired since the last `buildStart`, and whether
   // anything has been compiled yet. Rollup, rolldown and webpack all run
   // `watchChange` for every changed file and only then re-enter `buildStart`
@@ -614,6 +628,10 @@ export const unpluginFactory: UnpluginFactory<
     }
 
     const patterns = Array.from(filesToWatch)
+
+    // Recorded here rather than at each call site, so every path that derives
+    // a watch list refreshes the one `watchChange` filters against.
+    cachedPatterns = patterns
 
     return { paths: await expandPatterns(patterns), patterns }
   }
@@ -1031,9 +1049,21 @@ export const unpluginFactory: UnpluginFactory<
       // was, the host is now on its way back into `buildStart`.
       watchRebuild = true
 
+      // The cheap half of the decision, taken before anything is resolved.
+      // Under Vite the scope this hook sees is the whole project root rather
+      // than the module graph, so most of what arrives here has nothing to do
+      // with tokens, and resolving every configuration only to discard the
+      // answer ran a consumer's `config` function once per unrelated file.
+      // Skipped until a build has derived a list to filter against.
+      if (cachedPatterns && !isWatchedSource(id, cachedPatterns)) return
+
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
 
+      // Derived again rather than trusted from the cache, because the cache
+      // is what decided this path was worth resolving and not what decides a
+      // rebuild. A config edit reaches here through its own filename and can
+      // have dropped the very source the cached list matched.
       const { patterns } = await getWatchTargets(resolved)
       // Without this check, watchChange fires for *any* changed file in the
       // host bundler's module graph — including our own generated output,
