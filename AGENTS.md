@@ -570,6 +570,23 @@ another, reintroduced one level up.
 persistent watch mode — `rolldown build` or `tsdown` with no `--watch` — gets no
 rebuild-on-change, and that is expected rather than a bug to fix.
 
+**What rolldown does with a token edit depends on the platform, so neither
+answer can be relied on.** `this.addWatchFile()` is accepted by rolldown 1.2.9
+either way, but what happens next is not the same everywhere: on macOS a file
+registered through it is watched by nothing, so a token edit reaches no hook at
+all, while on the Linux CI runner the same edit reached a rebuild and updated
+the generated file. Both were measured on this repository's own fixture — the
+macOS half with a bare probe plugin that saw no `watchChange` and no second
+`buildStart` for a file outside the module graph, and the Linux half as a CI
+failure of a test that had asserted the macOS behaviour.
+
+So do not write a test that asserts a token edit under `rolldown.watch()` either
+arrives or does not, and do not tell a consumer that rolldown watches tokens.
+What holds on both platforms is the module graph: the generated file is in it,
+so every regenerate is a change rolldown reacts to, and the guards that matter
+there are the ones stopping that from becoming a loop. `tests/targets.test.ts`
+asserts only that — an entry edit rebuilds and then settles.
+
 **`release_created` is compared against the string `'true'` on purpose.** The
 output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
