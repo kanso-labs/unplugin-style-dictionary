@@ -695,18 +695,90 @@ export const unpluginFactory: UnpluginFactory<
     }
   }
 
+  // The size-and-gzip table, in a function of its own so that the compile
+  // `try` in `runBuilds` can stop before it. Everything here is presentation
+  // over files Style Dictionary has already finished writing, so a throw from
+  // it is a reporting bug and nothing more.
+  const reportSizes = (generatedFiles: Set<string>) => {
+    const fileInfos: Array<{
+      coloredPath: string
+      gzipSizeStr: string
+      relativeDisplayPath: string
+      sizeStr: string
+    }> = []
+
+    for (const filePath of generatedFiles) {
+      if (fs.existsSync(filePath)) {
+        const displayPath = path.relative(root, filePath).replace(/\\/g, '/')
+        const dir = path.dirname(displayPath)
+        const base = path.basename(displayPath)
+        const coloredPath =
+          dir === '.'
+            ? `\x1b[32m${base}\x1b[0m`
+            : `\x1b[90m${dir}/\x1b[0m\x1b[32m${base}\x1b[0m`
+
+        try {
+          const stats = fs.statSync(filePath)
+          const bytes = stats.size
+          const sizeStr = `${(bytes / 1024).toFixed(2)} kB`
+
+          const content = fs.readFileSync(filePath)
+          const gzipBytes = zlib.gzipSync(content).length
+          const gzipSizeStr = `${(gzipBytes / 1024).toFixed(2)} kB`
+
+          fileInfos.push({
+            coloredPath,
+            gzipSizeStr,
+            relativeDisplayPath: displayPath,
+            sizeStr,
+          })
+        } catch {
+          // One unreadable destination costs its row rather than the table.
+          // Deliberately narrower than the caller's `catch`: it covers the
+          // three filesystem and gzip calls above and not the arithmetic
+          // below, so a padding bug is reported rather than quietly printing
+          // short.
+        }
+      }
+    }
+
+    if (fileInfos.length > 0) {
+      const longestPathLength = Math.max(
+        ...fileInfos.map((f) => f.relativeDisplayPath.length),
+        0,
+      )
+      const longestSizeLength = Math.max(
+        ...fileInfos.map((f) => f.sizeStr.length),
+        0,
+      )
+
+      for (const info of fileInfos) {
+        const pathPadding = ' '.repeat(
+          Math.max(2, longestPathLength - info.relativeDisplayPath.length + 2),
+        )
+        const sizePadded = info.sizeStr.padStart(longestSizeLength)
+        console.log(
+          `${info.coloredPath}${pathPadding}\x1b[90m${sizePadded} │ gzip: ${info.gzipSizeStr}\x1b[0m`,
+        )
+      }
+    }
+  }
+
   // Compile design tokens
   const runBuilds = async (
     resolvedConfigs: ResolvedConfig[],
     context?: string,
   ) => {
     const startTime = Date.now()
+
+    // Ahead of the `try` rather than inside it, because the reporting below
+    // reads it and that reporting is deliberately outside.
+    const generatedFiles = new Set<string>()
+
     try {
       if (!context) {
         log('Compiling design tokens...', 'info')
       }
-
-      const generatedFiles = new Set<string>()
 
       // Configurations are built one after another rather than with
       // `Promise.all`, and that is load-bearing. Two configurations may name
@@ -786,83 +858,6 @@ export const unpluginFactory: UnpluginFactory<
       for (const destination of generatedFiles) {
         generatedDestinations.add(destination.replace(/\\/g, '/'))
       }
-
-      const duration = Date.now() - startTime
-
-      if (context) {
-        log(
-          `Rebuilt design tokens due to change in ${context} (${duration}ms)`,
-          'success',
-        )
-      } else {
-        if (!quiet && generatedFiles.size > 0) {
-          const fileInfos: Array<{
-            coloredPath: string
-            gzipSizeStr: string
-            relativeDisplayPath: string
-            sizeStr: string
-          }> = []
-
-          for (const filePath of generatedFiles) {
-            if (fs.existsSync(filePath)) {
-              const displayPath = path
-                .relative(root, filePath)
-                .replace(/\\/g, '/')
-              const dir = path.dirname(displayPath)
-              const base = path.basename(displayPath)
-              const coloredPath =
-                dir === '.'
-                  ? `\x1b[32m${base}\x1b[0m`
-                  : `\x1b[90m${dir}/\x1b[0m\x1b[32m${base}\x1b[0m`
-
-              try {
-                const stats = fs.statSync(filePath)
-                const bytes = stats.size
-                const sizeStr = `${(bytes / 1024).toFixed(2)} kB`
-
-                const content = fs.readFileSync(filePath)
-                const gzipBytes = zlib.gzipSync(content).length
-                const gzipSizeStr = `${(gzipBytes / 1024).toFixed(2)} kB`
-
-                fileInfos.push({
-                  coloredPath,
-                  gzipSizeStr,
-                  relativeDisplayPath: displayPath,
-                  sizeStr,
-                })
-              } catch {
-                // Ignore errors reading individual files
-              }
-            }
-          }
-
-          if (fileInfos.length > 0) {
-            const longestPathLength = Math.max(
-              ...fileInfos.map((f) => f.relativeDisplayPath.length),
-              0,
-            )
-            const longestSizeLength = Math.max(
-              ...fileInfos.map((f) => f.sizeStr.length),
-              0,
-            )
-
-            for (const info of fileInfos) {
-              const pathPadding = ' '.repeat(
-                Math.max(
-                  2,
-                  longestPathLength - info.relativeDisplayPath.length + 2,
-                ),
-              )
-              const sizePadded = info.sizeStr.padStart(longestSizeLength)
-              console.log(
-                `${info.coloredPath}${pathPadding}\x1b[90m${sizePadded} │ gzip: ${info.gzipSizeStr}\x1b[0m`,
-              )
-            }
-          }
-        }
-
-        log(`Compiled successfully! (${duration}ms)`, 'success')
-      }
     } catch (err) {
       const duration = Date.now() - startTime
       log(
@@ -874,7 +869,46 @@ export const unpluginFactory: UnpluginFactory<
       // every target exiting 0 with the previous run's tokens still on disk
       // and in the bundle — a green build shipping stale values.
       if (failsTheBuild(context)) throw err
+
+      // Explicit, now that the reporting below sits outside the `try`. This
+      // `catch` used to end the function by falling off the end of it; a
+      // failure that is not rethrown would otherwise carry on to announce a
+      // compile that did not happen.
+      return
     }
+
+    // The `try` ends above, and everything from here down is reporting. Style
+    // Dictionary has finished writing by now and `generatedDestinations` is
+    // already replaced, so nothing below can put a file on disk in doubt —
+    // which is why a throw from it must not be caught as a compile failure.
+    // It used to be: a fault in the padding arithmetic printed `Compilation
+    // failed after 19ms` over a build whose every token file was correct, and
+    // with `failOnError` defaulting to `'build'` that stopped the bundler.
+    const duration = Date.now() - startTime
+
+    if (context) {
+      log(
+        `Rebuilt design tokens due to change in ${context} (${duration}ms)`,
+        'success',
+      )
+      return
+    }
+
+    if (!quiet && generatedFiles.size > 0) {
+      try {
+        reportSizes(generatedFiles)
+      } catch (err) {
+        // At `'error'`, so it is said at every level including `silent`,
+        // exactly as a compile failure is — and worded so it cannot be read
+        // as one. Not rethrown: the build succeeded.
+        log(
+          `Failed to report generated file sizes: ${errorMessage(err)}`,
+          'error',
+        )
+      }
+    }
+
+    log(`Compiled successfully! (${duration}ms)`, 'success')
   }
 
   // One rebuild per burst of watcher events, and never two at once.
