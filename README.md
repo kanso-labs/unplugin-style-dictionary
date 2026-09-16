@@ -16,10 +16,9 @@ build on Rolldown/tsdown) that both need tokens compiled ahead of them.
 - **Asynchronous builds**: Native support for Style Dictionary v4/v5 async
   compilation API.
 - **Automatic watching**: Reads the `source` and `include` patterns from your
-  Style Dictionary configurations and automatically watches them. Live
-  rebuild-on-change is fully supported under Vite's dev server; other targets
-  rebuild on change wherever the host bundler itself runs a persistent watch
-  mode.
+  Style Dictionary configurations and watches the files they match. What a
+  change then triggers depends on the target — see
+  [Watching, per target](#watching-per-target).
 - **Config flexibility**: Supports file paths (JSON, JSON5, JSONC, JS, MJS, TS),
   configuration objects, or functions — including registering custom formats at
   config-resolution time.
@@ -27,7 +26,10 @@ build on Rolldown/tsdown) that both need tokens compiled ahead of them.
   renamed into place, so code importing a token file while it is being rebuilt
   never reads a half-written file.
 - **Multi-configuration**: Can run multiple Style Dictionary configurations in
-  parallel (useful for multi-brand or multi-theme projects).
+  one build (useful for multi-brand or multi-theme projects). They are compiled
+  one after another on purpose, so two configurations may safely write to the
+  same destination; the platforms inside a single configuration are built
+  concurrently by Style Dictionary itself.
 - **TypeScript Support**: Fully written in TypeScript and exports complete type
   definitions.
 
@@ -81,10 +83,12 @@ export default {
 ```
 
 Rolldown (and tools built on it, like [tsdown](https://tsdown.dev/)) is
-typically run as a one-shot build rather than a long-lived dev server, so under
-this target the plugin compiles tokens once in `buildStart` rather than watching
-for changes. That's enough to guarantee generated token files exist before the
-rest of the build consumes them.
+typically run as a one-shot build rather than a long-lived dev server. There the
+plugin compiles tokens once in `buildStart`, which is enough to guarantee
+generated token files exist before the rest of the build consumes them.
+
+Under a real `rolldown.watch()`, do not rely on a token edit triggering a
+rebuild — see [Watching, per target](#watching-per-target).
 
 ### Rollup / Webpack
 
@@ -213,6 +217,37 @@ export default defineConfig({
   ],
 })
 ```
+
+## Watching, per target
+
+Every target compiles tokens before the build that consumes them. What a later
+change to a token file triggers is not the same everywhere, because it depends
+on what the host bundler does with the watch list the plugin registers.
+
+| Target       | Compiles before the build | Rebuilds on a token change     | Safe from rebuild loops |
+| ------------ | ------------------------- | ------------------------------ | ----------------------- |
+| **Vite**     | yes                       | yes, under the dev server      | yes                     |
+| **Rollup**   | yes                       | yes, under `rollup --watch`    | yes                     |
+| **Webpack**  | yes                       | yes, under `webpack --watch`   | yes                     |
+| **Rolldown** | yes                       | platform-dependent — see below | yes                     |
+
+Patterns and literal paths behave the same way wherever rebuilds happen at all.
+A `source` of `tokens/**/*.json` matches a file sitting directly in `tokens/` as
+well as one in a subdirectory, and a file created after the watcher started is
+picked up too.
+
+**Rolldown is the exception, and it is not about globs.** `this.addWatchFile()`
+is accepted by rolldown either way, and what happens next differs by platform:
+on macOS a file registered through it is watched by nothing, so a token edit
+reaches no hook, while on a Linux runner the same edit reaches a rebuild. Treat
+rolldown's watch mode as compiling once and not tracking tokens, and reach for a
+one-shot build or another target if you need rebuild-on-change.
+
+"Safe from rebuild loops" is worth stating because consuming code imports the
+generated file, so every regenerate is itself a change the host reacts to. The
+plugin subtracts its own output from the watch list, skips recompiling when a
+watch rebuild re-enters `buildStart`, and skips the write entirely when a
+rebuild renders bytes identical to what is already on disk.
 
 ## Where Paths Are Resolved From
 

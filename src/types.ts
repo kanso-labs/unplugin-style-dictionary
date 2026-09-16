@@ -4,12 +4,18 @@ import type { Config } from 'style-dictionary'
  * Options for the Style Dictionary unplugin factory, shared across all bundler
  * targets (Vite, Rolldown, Rollup, Webpack).
  *
- * Live rebuild-on-change is driven by the host bundler's watch mode. Vite's dev
- * server is handled explicitly and is the best-supported case. Other targets
- * rebuild on change only when the host bundler itself runs a persistent watch
- * mode (e.g. `rollup --watch`), since token source files sit outside the module
- * graph. A one-shot build (e.g. `tsdown`/`rolldown build` without `--watch`)
- * only builds once, in `buildStart`.
+ * Every target compiles tokens before the build that consumes them. Live
+ * rebuild-on-change is driven by the host bundler's watch mode, because token
+ * source files sit outside the module graph: Vite's dev server, `rollup
+ * --watch` and `webpack --watch` all rebuild on a token change, and a one-shot
+ * build (e.g. `tsdown`/`rolldown build` without `--watch`) only builds once, in
+ * `buildStart`.
+ *
+ * Rolldown's watch mode is the exception, and it is not about glob patterns.
+ * `addWatchFile` is accepted either way, but what happens next differs by
+ * platform — on macOS a file registered through it is watched by nothing, while
+ * on a Linux runner the same edit reaches a rebuild. Do not rely on a token
+ * edit triggering a rebuild there.
  */
 export interface UnpluginStyleDictionaryOptions {
   /**
@@ -104,9 +110,17 @@ export interface UnpluginStyleDictionaryOptions {
   silent?: boolean
 
   /**
-   * Additional files or glob patterns to watch.
-   * If config files are paths, those paths are watched automatically.
-   * By default, the plugin also parses 'source' and 'include' properties in configurations and watches them.
+   * Additional files or glob patterns to watch, on top of what is watched
+   * already: a `config` given as a path, and every file matched by the
+   * `source` and `include` patterns inside each configuration.
+   *
+   * Patterns are expanded to the paths they match before being registered,
+   * because the watchers in play take filenames rather than patterns. A
+   * pattern's own directory is registered alongside them, so a token file
+   * created later is noticed too.
+   *
+   * What a change to a watched file then triggers is the host's to decide —
+   * see the interface documentation above.
    */
   watch?: string | string[]
 }
