@@ -1479,6 +1479,8 @@ const countRebuildLines = (spy: MockInstance<typeof console.log>) =>
     String(call[0]).includes('Rebuilt design tokens'),
   ).length
 
+const posix = (value: string) => value.replace(/\\/g, '/')
+
 const settle = async (ms: number) => {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -1752,4 +1754,152 @@ describe('under a real rollup watcher', () => {
       await watcher.close()
     }
   }, 40000)
+})
+
+// Editing a `.js`, `.mjs` or `.ts` config while a watcher is live used to
+// change nothing about what got built, and the plugin logged a successful
+// rebuild anyway. Style Dictionary imports a config path with no cache-busting
+// query, and Node's ESM cache is permanent, so in a long-lived process the
+// module was evaluated once and never read again — while the watch list, which
+// did bust the cache, followed the edit. The two halves disagreed about what
+// the config said.
+describe('when the config file itself changes', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-config-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // A directory of its own per case, because the module cache is keyed on the
+  // file path: two cases sharing one config filename would share its module
+  // record, and the second would read whatever the first left behind.
+  const fixtureDirectory = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(path.join(directory, 'tokens'), { recursive: true })
+
+    fs.writeFileSync(
+      path.join(directory, 'tokens', 'color.json'),
+      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+    )
+
+    return directory
+  }
+
+  // The js platform on its own, then the same config renamed and with a css
+  // platform beside it — an edit that is invisible in the output unless the
+  // build read the file again.
+  const esmConfig = (directory: string, edited: boolean) => {
+    const platforms = edited
+      ? `js: { transformGroup: 'js', buildPath: '${posix(directory)}/', files: [{ destination: 'renamed.js', format: 'javascript/es6' }] },
+      css: { transformGroup: 'css', buildPath: '${posix(directory)}/', files: [{ destination: 'vars.css', format: 'css/variables' }] },`
+      : `js: { transformGroup: 'js', buildPath: '${posix(directory)}/', files: [{ destination: 'tokens.js', format: 'javascript/es6' }] },`
+
+    return `export default {
+      source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
+      platforms: { ${platforms} },
+    }
+`
+  }
+
+  it('builds what an edited .mjs config says, not what it said at startup', async () => {
+    const directory = fixtureDirectory('esm')
+    const configFile = path.join(directory, 'sd.config.mjs')
+    fs.writeFileSync(configFile, esmConfig(directory, false))
+
+    const plugin = vitePlugin({ config: configFile, silent: true })
+    await callBuildStart(plugin)
+
+    expect(fs.existsSync(path.join(directory, 'tokens.js'))).toBe(true)
+
+    // Far enough apart that the edit lands on a different mtime, which is what
+    // the import query is keyed on.
+    await settle(20)
+    fs.writeFileSync(configFile, esmConfig(directory, true))
+
+    await callWatchChange(plugin, posix(configFile))
+
+    // Unpatched, both of these are missing and the rebuild is logged as a
+    // success: the module cache served the platform map from start-up.
+    expect(fs.existsSync(path.join(directory, 'renamed.js'))).toBe(true)
+    expect(fs.existsSync(path.join(directory, 'vars.css'))).toBe(true)
+    expect(
+      fs.readFileSync(path.join(directory, 'vars.css'), 'utf-8'),
+    ).toContain('#0070f3')
+  }, 30000)
+
+  it('evaluates an unchanged ESM config once however many events arrive', async () => {
+    const directory = fixtureDirectory('once')
+    const configFile = path.join(directory, 'sd.config.mjs')
+    const evaluations = path.join(directory, 'evaluations.log')
+
+    // The side effect stands in for the `registerFormat` calls a real config
+    // makes at import time, and it is recorded outside the module because
+    // every re-evaluation is a fresh instance with its own module scope.
+    fs.writeFileSync(
+      configFile,
+      `import fs from 'node:fs'
+fs.appendFileSync('${posix(evaluations)}', 'x')
+${esmConfig(directory, false)}`,
+    )
+
+    const plugin = vitePlugin({ config: configFile, silent: true })
+    await callBuildStart(plugin)
+
+    const tokenSource = posix(path.join(directory, 'tokens', 'color.json'))
+    for (let index = 0; index < 5; index += 1) {
+      // Spaced past a millisecond, so a `Date.now()` key would be a distinct
+      // key rather than a collision.
+      await settle(5)
+      await callWatchChange(plugin, tokenSource)
+    }
+
+    // Unpatched this is two, and the second one is the point: Style Dictionary
+    // imported the config file itself, beside the copy this plugin had already
+    // imported to build the watch list. One file, two module records, two runs
+    // of whatever the config does at import time.
+    //
+    // Two rather than seven because of where this runs. Under plain Node the
+    // same fixture reaches seven, since the old `?t=${Date.now()}` key made
+    // every watcher event a new module record in a map nothing prunes. Vitest
+    // serves this plugin's own imports through Vite's module runner, which
+    // caches by file and invalidates on change, so the growth is invisible
+    // here — which is why the count is pinned at one rather than at a delta.
+    expect(fs.readFileSync(evaluations, 'utf-8')).toBe('x')
+  }, 30000)
+
+  it('still picks up an edited .json config', async () => {
+    const directory = fixtureDirectory('json')
+    const configFile = path.join(directory, 'sd.config.json')
+
+    const jsonConfig = (destination: string) =>
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: posix(directory) + '/',
+            files: [{ destination, format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      })
+
+    fs.writeFileSync(configFile, jsonConfig('tokens.js'))
+
+    const plugin = vitePlugin({ config: configFile, silent: true })
+    await callBuildStart(plugin)
+
+    expect(fs.existsSync(path.join(directory, 'tokens.js'))).toBe(true)
+
+    await settle(20)
+    fs.writeFileSync(configFile, jsonConfig('renamed.js'))
+
+    await callWatchChange(plugin, posix(configFile))
+
+    // The control: a `.json` path is still handed to Style Dictionary as a
+    // path, so this half has to keep working unchanged.
+    expect(fs.existsSync(path.join(directory, 'renamed.js'))).toBe(true)
+  }, 30000)
 })

@@ -265,6 +265,12 @@ const atomicVolume = Object.create(fs, {
 // distinguishable from a pattern, and would not be matchable either.
 const GLOB_CHARACTERS = /[!*?[\]{}]/
 
+// The config extensions Style Dictionary loads with `import` rather than by
+// parsing the file — the `case` list in its own `loadFile`. They are the only
+// ones Node's permanent module cache applies to, and so the only ones this
+// plugin has to read on the build's behalf.
+const IMPORTED_CONFIG_EXTENSIONS = ['.js', '.mjs', '.ts']
+
 // A configuration as `resolveConfigs` hands it on: either the object the
 // consumer passed or the path it was read from, plus the directory relative
 // paths inside it resolve against.
@@ -477,6 +483,75 @@ export const unpluginFactory: UnpluginFactory<
     })
   }
 
+  // Imports a config module, re-evaluating it only when the file itself has
+  // changed. The query string is what decides that, and it is not decoration:
+  // Node's ESM cache is permanent and keyed on the specifier, so a config
+  // imported without one is evaluated once and never read again — which is
+  // how an edited `.mjs` config went on building the platform map the process
+  // started with, for the rest of the session.
+  //
+  // `Date.now()` fixed that staleness and bought two problems. Every watcher
+  // event registered another module record in a map nothing prunes, re-running
+  // the config's own `registerFormat` side effects for a file nobody touched.
+  // And its millisecond granularity meant an edit landing inside the same
+  // millisecond as the previous import shared that import's key, and was
+  // served the old module anyway. `mtimeMs` carries sub-millisecond
+  // resolution and only moves when the file does.
+  const importConfigModule = async (file: string): Promise<unknown> => {
+    let version: number
+    try {
+      version = fs.statSync(file).mtimeMs
+    } catch {
+      // A config that cannot be stat'd is about to fail its import too. The
+      // old key is what keeps that failure the import's to report.
+      version = Date.now()
+    }
+
+    // Sequential on purpose: a config module runs arbitrary code at import
+    // time — `registerFormat` and friends — and Style Dictionary's registries
+    // are global, so importing several at once would interleave those
+    // registrations.
+    return unwrapDefault(
+      await import(`${pathToFileURL(file).href}?t=${version}`),
+    )
+  }
+
+  // What a configuration item says, as an object. `report` is what stops the
+  // two readers of this from saying the same thing twice: a bad config has
+  // nowhere else to surface when the watch list is being built, while a build
+  // falls back to handing Style Dictionary the path and lets its message
+  // through instead.
+  const readConfigObject = async (
+    item: ResolvedConfig,
+    report: boolean,
+  ): Promise<Config | null> => {
+    if (typeof item.config !== 'string') return item.config
+
+    try {
+      const loaded: unknown = item.config.endsWith('.json')
+        ? JSON.parse(fs.readFileSync(item.config, 'utf-8'))
+        : await importConfigModule(item.config)
+
+      if (isConfig(loaded)) return loaded
+
+      if (report) {
+        log(
+          `Config file did not resolve to a configuration object: ${item.config}`,
+          'error',
+        )
+      }
+    } catch (err) {
+      if (report) {
+        log(
+          `Failed to parse config file: ${item.config}. Error: ${errorMessage(err)}`,
+          'error',
+        )
+      }
+    }
+
+    return null
+  }
+
   // Parse token files to watch
   const getWatchTargets = async (
     resolvedConfigs: ResolvedConfig[],
@@ -488,40 +563,7 @@ export const unpluginFactory: UnpluginFactory<
         filesToWatch.add(item.file.replace(/\\/g, '/'))
       }
 
-      let configObj: Config | null = null
-
-      if (typeof item.config === 'string') {
-        try {
-          let loaded: unknown
-
-          if (item.config.endsWith('.json')) {
-            loaded = JSON.parse(fs.readFileSync(item.config, 'utf-8'))
-          } else {
-            const fileUrl = pathToFileURL(item.config).href
-            // Sequential on purpose: a config module runs arbitrary code at
-            // import time — `registerFormat` and friends — and Style
-            // Dictionary's registries are global, so importing several at
-            // once would interleave those registrations.
-            loaded = unwrapDefault(await import(`${fileUrl}?t=${Date.now()}`))
-          }
-
-          if (isConfig(loaded)) {
-            configObj = loaded
-          } else {
-            log(
-              `Config file did not resolve to a configuration object: ${item.config}`,
-              'error',
-            )
-          }
-        } catch (err) {
-          log(
-            `Failed to parse config file: ${item.config}. Error: ${errorMessage(err)}`,
-            'error',
-          )
-        }
-      } else {
-        configObj = item.config
-      }
+      const configObj = await readConfigObject(item, true)
 
       if (configObj) {
         const addPattern = (pattern: unknown) => {
@@ -576,6 +618,48 @@ export const unpluginFactory: UnpluginFactory<
     return { paths: await expandPatterns(patterns), patterns }
   }
 
+  // What `new StyleDictionary` is handed for an item. Only a path in the JS
+  // family becomes an object, because those are exactly the extensions Style
+  // Dictionary's own `loadFile` reaches with `import` — the ones whose module
+  // record Node then caches forever, and so the only ones a build could read
+  // stale. Anything else stays a path, so which formats load and how they are
+  // parsed is left exactly as it was: `.json` is JSON5 there and `JSON.parse`
+  // here, and handing over the narrower reading would reject a configuration
+  // that builds today.
+  const configForBuild = async (
+    item: ResolvedConfig,
+  ): Promise<Config | string> => {
+    const { config } = item
+
+    if (
+      typeof config !== 'string' ||
+      !IMPORTED_CONFIG_EXTENSIONS.some((extension) =>
+        config.endsWith(extension),
+      )
+    ) {
+      return config
+    }
+
+    const loaded = await readConfigObject(item, false)
+
+    // A config that could not be read falls back to the path, so the failure
+    // stays Style Dictionary's to report — it knows more about why an import
+    // failed than this does, a `.ts` config without type stripping especially.
+    if (!loaded) return item.config
+
+    // `loadFile` clones what it imports before handing it on, and passing an
+    // object skips that. It matters more here than it does there: the module
+    // record now outlives the build, and `extend` is called with
+    // `mutateOriginal`. Cloning throws on a config carrying functions — an
+    // inline transform — and Style Dictionary's own fallback in that case is
+    // to use the original, so this one matches it.
+    try {
+      return structuredClone(loaded)
+    } catch {
+      return loaded
+    }
+  }
+
   // Compile design tokens
   const runBuilds = async (
     resolvedConfigs: ResolvedConfig[],
@@ -605,7 +689,15 @@ export const unpluginFactory: UnpluginFactory<
         // `buildStart` that never settles. `await sd.hasInitialized` cannot
         // observe it either, since that promise is only ever resolved, at the
         // tail of a successful extend.
-        const sd = new StyleDictionary(item.config, { init: false })
+        //
+        // It is handed the configuration as an object rather than as a path
+        // for the same reason: Style Dictionary imports a path with no
+        // cache-busting query of its own, so under a long-lived dev server
+        // every rebuild after the first built the config the process started
+        // with while the watch list followed the edit.
+        const sd = new StyleDictionary(await configForBuild(item), {
+          init: false,
+        })
 
         // One initialisation rather than two. `init()` is `extend()` with
         // `mutateOriginal`, so the old pair loaded the configuration and
