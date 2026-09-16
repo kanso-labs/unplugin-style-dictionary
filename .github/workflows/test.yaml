@@ -29,6 +29,34 @@ jobs:
       - name: Run tests
         run: npm run test:coverage
 
+      # The floor in `engines.node`, exercised rather than asserted. Language
+      # drift is already caught — `tsconfig.lib.json` pins `lib: ["ES2022"]`,
+      # so a newer syntax or global is a compile error. What gets through is a
+      # Node API that @types/node declares and an older runtime does not have:
+      # `module.stripTypeScriptTypes` type-checks and is `undefined` on 22.12.
+      #
+      # A second step inside this job rather than a matrix or a job of its own.
+      # A matrix would append its value to the check name — this repository's
+      # CodeQL job reports as `Analyze (actions)` and
+      # `Analyze (javascript-typescript)` for exactly that reason — and ruleset
+      # 19123565 requires `Test` by exact string, so the required check would
+      # never arrive and the pull request would read as hanging. A separate job
+      # fails the other way: a name nothing requires is free to go red without
+      # stopping a merge.
+      - name: Set up Node on the supported floor
+        uses: kanso-labs/github-actions/actions/setup-node@v3.3.1
+        with:
+          ignore-scripts: true
+          node-version-file: .github/node-version-floor
+
+      # Coverage is not re-measured here, so this leg runs `npm test` rather
+      # than `npm run test:coverage`. The thresholds are pinned against a
+      # single measurement, and the report uploaded below is the one already
+      # written by the step above — nothing after this point reads node_modules
+      # or the version of Node on PATH.
+      - name: Run tests on the supported floor
+        run: npm test
+
       - name: Upload coverage report
         uses: actions/upload-code-coverage@v1.4.2
         with:
