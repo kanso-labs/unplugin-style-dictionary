@@ -379,11 +379,26 @@ The body has these sections, in this order, and no headings:
 milestone and labels are what `gh issue edit` changes later. The rest is
 GraphQL:
 
-- **Priority and Effort** go through `setIssueFieldValue`, one call per field,
-  with the issue's node id and the option's id. The field and option ids are the
+- **Priority and Effort go through `setIssueFieldValue`, both in one call.** It
+  takes the issue's node id as `issueId` and a required `issueFields` list,
+  where each entry carries a `fieldId` and one of `singleSelectOptionId`,
+  `textValue`, `dateValue`, `numberValue`, `multiSelectOptionIds` or `delete`.
+  Two fields are therefore two entries rather than two mutations:
+
+  ```graphql
+  setIssueFieldValue(input: {issueId: $issue, issueFields: [
+    {fieldId: "IFSS_kgDOAh5jjg", singleSelectOptionId: "IFSSO_kgDOA7UWUg"},
+    {fieldId: "IFSS_kgDOAh5jkQ", singleSelectOptionId: "IFSSO_kgDOA7UWWA"}
+  ]}) { clientMutationId }
+  ```
+
+  An earlier schema took `fieldId` and `value` beside `issueId`, and that form
+  is now rejected before it runs — `Argument 'issueFields' … is required`, and
+  `doesn't accept argument 'fieldId'`. The field and option ids are the
   repository's:
   `repository { issueFields(first: 10) { nodes { ... on IssueFieldSingleSelect { id name options { id name } } } } }`
   lists them.
+
 - **The project item** comes from `addProjectV2ItemById` with the project's id
   and the issue's node id, and its five fields from
   `updateProjectV2ItemFieldValue` with the item id, the field id and the option
@@ -392,9 +407,11 @@ GraphQL:
 **Project fields are GraphQL-only, and that budget is small.** There is no REST
 route to a project item, and GraphQL allows 5,000 points an hour against a limit
 that is separate from REST's — so a bulk edit over the board is the one thing
-here that can run out of road halfway. Set every field an item needs in **one
-mutation with aliased `updateProjectV2ItemFieldValue` calls** rather than one
-per field; it is the difference between five points an item and one, and the
+here that can run out of road halfway. Both halves batch, so the seven
+single-select fields an item carries take two mutations rather than seven: one
+`setIssueFieldValue` holding both native fields in its `issueFields` list, and
+**one mutation with aliased `updateProjectV2ItemFieldValue` calls** for the five
+project ones. It is the difference between seven points an item and two, and the
 limit, once hit, locks out every GraphQL call including the reads that would
 tell you what landed.
 
