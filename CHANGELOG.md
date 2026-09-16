@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.3](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.5.2...unplugin-style-dictionary-v0.5.3) (2026-09-16)
+
+
+### Bug Fixes
+
+* **build:** do not fail the build when the size reporter throws ([#261](https://github.com/kanso-labs/unplugin-style-dictionary/issues/261)) ([cf32177](https://github.com/kanso-labs/unplugin-style-dictionary/commit/cf3217776abfac74177b018e48ed58457af23446))
+* **package:** narrow engines.node to the intersection of its peers ([#262](https://github.com/kanso-labs/unplugin-style-dictionary/issues/262)) ([425c475](https://github.com/kanso-labs/unplugin-style-dictionary/commit/425c475c7117f89aa84f77c7c3c165f42a8a7fbe))
+
 ## [0.5.2](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.5.1...unplugin-style-dictionary-v0.5.2) (2026-09-16)
 
 
