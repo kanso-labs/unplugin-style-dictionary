@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.5.3...unplugin-style-dictionary-v0.6.0) (2026-09-17)
+
+
+### Features
+
+* **types:** export the options type from every target entry ([#268](https://github.com/kanso-labs/unplugin-style-dictionary/issues/268)) ([8dbea55](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8dbea55cd9419ee455ae031cd45472b22005b37f))
+
+
+### Performance Improvements
+
+* **build:** share one compile between bundler instances in a process ([#271](https://github.com/kanso-labs/unplugin-style-dictionary/issues/271)) ([2699318](https://github.com/kanso-labs/unplugin-style-dictionary/commit/269931885823212ce0dfd58928b4774aef111208))
+
 ## [0.5.3](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.5.2...unplugin-style-dictionary-v0.5.3) (2026-09-16)
 
 
