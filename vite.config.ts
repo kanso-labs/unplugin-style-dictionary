@@ -38,9 +38,10 @@ export default defineConfig({
     // rather than replacing them: `exclude` overrides wholesale, and dropping
     // `**/node_modules/**` would run every dependency's tests.
     exclude: [...configDefaults.exclude, '**/.claude/**'],
-    // The file `Upload test results to Codecov` hands over. It goes in a
-    // directory of its own beside `coverage/`, so the two reports this job
-    // produces sit next to each other and one gitignore entry covers each.
+    // The file `Upload test results to Codecov` hands over. It goes under
+    // `.vitest/`, named for the tool that writes it the way `.vite/` beside it
+    // in `.gitignore` already is, so one ignored directory covers this report
+    // and anything Vitest writes next to it.
     //
     // `default` stays in the reporter list so the job log still reads the
     // same — a bare `--reporter=junit` replaces the console output rather
@@ -51,7 +52,7 @@ export default defineConfig({
     // Codecov instead of being hidden by the passing run before it. Coverage
     // is the other way round, measured once on the first leg and left alone,
     // because the floor leg does not re-measure it.
-    outputFile: { junit: 'test-results/junit.xml' },
+    outputFile: { junit: '.vitest/test-results.junit.xml' },
     reporters: ['default', 'junit'],
   },
 })
