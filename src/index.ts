@@ -11,7 +11,10 @@ import StyleDictionary from 'style-dictionary'
 import { glob } from 'tinyglobby'
 import { createUnplugin } from 'unplugin'
 
-import type { UnpluginStyleDictionaryOptions } from './types.js'
+import type {
+  StyleDictionaryConfigContext,
+  UnpluginStyleDictionaryOptions,
+} from './types.js'
 
 import { matchesWatchedFile } from './watch-filter.js'
 
@@ -487,6 +490,38 @@ const unpluginFactory: UnpluginFactory<
   const failsTheBuild = (context: string | undefined): boolean =>
     failOnError === true ||
     (context === undefined ? failOnError === 'build' : failOnError === 'serve')
+  // What the host is doing, for the function form of `config`. Populated where
+  // each host knows the answer and read when that function is called — the
+  // same shape as `root` and the message host above, and for the same reason:
+  // `resolveConfigs` is reached from five places now, and threading a context
+  // parameter through all five would make every caller restate what only the
+  // host can say.
+  let hostCommand: 'build' | 'serve' = 'build'
+  let hostMode: string | undefined
+  let isWatching = false
+
+  // `mode` is derived rather than invented where a host has no notion of one.
+  // rollup and rolldown report nothing, and following `command` is the answer
+  // Vite itself would give: its default mode is `development` serving and
+  // `production` building.
+  const configContext = (): StyleDictionaryConfigContext => ({
+    command: hostCommand,
+    mode: hostMode ?? (hostCommand === 'serve' ? 'development' : 'production'),
+    watch: isWatching,
+  })
+
+  // Whether the host will keep rebuilding, as the plugin context reports it.
+  // Read from `meta.watchMode`, which rollup, rolldown and Vite all carry and
+  // webpack does not — there it comes off the compiler instead.
+  const adoptWatchMode = (context: object): void => {
+    const hookMeta: unknown = 'meta' in context ? context.meta : undefined
+    if (typeof hookMeta !== 'object' || hookMeta === null) return
+
+    const watching: unknown =
+      'watchMode' in hookMeta ? hookMeta.watchMode : undefined
+    if (typeof watching === 'boolean') isWatching = watching
+  }
+
   // Where a relative `config` path is looked up. The host sets it below
   // unless the consumer named one, which is why an explicit option wins: a
   // layout the host cannot describe is exactly what it is for.
@@ -725,7 +760,7 @@ const unpluginFactory: UnpluginFactory<
 
     // Evaluate function if provided
     if (typeof rawConfig === 'function') {
-      rawConfig = await rawConfig()
+      rawConfig = await rawConfig(configContext())
     }
 
     const configs = Array.isArray(rawConfig) ? rawConfig : [rawConfig]
@@ -1544,6 +1579,7 @@ const unpluginFactory: UnpluginFactory<
   return {
     async buildStart() {
       adoptHost(this)
+      adoptWatchMode(this)
 
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
@@ -1595,6 +1631,11 @@ const unpluginFactory: UnpluginFactory<
       configResolved(config) {
         if (rootOption === undefined) root = config.root || process.cwd()
 
+        // The only host that has both. `command` is what makes `'serve'`
+        // reachable at all, since nothing else here serves.
+        hostCommand = config.command
+        hostMode = config.mode
+
         // Vite's own logger, so the plugin's lines obey `customLogger` and
         // `clearScreen` like every other line the dev server prints. It
         // colours and prefixes its own output, which is why nothing painted
@@ -1610,6 +1651,14 @@ const unpluginFactory: UnpluginFactory<
       },
 
       async configureServer(server: ViteDevServer) {
+        // A dev server watches, by definition. Said here rather than left to
+        // `adoptWatchMode` because this hook runs *before* `buildStart` —
+        // `createServer` calls it, and `buildStart` waits for the plugin
+        // container — so the first `config` function of the process would
+        // otherwise be told `watch: false` while a dev server started up
+        // around it.
+        isWatching = true
+
         const resolved = await resolveConfigs()
         if (resolved.length === 0) return
 
@@ -1687,6 +1736,7 @@ const unpluginFactory: UnpluginFactory<
     // oxlint-disable-next-line typescript/no-misused-promises
     async watchChange(id) {
       adoptHost(this)
+      adoptWatchMode(this)
 
       // Raised before any decision about `id`, because whatever this change
       // was, the host is now on its way back into `buildStart`.
@@ -1736,6 +1786,12 @@ const unpluginFactory: UnpluginFactory<
       if (rootOption === undefined) {
         root = compiler.options.context ?? process.cwd()
       }
+
+      // webpack's `buildStart` context carries no `meta`, so neither half of
+      // the build context can come from there. `mode` is a webpack option, and
+      // `watchMode` is only true once `watch()` has been called — which is
+      // after this runs, so it is read per compile below rather than here.
+      hostMode = compiler.options.mode
 
       // The compile happens in `beforeCompile`, which webpack awaits *before*
       // the compilation exists — so a message from it has nothing to attach to
@@ -1787,6 +1843,8 @@ const unpluginFactory: UnpluginFactory<
       compiler.hooks.beforeCompile.tapPromise(
         'unplugin-style-dictionary',
         async () => {
+          isWatching = compiler.watchMode
+
           const resolved = await resolveConfigs()
           if (resolved.length === 0) return
 

@@ -8,6 +8,8 @@ import * as rollup from 'rollup'
 import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { StyleDictionaryConfigContext } from '../src/types.ts'
+
 import packageJson from '../package.json' with { type: 'json' }
 import rollupPlugin from '../src/rollup.ts'
 import vitePlugin from '../src/vite.ts'
@@ -15,6 +17,11 @@ import { matchesWatchedFile } from '../src/watch-filter.ts'
 
 interface BuildContext {
   addWatchFile: (id: string) => void
+
+  // What rollup, rolldown and Vite all hand a hook, and webpack does not. Only
+  // the cases asserting on watch mode set it; leaving it off is what a host
+  // reporting nothing looks like.
+  meta?: { watchMode?: boolean }
 }
 
 type PluginHook<A extends unknown[]> = (
@@ -2285,6 +2292,125 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     })
   })
+
+  // The function form of `config` took no arguments, so a consumer could not
+  // vary what got built by what the bundler was doing — no way to skip an
+  // expensive platform under the dev server and build it on `vite build`, and
+  // no way to branch on mode. Reading `process.env` and hoping was the only
+  // workaround.
+  describe('the context a config function is handed', () => {
+    it('reports a one-shot build', async () => {
+      const seen: StyleDictionaryConfigContext[] = []
+
+      await callBuildStart(
+        vitePlugin({
+          config: (context) => {
+            seen.push(context)
+
+            return {
+              platforms: {
+                css: {
+                  buildPath: tempDir.replace(/\\/g, '/') + '/',
+                  files: [{ destination: 'vars.css', format: 'css/variables' }],
+                  transformGroup: 'css',
+                },
+              },
+              source: [tokenFile.replace(/\\/g, '/')],
+            }
+          },
+          logLevel: 'silent',
+        }),
+      )
+
+      expect(seen).toHaveLength(1)
+      expect(seen[0]?.command).toBe('build')
+
+      // Derived from `command` rather than invented: the unit-test context is
+      // not Vite's, so no host reported a mode, and `production` is the answer
+      // Vite itself gives a build.
+      expect(seen[0]?.mode).toBe('production')
+
+      // The stub context carries no `meta`, which is also what a host offering
+      // no watch mode looks like.
+      expect(seen[0]?.watch).toBe(false)
+
+      expect(fs.existsSync(outputFile)).toBe(true)
+    })
+
+    it('reports watch mode when the host says so', async () => {
+      // `meta.watchMode` is what rollup, rolldown and Vite all carry, and the
+      // reason `watch` is read from the host rather than inferred from
+      // `command`: `rollup --watch` both watches and builds.
+      const seen: StyleDictionaryConfigContext[] = []
+
+      const plugin = vitePlugin({
+        config: (context) => {
+          seen.push(context)
+
+          return {
+            platforms: {
+              css: {
+                buildPath: tempDir.replace(/\\/g, '/') + '/',
+                files: [{ destination: 'vars.css', format: 'css/variables' }],
+                transformGroup: 'css',
+              },
+            },
+            source: [tokenFile.replace(/\\/g, '/')],
+          }
+        },
+        logLevel: 'silent',
+      })
+
+      if (!isPluginHook<[]>(plugin.buildStart)) {
+        throw new TypeError('buildStart is not a callable hook')
+      }
+
+      const bound: BuildContext = {
+        addWatchFile: () => {},
+        meta: { watchMode: true },
+      }
+      await plugin.buildStart.call(bound)
+
+      expect(seen).toHaveLength(1)
+      expect(seen[0]?.watch).toBe(true)
+
+      // Still a build: watching and serving are different questions.
+      expect(seen[0]?.command).toBe('build')
+    })
+
+    it('still accepts a function that takes no arguments', async () => {
+      // The compatibility claim, exercised rather than asserted about:
+      // TypeScript assigns a function of fewer parameters to a type declaring
+      // more, and JavaScript ignores the extra argument. This case fails to
+      // compile if that ever stops being true.
+      let called = 0
+
+      await callBuildStart(
+        vitePlugin({
+          config: () => {
+            called++
+
+            return {
+              platforms: {
+                css: {
+                  buildPath: tempDir.replace(/\\/g, '/') + '/',
+                  files: [{ destination: 'vars.css', format: 'css/variables' }],
+                  transformGroup: 'css',
+                },
+              },
+              source: [tokenFile.replace(/\\/g, '/')],
+            }
+          },
+          logLevel: 'silent',
+        }),
+      )
+
+      expect(called).toBe(1)
+      expect(fs.readFileSync(outputFile, 'utf-8')).toContain(
+        '--color-primary: #0070f3;',
+      )
+    })
+  })
 })
 
 // Nothing pinned the exports map, and two of the ways it breaks leave every
@@ -3676,10 +3802,11 @@ describe('the options type on every target entry', () => {
 // the wrapping in both files and wraps a Markdown fence differently from a
 // TypeScript source. What has to match is the text, not the column it breaks
 // at.
-// Everything from the interface's own JSDoc to the end of the file. The
-// `import type` line above it is noise in a README, and this is the one place
-// that decides where the block starts — the README section is produced by
-// slicing `src/types.ts` at exactly this point.
+// Everything from the first JSDoc block to the end of the file, which is both
+// exported interfaces — the options and the build context handed to the
+// function form of `config`. The `import type` line above is noise in a
+// README, and this is the one place that decides where the block starts — the
+// README section is produced by slicing `src/types.ts` at exactly this point.
 const optionsContract = () => {
   const source = fs.readFileSync(
     new URL('../src/types.ts', import.meta.url),
