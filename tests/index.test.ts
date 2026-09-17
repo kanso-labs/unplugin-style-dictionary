@@ -473,17 +473,31 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     }
 
-    const results = await Promise.allSettled(
-      Array.from({ length: 3 }, async () =>
-        callBuildStart(vitePlugin({ config, silent: true })),
-      ),
-    )
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    expect(results.map((result) => result.status)).toEqual([
-      'rejected',
-      'rejected',
-      'rejected',
-    ])
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 3 }, async () =>
+          callBuildStart(vitePlugin({ config, silent: true })),
+        ),
+      )
+
+      expect(results.map((result) => result.status)).toEqual([
+        'rejected',
+        'rejected',
+        'rejected',
+      ])
+
+      // Reported once rather than once per waiter, which is the other half of
+      // sharing a compile: three instances failed, and the failure is one
+      // event because the compile was.
+      const failures = errorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((message) => message.includes('Compilation failed after'))
+      expect(failures).toHaveLength(1)
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 
   it('does not share a compile between two different configurations', async () => {
@@ -1457,6 +1471,12 @@ describe('unplugin-style-dictionary (vite target)', () => {
       process.on('unhandledRejection', recordRejection)
 
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      // Style Dictionary warns on its own account for an extension it does
+      // not recognise — `.cjs` here — and that goes to `console.warn`, which
+      // the error spy above never covered.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
       try {
         const plugin = vitePlugin({ config: brokenConfigFile })
 
@@ -1477,6 +1497,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
         ).toBe(true)
       } finally {
         errorSpy.mockRestore()
+        warnSpy.mockRestore()
         process.off('unhandledRejection', recordRejection)
       }
     },

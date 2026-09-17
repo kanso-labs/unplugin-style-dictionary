@@ -4,7 +4,7 @@ import path from 'node:path'
 import * as rolldown from 'rolldown'
 import * as rollup from 'rollup'
 import * as vite from 'vite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import webpack from 'webpack'
 
 import rolldownPlugin from '../src/rolldown.ts'
@@ -226,13 +226,34 @@ describe('every target compiles tokens through its own bundler', () => {
         config: '{ "platforms": {',
       })
 
-      // Settling at all is half the assertion — a configuration that rejects a
-      // promise nobody holds is what used to leave a host building forever —
-      // and rejecting is the other half, since a broken token set must not
-      // pass for a successful build on any target.
-      await expect(build(directory, configFile)).rejects.toThrow(
-        /JSON5|invalid|Failed to load/i,
-      )
+      // Captured rather than left to the terminal. The plugin reports a
+      // failed compile at every level by design, so a test that provokes one
+      // prints two red lines per target — sixteen across this file and its
+      // neighbours — and a real failure in a CI log is then something a
+      // reader has to pick out of the ones that were asked for.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      try {
+        // Settling at all is half the assertion — a configuration that
+        // rejects a promise nobody holds is what used to leave a host
+        // building forever — and rejecting is the other half, since a broken
+        // token set must not pass for a successful build on any target.
+        await expect(build(directory, configFile)).rejects.toThrow(
+          /JSON5|invalid|Failed to load/i,
+        )
+
+        // Capturing it is not the same as dropping it: the report is part of
+        // what this asserts, since a failure the host stops for must also say
+        // why.
+        const messages = errorSpy.mock.calls.map((call) => String(call[0]))
+        expect(
+          messages.some((message) =>
+            message.includes('Compilation failed after'),
+          ),
+        ).toBe(true)
+      } finally {
+        errorSpy.mockRestore()
+      }
     },
     60000,
   )

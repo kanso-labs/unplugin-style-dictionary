@@ -102,6 +102,23 @@ the tests bind a minimal stub via `callBuildStart` and `callWatchChange` instead
 of starting a dev server. **A new hook needs a matching caller**; calling it
 bare leaves `this` undefined and the failure looks like a plugin bug.
 
+**A test that provokes a failure captures the report, and asserts on it.** The
+plugin reports a failed compile at every level, `silent` included, so a test
+that feeds it a broken configuration prints red lines into the run — there were
+sixteen, and a reader of a CI log had to tell them apart from real ones. Spy
+`console.error` for the duration, assert the message is there, and restore in a
+`finally`. The assertion is the point rather than the silence: a failure the
+host stops for must also say why, and capturing the line without checking it
+would drop the only evidence that it was said.
+
+`console.error` is not always enough. Style Dictionary warns on its own account
+— an unrecognised config extension, for one — and that goes to `console.warn`,
+which an error spy never sees.
+
+Locally none of this is visible, which is why it lasted: the default reporter
+collapses to a summary, and only an expanded one shows intercepted console
+output. `npx vitest run --reporter=verbose` is what reproduces what CI prints.
+
 ## Workflows and checks
 
 `Build`, `Lint` and `Test` run on `pull_request` and on pushes to `main`. The
