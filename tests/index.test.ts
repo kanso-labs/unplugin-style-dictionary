@@ -2409,6 +2409,65 @@ const waitUntil = async (satisfied: () => boolean, timeoutMs: number) => {
   while (!satisfied() && Date.now() < deadline) await settle(50)
 }
 
+// A gate on a rollup watcher's own signals, for the cases below to wait on
+// before they touch the fixture again.
+//
+// Rollup records a changed file in `invalidatedIds`, and one `buildDelay`
+// later runs a callback that awaits its `change` emission — which is where
+// `watchChange` runs, and so where this plugin does an entire compile — then
+// clears the map, then builds (rollup 4.63.3, `dist/shared/watch.js:133-166`).
+// An invalidation recorded while that emission is being awaited is therefore
+// discarded by the clear, while the timeout it scheduled still fires, on an
+// empty map. Nothing is told, and nothing rebuilds: a write landing in that
+// window is a lost change rather than a slow one, and no deadline recovers it.
+//
+// Idle here is "rollup has recorded nothing, is building nothing, and has said
+// nothing for a moment", which excludes the whole of that window: an emission
+// always begins with at least one recorded invalidation and ends at `restart`,
+// which rollup emits immediately after the clear. The quiet period covers the
+// rest — a watcher with an undelivered filesystem event to come looks idle
+// until it arrives, and arriving is itself activity.
+const watcherIdle = () => {
+  let building = false
+  let lastActivity = Date.now()
+  let recorded = 0
+
+  const touch = () => {
+    lastActivity = Date.now()
+  }
+
+  return {
+    // Attached once the watcher exists, which is after the options carrying
+    // `onInvalidate` have been handed over.
+    observe: (watcher: rollup.RollupWatcher) => {
+      watcher.on('restart', () => {
+        recorded = 0
+        touch()
+      })
+      watcher.on('event', (event) => {
+        if (event.code === 'START') building = true
+        else if (event.code === 'END') building = false
+        touch()
+      })
+    },
+
+    // Passed to `rollup.watch` as `watch.onInvalidate`, which is called for
+    // every path rollup records.
+    onInvalidate: () => {
+      recorded++
+      touch()
+    },
+
+    whenIdle: async (quietMs = 250, timeoutMs = 15000) => {
+      await waitUntil(
+        () =>
+          recorded === 0 && !building && Date.now() - lastActivity >= quietMs,
+        timeoutMs,
+      )
+    },
+  }
+}
+
 // Every other test in this file drives the Vite target through a hand-built
 // plugin context. This one runs a real second host, because the defect it pins
 // is invisible without one: it lives in how a bundler re-enters `buildStart`
@@ -2600,12 +2659,14 @@ describe('under a real rollup watcher', () => {
 
     let bundles = 0
     const errors: string[] = []
+    const idle = watcherIdle()
     const watcher = rollup.watch({
       input: entry,
       output: { dir: outputDirectory, format: 'es' },
       plugins: [rollupPlugin({ config: configFile, silent: true })],
-      watch: { buildDelay: 50 },
+      watch: { buildDelay: 50, onInvalidate: idle.onInvalidate },
     })
+    idle.observe(watcher)
 
     watcher.on('event', (event) => {
       if (event.code === 'ERROR') errors.push(event.error.message)
@@ -2629,8 +2690,15 @@ describe('under a real rollup watcher', () => {
       // chokidar needs a moment after the first build before it reports
       // anything, and the fixture's directories were created seconds ago. An
       // edit landing inside that window is missed by the watcher rather than
-      // by the plugin, which would fail this test for the wrong reason.
+      // by the plugin, which would fail this test for the wrong reason. The
+      // gate cannot see this one: a watcher that is not reporting yet looks
+      // exactly like one with nothing to report.
       await settle(500)
+
+      // The first build wrote the generated file, which the entry imports, so
+      // rollup has a cycle of its own to finish before anything here is safe
+      // to touch.
+      await idle.whenIdle()
 
       // Waiting on the compiled output rather than on a bundle count. The
       // count is not specific enough: the plugin's own write of the generated
@@ -2650,6 +2718,13 @@ describe('under a real rollup watcher', () => {
       )
       await waitUntil(() => generated().includes('#ff0000'), 15000)
       expect(generated()).toContain('#ff0000')
+
+      // Waiting for the watcher before touching the fixture again, rather
+      // than treating the generated file as the end of the cycle. Writing it
+      // is the last thing `watchChange` does, so the poll above returns while
+      // rollup is still inside the emission that called it — and a file
+      // created there is one rollup records and then discards.
+      await idle.whenIdle()
 
       // And a file created after the watcher was built, which is what
       // registering the glob's static parent directory is for.
