@@ -9,9 +9,9 @@ import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import packageJson from '../package.json' with { type: 'json' }
-import { matchesWatchedFile } from '../src/index.ts'
 import rollupPlugin from '../src/rollup.ts'
 import vitePlugin from '../src/vite.ts'
+import { matchesWatchedFile } from '../src/watch-filter.ts'
 
 interface BuildContext {
   addWatchFile: (id: string) => void
