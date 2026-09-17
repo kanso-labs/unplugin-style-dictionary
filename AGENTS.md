@@ -122,6 +122,15 @@ duration, **asserts the message is there**, and restores in a `finally`.
 Capturing without checking would remove the only evidence it was said — reword
 the report and ten tests fail today.
 
+**Read `mock.calls` before the restore, not after.** `mockRestore` resets the
+recorded calls along with the implementation, so a spy read after the `finally`
+hands back an empty list however much was said. An assertion that something
+_was_ reported then fails loudly and gets fixed; one that nothing was reported
+passes on every input and can never fail, which is the shape a test takes when
+it looks green and proves nothing. `collectErrors` in `tests/index.test.ts` is
+the helper to reach for: it runs the work, reads the calls inside the `try`, and
+restores in the `finally`.
+
 **`console.error` is only where the message lands when no host claimed it.** The
 plugin hands its lines to the bundler now, so a spy sees them only on the
 unit-test path, where `callBuildStart` binds a context carrying `addWatchFile`
@@ -969,6 +978,43 @@ all three to be quiet before it touches the fixture again. Waiting on the
 compiled output alone is what made
 `notices an edit and a new file under a glob source` fail about one run in
 fifteen.
+
+**`await watcher.close()` does not wait for a build, so a rebuild can outlive
+the shutdown that was meant to end it.** `Watcher.close` clears the pending
+build timeout, calls `task.close()` on each task, awaits `emit('close')` and
+removes its listeners — and never awaits `run` (rollup 4.63.3,
+`dist/shared/watch.js:122-131`). `Task.run` consults `closed` only _after_
+`await rollup.rollupInternal(…)` has resolved (`watch.js:262-263`), so a build
+that has already entered `rollupInternal` runs its `buildStart` hooks through to
+completion afterwards. Measured with rollup alone and no plugin of ours: a
+`buildStart` that awaits 400ms and then reads a file gets ENOENT, 300ms after
+`close()` resolved and the fixture was removed.
+
+Two things follow. A test that removes its fixture after `close()` is removing
+it under a live build, so the cases under `under a real rollup watcher` wait on
+the `watcherIdle` gate _before_ closing rather than treating `close()` as the
+end. And the plugin itself stops doing watch-driven work once `closeWatcher` has
+run — that hook fires synchronously inside `close()`, and so before the
+in-flight hook resumes, which is the only reason a flag set there can help.
+`buildStart` skips its watch-list derivation, which rollup discards anyway once
+the task is closed, and that derivation reading each config with
+`reportErrors: true` is what reported an ENOENT for a project being torn down.
+
+**The gate that stops a rebuild sits in `schedule`, not in a cancelled timer,
+and that is where measurement put it.** A close landing mid-`watchChange`
+arrives _before_ `schedule` does: the hook reaches it only after resolving
+configurations and deriving a watch list, so there is no armed debounce to
+cancel and the trigger has to be declined on the way in. A timer armed before
+the close is left to fire on purpose — the rebuild it runs is one the host asked
+for while the project was still whole, and cancelling it would be a guard no
+test could fail on.
+
+The hook is registered in the `rollup`, `rolldown` and `vite` blocks rather than
+at the top level, because `UnpluginOptions` declares no `closeWatcher`. **Not
+`closeBundle`:** that fires once per bundle — the watcher cases call
+`result.close()` on every `BUNDLE_END` — and would read as a shutdown on every
+rebuild. webpack has no equivalent; its nearest is `compiler.hooks.watchClose`,
+and nothing measured shows it exposed.
 
 **`release_created` is compared against the string `'true'` on purpose.** The
 output carries the string `"false"` when release-please runs and decides not to
