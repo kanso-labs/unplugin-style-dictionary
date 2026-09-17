@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StyleDictionaryConfigContext } from '../src/types.ts'
 
 import packageJson from '../package.json' with { type: 'json' }
+import rolldownPlugin from '../src/rolldown.ts'
 import rollupPlugin from '../src/rollup.ts'
 import vitePlugin from '../src/vite.ts'
 import { matchesWatchedFile } from '../src/watch-filter.ts'
@@ -60,6 +61,41 @@ const callBuildStart = async (plugin: Plugin) => {
   await plugin.buildStart.call(context)
 
   return watched
+}
+
+// Whatever reached `console.error` while `work` ran. The read happens before
+// the restore on purpose: `mockRestore` resets the recorded calls along with
+// the implementation, so an assertion made after it sees an empty list however
+// much was said — which turns "nothing was reported" into a claim no test can
+// actually fail.
+const collectErrors = async (work: () => Promise<void>) => {
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await work()
+    return errorSpy.mock.calls.map((call) => String(call[0]))
+  } finally {
+    errorSpy.mockRestore()
+  }
+}
+
+// `closeWatcher` uses none of the plugin context, but it gets a caller of its
+// own like every other hook here: a bare call is how a hook that starts using
+// `this` fails as a plugin bug rather than as a missing stub.
+const callCloseWatcher = async (plugin: Plugin) => {
+  const context: BuildContext = {
+    addWatchFile: () => {
+      // Nothing to record: this hook registers no files.
+    },
+  }
+  if (!isPluginHook<[]>(plugin.closeWatcher)) {
+    throw new TypeError('closeWatcher is not a callable hook')
+  }
+
+  // Awaited because the hook type allows a promise, not because this one
+  // returns any. What it does synchronously is what the cases rely on: the
+  // flag is raised before control leaves the call, which is how a close lands
+  // ahead of a `watchChange` that is suspended on one of its own awaits.
+  await plugin.closeWatcher.call(context)
 }
 
 const callWatchChange = async (plugin: Plugin, id: string) => {
@@ -3437,9 +3473,184 @@ describe('under a real rollup watcher', () => {
       await waitUntil(() => bundled().includes('#ff0000'), 15000)
       expect(bundled()).toContain('#ff0000')
     } finally {
+      // Quiesced before closing, because `close()` does not wait for a build
+      // and `afterEach` removes this directory the moment it returns:
+      // `Watcher.close` clears the pending timeout, closes each task's file
+      // watcher and emits `close` without ever awaiting `run`, and `Task.run`
+      // consults `closed` only after `rollupInternal` has resolved. So a
+      // rebuild already inside `rollupInternal` goes on running — and reads
+      // this fixture — after the teardown has deleted it. The gate is the same
+      // one the edits above use, with a shorter deadline so a case that is
+      // failing for its own reasons still fails promptly. It cannot throw.
+      await idle.whenIdle(250, 5000)
       await watcher.close()
     }
   }, 40000)
+})
+
+// A rebuild can outlive the `close()` that was supposed to end it. Rollup's
+// `Watcher.close` clears the pending build timeout, closes each task's file
+// watcher and emits `close`, and never awaits `run`; `Task.run` consults
+// `closed` only after `rollupInternal` has resolved. So a build already inside
+// `rollupInternal` runs its `buildStart` hooks through to completion after
+// `close()` has returned — and `buildStart` derives a watch list on every
+// entry, reading each config file with errors reported, which is how a
+// shutdown came to report an ENOENT for a project being torn down around it.
+//
+// These drive the hand-built context rather than a real watcher, because the
+// window a real one opens is tens of milliseconds wide and lands where it
+// likes. The hooks are called in the order rollup calls them, which is what
+// the cases are actually about.
+describe('when the host closes its watcher', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-close-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // `logLevel: 'silent'` rather than the `'warn'` most cases here use. `'warn'`
+  // drops the plugin's own progress lines but leaves Style Dictionary's `✔︎`,
+  // which these cases have no reason to keep and which reaches the console
+  // sweep as output nobody asked for — the very thing this whole change is
+  // about. The usual caution against `'silent'` does not apply: it also sets
+  // Style Dictionary's verbosity, and no case below asserts on anything Style
+  // Dictionary says. What they assert on is the plugin's failure report, and
+  // that is made at every level, `'silent'` included.
+  //
+  // A directory per case, so one case's teardown is not another's fixture.
+  const fixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(directory, { recursive: true })
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(configFile, usableConfig(directory, 'tokens.css'))
+
+    return { configFile, directory }
+  }
+
+  it('stops deriving a watch list once the watcher has closed', async () => {
+    const { configFile, directory } = fixture('closed')
+    const plugin = vitePlugin({ config: configFile, logLevel: 'silent' })
+
+    // A first build, so `hasCompiled` stands and the re-entry below does
+    // nothing but derive the watch list. That is what makes the silence
+    // specific: with the compile skipped, the watch list is the only thing
+    // left in the hook that can say anything at all.
+    await callBuildStart(plugin)
+
+    // The order a real host performs: `watchChange` inside the emission, then
+    // a `close()` landing while the build it started is still running.
+    await callWatchChange(plugin, posix(configFile))
+    await callCloseWatcher(plugin)
+
+    // What a fixture teardown does, and what a consumer's own shutdown does
+    // to a temporary directory or a container's mount.
+    fs.rmSync(directory, { force: true, recursive: true })
+
+    const messages = await collectErrors(async () => {
+      await callBuildStart(plugin)
+    })
+
+    // Every message, not just the parse report: after a close this hook has
+    // nothing to say about anything.
+    expect(messages).toEqual([])
+  }, 30000)
+
+  it('still reports the config it cannot read while the watcher is open', async () => {
+    // The mirror of the case above, and what makes its silence evidence
+    // rather than a hook that stopped running. Same fixture, same teardown,
+    // no close — and the report arrives.
+    const { configFile, directory } = fixture('open')
+    const plugin = vitePlugin({ config: configFile, logLevel: 'silent' })
+
+    await callBuildStart(plugin)
+    await callWatchChange(plugin, posix(configFile))
+
+    fs.rmSync(directory, { force: true, recursive: true })
+
+    const messages = await collectErrors(async () => {
+      await callBuildStart(plugin)
+    })
+
+    expect(
+      messages.some((message) =>
+        message.includes('Failed to parse config file'),
+      ),
+    ).toBe(true)
+  }, 30000)
+
+  it('registers nothing for a change reported after the close', async () => {
+    const { configFile } = fixture('after')
+    const plugin = vitePlugin({ config: configFile, logLevel: 'silent' })
+
+    await callBuildStart(plugin)
+
+    // Open first, so what the closed call returns is measured against the
+    // same hook answering the same path rather than against an assumption.
+    expect(await callWatchChange(plugin, posix(configFile))).not.toEqual([])
+
+    await callCloseWatcher(plugin)
+
+    expect(await callWatchChange(plugin, posix(configFile))).toEqual([])
+  }, 30000)
+
+  it('is reachable on every target that has the hook', () => {
+    // `UnpluginOptions` declares no top-level `closeWatcher`, so it is
+    // registered in three target blocks instead — and a block dropped by a
+    // later edit would take the whole fix out on that target silently, since
+    // every case above drives the Vite entry point. rollup and rolldown both
+    // run the watcher this exists for, and Vite's plugin type is rollup's.
+    const targets: Record<string, unknown> = {
+      rolldown: rolldownPlugin({ config: false }),
+      rollup: rollupPlugin({ config: false }),
+      vite: vitePlugin({ config: false }),
+    }
+
+    for (const [target, plugin] of Object.entries(targets)) {
+      const hook =
+        typeof plugin === 'object' &&
+        plugin !== null &&
+        'closeWatcher' in plugin
+          ? plugin.closeWatcher
+          : undefined
+
+      expect(isPluginHook<[]>(hook), `${target} has no closeWatcher`).toBe(true)
+    }
+  })
+
+  it('declines the rebuild when the close lands mid-change', async () => {
+    // A close arriving while `watchChange` is suspended, which is the window a
+    // real one lands in. It lands *before* `schedule`, not inside the debounce
+    // `schedule` arms: the hook reaches it only after resolving configurations
+    // and deriving a watch list, and a synchronous `closeWatcher` gets there
+    // first. So the trigger has to be declined on the way in rather than
+    // cancelled afterwards.
+    const { configFile, directory } = fixture('queued')
+    const plugin = vitePlugin({ config: configFile, logLevel: 'silent' })
+
+    await callBuildStart(plugin)
+
+    // A rebuild has to be able to *show*, or the assertion below passes on a
+    // build that ran and wrote the same bytes — the atomic write skips its
+    // rename in that case, so neither the content nor the inode moves. An
+    // extra destination is a rebuild nothing else could have produced.
+    const witness = path.join(directory, 'gen', 'rebuilt.css')
+    fs.writeFileSync(configFile, usableConfig(directory, 'rebuilt.css'))
+
+    // Deliberately not awaited: the close has to land while the hook is still
+    // suspended, rather than after the rebuild it asked for has run.
+    const change = callWatchChange(plugin, posix(configFile))
+    await callCloseWatcher(plugin)
+    await change
+
+    // Comfortably past the plugin's 50ms rebuild debounce, so a trigger that
+    // slipped through has had its chance to build.
+    await settle(400)
+    expect(fs.existsSync(witness)).toBe(false)
+  }, 30000)
 })
 
 // Editing a `.js`, `.mjs` or `.ts` config while a watcher is live used to

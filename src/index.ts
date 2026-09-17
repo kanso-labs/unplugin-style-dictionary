@@ -661,6 +661,23 @@ const unpluginFactory: UnpluginFactory<
   let watchRebuild = false
   let hasCompiled = false
 
+  // Whether the host has shut its watcher down. `await watcher.close()` is not
+  // a promise that no build is in flight: rollup's `Watcher.close` clears the
+  // pending build timeout, closes each task's file watcher and emits `close`,
+  // and never awaits `run` — while `Task.run` checks `closed` only *after*
+  // `rollupInternal` has resolved. So a build that has already entered
+  // `rollupInternal` runs its `buildStart` hooks through to completion after
+  // `close()` has returned to its caller, against a project that may be half
+  // torn down by then. Measured on rollup 4.63.3 with no plugin of ours: a
+  // `buildStart` reading a file 300ms after `close()` resolved gets ENOENT.
+  //
+  // `closeWatcher` is what makes that answerable. It runs synchronously inside
+  // `close()`, and so before the in-flight hook resumes, which is the whole
+  // reason a flag set there is worth setting. What it must not be is
+  // `closeBundle`: that fires once per bundle — every `BUNDLE_END` a consumer
+  // calls `result.close()` on — and would read as a shutdown on every rebuild.
+  let hostClosed = false
+
   // What a watcher is handed, and what a changed path is tested against, are
   // not the same list, and conflating them is why a glob source was watched by
   // nothing at all. Every watcher in play takes filenames rather than
@@ -1786,6 +1803,15 @@ const unpluginFactory: UnpluginFactory<
 
   // Resolves once a rebuild covering this trigger has finished.
   const schedule = async (reason: string): Promise<void> => {
+    // Nothing consumes a rebuild once the host has closed its watcher. This is
+    // where a close actually lands: `watchChange` reaches here only after
+    // resolving configurations and deriving a watch list, so a `closeWatcher`
+    // arriving mid-hook finds no timer armed yet and nothing else to stop it.
+    //
+    // Resolving rather than rejecting, because the trigger was handled — by
+    // being declined — and the caller awaiting it is a host on its way out.
+    if (hostClosed) return
+
     pendingReason = reason
 
     const covered = new Promise<void>((resolve, reject) => {
@@ -1808,6 +1834,20 @@ const unpluginFactory: UnpluginFactory<
     return covered
   }
 
+  // Every host that runs a rollup-shaped watcher calls this on shutdown, and
+  // all three get the same handler below. There is deliberately no webpack
+  // equivalent here: it has no `closeWatcher`, its nearest thing is
+  // `compiler.hooks.watchClose`, and nothing measured shows it exposed.
+  //
+  // It raises the flag and nothing else. A debounce timer armed before the
+  // close is deliberately left to fire: the rebuild it runs is one the host
+  // asked for while the project was still whole, and `drain` reports its own
+  // failures. Cancelling it would be a guard no test could fail on, since a
+  // trigger arriving after the close is declined by `schedule` instead.
+  const closeWatcher = (): void => {
+    hostClosed = true
+  }
+
   return {
     async buildStart() {
       adoptHost(this)
@@ -1824,9 +1864,19 @@ const unpluginFactory: UnpluginFactory<
       // package supports, but because the declared peer range is wider than
       // what has been measured and the scheduler above makes a duplicate
       // trigger free.
-      const { paths } = await getWatchTargets(resolved)
-      for (const file of paths) {
-        this.addWatchFile(file)
+      //
+      // Skipped outright once the host has closed, because rollup discards the
+      // result: with the task closed, `Task.run` returns before
+      // `updateWatchedFiles`, so every path registered here goes nowhere. What
+      // deriving it does still do is read each config file — with
+      // `reportErrors: true` — and report an ENOENT for a project the host is
+      // in the middle of tearing down. That report was the one thing this
+      // block contributed after a close.
+      if (!hostClosed) {
+        const { paths } = await getWatchTargets(resolved)
+        for (const file of paths) {
+          this.addWatchFile(file)
+        }
       }
 
       // Registering the watch list is all this hook does on webpack, and it
@@ -1859,7 +1909,18 @@ const unpluginFactory: UnpluginFactory<
 
     name: 'unplugin-style-dictionary',
 
+    // `closeWatcher` is a rollup-shaped hook and `UnpluginOptions` declares no
+    // top-level equivalent, so it is registered per target instead: rolldown
+    // lists it among its input plugin hooks, and Vite's plugin type is
+    // rollup's, which is what carries it to `vite build --watch`. Vite's dev
+    // server runs no rollup watcher, so there it simply never fires.
+    rolldown: { closeWatcher },
+
+    rollup: { closeWatcher },
+
     vite: {
+      closeWatcher,
+
       async configResolved(config) {
         if (rootOption === undefined) root = config.root || process.cwd()
 
@@ -2030,6 +2091,11 @@ const unpluginFactory: UnpluginFactory<
     async watchChange(id) {
       adoptHost(this)
       adoptWatchMode(this)
+
+      // Ahead of everything, including the flag below: a change reported
+      // after the watcher closed earns no rebuild, so there is no re-entry
+      // into `buildStart` for a flag to describe.
+      if (hostClosed) return
 
       // Raised before any decision about `id`, because whatever this change
       // was, the host is now on its way back into `buildStart`.
