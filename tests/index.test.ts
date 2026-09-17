@@ -70,6 +70,15 @@ const callWatchChange = async (plugin: Plugin, id: string) => {
   return watched
 }
 
+// Identity of a file on disk, not just its content. The atomic write renames a
+// fresh file over the destination, so a build that rewrote it changes the
+// inode — which a content comparison would miss when the bytes happen to be
+// the same.
+const identityOf = (file: string) => {
+  const stats = fs.statSync(file)
+  return `${stats.ino}:${stats.mtimeMs}`
+}
+
 describe('unplugin-style-dictionary (vite target)', () => {
   // A fixture directory per run, rather than one shared `temp-test-tokens` at
   // the repo root. Every path below is derived from it, and the whole suite
@@ -493,6 +502,328 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(second.counter.calls).toBe(1)
     expect(fs.existsSync(first.output)).toBe(true)
     expect(fs.existsSync(second.output)).toBe(true)
+  })
+
+  // A file-backed configuration in a directory of its own, so each test's
+  // destinations and sources are unrelated to every other test's. A counting
+  // format stands in for the compile, since what has to be observed is whether
+  // `buildAllPlatforms` ran at all.
+  const freshnessFixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(directory, { recursive: true })
+
+    const counter = { calls: 0 }
+    const format = `custom/freshness-${name}`
+    const source = path.join(directory, 'tokens.json')
+    const configPath = path.join(directory, 'sd.config.json')
+    const output = path.join(directory, 'out.txt')
+
+    StyleDictionary.registerFormat({
+      format: ({ dictionary }) => {
+        counter.calls++
+        return dictionary.allTokens
+          .map((token) => `${token.name}=${String(token.value)}`)
+          .join('\n')
+      },
+      name: format,
+    })
+
+    const writeSource = (value: string) => {
+      fs.writeFileSync(
+        source,
+        JSON.stringify({ color: { primary: { value } } }),
+      )
+    }
+
+    const writeConfig = (extra: Record<string, unknown> = {}) => {
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          platforms: {
+            text: {
+              buildPath: directory.replace(/\\/g, '/') + '/',
+              files: [{ destination: 'out.txt', format }],
+              transformGroup: 'css',
+              ...extra,
+            },
+          },
+          source: [source.replace(/\\/g, '/')],
+        }),
+      )
+    }
+
+    writeSource('#0070f3')
+    writeConfig()
+
+    return {
+      configPath,
+      counter,
+      directory,
+      format,
+      output,
+      source,
+      writeConfig,
+      writeSource,
+    }
+  }
+
+  it('skips a configuration whose output is newer than everything it reads', async () => {
+    const fixture = freshnessFixture('up-to-date')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(1)
+    const afterFirst = identityOf(fixture.output)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(1)
+    expect(identityOf(fixture.output)).toBe(afterFirst)
+  })
+
+  it('skips a build whose output is written into a watched directory', async () => {
+    // The layout that broke this, and the one AGENTS.md calls supported: the
+    // `buildPath` sits inside the directory the `source` glob covers. Every
+    // pattern's static parent is registered as a watch target so a token file
+    // created later is noticed, and a directory's mtime moves whenever an
+    // entry is renamed inside it — which is what the atomic write does to
+    // every generated file. Reading that mtime as an input made the build the
+    // newest thing the comparison could see, so nothing was ever up to date.
+    const directory = path.join(tempDir, 'output-inside-source')
+    fs.mkdirSync(directory, { recursive: true })
+
+    const counter = { calls: 0 }
+    const format = 'custom/freshness-in-place'
+    StyleDictionary.registerFormat({
+      format: ({ dictionary }) => {
+        counter.calls++
+        return dictionary.allTokens
+          .map((token) => `${token.name}=${String(token.value)}`)
+          .join('\n')
+      },
+      name: format,
+    })
+
+    fs.writeFileSync(
+      path.join(directory, 'design.tokens.json'),
+      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+    )
+
+    const configPath = path.join(tempDir, 'in-place.config.json')
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        platforms: {
+          text: {
+            // Into the very directory the glob below covers.
+            buildPath: directory.replace(/\\/g, '/') + '/',
+            files: [{ destination: 'out.txt', format }],
+            transformGroup: 'css',
+          },
+        },
+        source: [directory.replace(/\\/g, '/') + '/*.tokens.json'],
+      }),
+    )
+
+    await callBuildStart(vitePlugin({ config: configPath, silent: true }))
+    expect(counter.calls).toBe(1)
+
+    await callBuildStart(vitePlugin({ config: configPath, silent: true }))
+
+    expect(counter.calls).toBe(1)
+  })
+
+  it('says so rather than announcing a compile that did not happen', async () => {
+    const fixture = freshnessFixture('up-to-date-log')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(vitePlugin({ config: fixture.configPath }))
+
+      const messages = logSpy.mock.calls.map((call) => String(call[0]))
+      expect(
+        messages.some((message) =>
+          message.includes('Design tokens are already up to date'),
+        ),
+      ).toBe(true)
+      expect(
+        messages.some((message) => message.includes('Compiled successfully')),
+      ).toBe(false)
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it.each([
+    {
+      change: (fixture: ReturnType<typeof freshnessFixture>) => {
+        fixture.writeSource('#ff0000')
+      },
+      label: 'a token source',
+    },
+    {
+      change: (fixture: ReturnType<typeof freshnessFixture>) => {
+        fixture.writeConfig({ prefix: 'kui' })
+      },
+      label: 'the config file itself',
+    },
+  ])('compiles again when $label has changed', async ({ change, label }) => {
+    const fixture = freshnessFixture(`changed-${label.replaceAll(' ', '-')}`)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(1)
+
+    change(fixture)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(2)
+  })
+
+  it('compiles again when a file named by `watch` has changed', async () => {
+    // A consumer names an extra file because something in the build reads it.
+    // Leaving it out of the comparison let a change to it be skipped over
+    // while the watcher dutifully reported it.
+    const fixture = freshnessFixture('watched-extra')
+    const extra = path.join(fixture.directory, 'extra.txt')
+    fs.writeFileSync(extra, 'first')
+
+    const options = {
+      config: fixture.configPath,
+      silent: true,
+      watch: extra,
+    }
+
+    await callBuildStart(vitePlugin(options))
+    expect(fixture.counter.calls).toBe(1)
+
+    fs.writeFileSync(extra, 'second')
+
+    await callBuildStart(vitePlugin(options))
+
+    expect(fixture.counter.calls).toBe(2)
+  })
+
+  it('never skips a platform that declares actions', async () => {
+    // An action writes what no `destination` names, so there is nothing for
+    // the freshness comparison to check and a skip would leave its work
+    // undone.
+    const fixture = freshnessFixture('with-actions')
+    const actionOutput = path.join(fixture.directory, 'action-ran.txt')
+    let actionRuns = 0
+
+    StyleDictionary.registerAction({
+      do: () => {
+        actionRuns++
+        fs.writeFileSync(actionOutput, String(actionRuns))
+      },
+      name: 'custom/freshness-action',
+    })
+
+    fixture.writeConfig({ actions: ['custom/freshness-action'] })
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    expect(actionRuns).toBe(1)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(actionRuns).toBe(2)
+  })
+
+  it('compiles every time when `cache` is false', async () => {
+    const fixture = freshnessFixture('cache-off')
+    const options = {
+      cache: false,
+      config: fixture.configPath,
+      silent: true,
+    }
+
+    await callBuildStart(vitePlugin(options))
+    expect(fixture.counter.calls).toBe(1)
+
+    await callBuildStart(vitePlugin(options))
+
+    // The counting format is the assertion, not the file on disk. A write
+    // whose bytes match the destination already skips its own rename, so an
+    // unchanged inode here would say nothing about whether the compile ran.
+    expect(fixture.counter.calls).toBe(2)
+  })
+
+  it('skips an object configuration only once this process has built it', async () => {
+    // An object has no file to stat, so the filesystem cannot tell an edited
+    // one from the one that wrote the output beside it. The first build of a
+    // process therefore always runs, and only a fingerprint recorded here
+    // lets the second be skipped.
+    const fixture = freshnessFixture('object-config')
+
+    const configWith = (prefix: string | undefined) => ({
+      platforms: {
+        text: {
+          buildPath: fixture.directory.replace(/\\/g, '/') + '/',
+          files: [{ destination: 'out.txt', format: fixture.format }],
+          prefix,
+          transformGroup: 'css',
+        },
+      },
+      source: [fixture.source.replace(/\\/g, '/')],
+    })
+
+    await callBuildStart(
+      vitePlugin({ config: configWith(undefined), silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(1)
+
+    await callBuildStart(
+      vitePlugin({ config: configWith(undefined), silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(1)
+
+    // A different object naming the same destination: the fingerprint moves,
+    // so the output on disk can no longer be assumed to be the one this
+    // configuration would write.
+    await callBuildStart(
+      vitePlugin({ config: configWith('kui'), silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(2)
+  })
+
+  it('drops the size table, and reading every file to build it, when `report` is false', async () => {
+    const fixture = freshnessFixture('report-off')
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({ config: fixture.configPath, report: false }),
+      )
+
+      const messages = logSpy.mock.calls.map((call) => String(call[0]))
+
+      // The table is gone.
+      expect(messages.some((message) => message.includes('gzip:'))).toBe(false)
+
+      // The progress lines are not, which is what separates this from
+      // `logLevel`.
+      expect(
+        messages.some((message) => message.includes('Compiled successfully')),
+      ).toBe(true)
+    } finally {
+      logSpy.mockRestore()
+    }
   })
 
   it('matchesWatchedFile matches config/token paths but not unrelated generated output', () => {
@@ -1055,11 +1386,25 @@ describe('unplugin-style-dictionary (vite target)', () => {
       })
 
     try {
+      // The token is really rewritten before each trigger, rather than the
+      // hook being told about a change that never happened. Both are now
+      // load-bearing: a configuration whose output is newer than everything
+      // it reads is skipped, so a trigger for an untouched file reaches no
+      // build at all and the count below would be zero.
+      //
       // Past the debounce, so the two are not merged into one rebuild, and
       // well inside the build above, so without the in-flight chain the
       // second starts beside the first.
+      fs.writeFileSync(
+        bulkToken,
+        JSON.stringify({ color: { brand: { value: '#111111' } } }),
+      )
       const first = callWatchChange(plugin, bulkToken)
       await settle(150)
+      fs.writeFileSync(
+        bulkToken,
+        JSON.stringify({ color: { brand: { value: '#222222' } } }),
+      )
       const second = callWatchChange(plugin, bulkToken)
       await Promise.all([first, second])
 

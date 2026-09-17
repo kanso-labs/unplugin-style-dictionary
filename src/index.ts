@@ -310,6 +310,25 @@ function staticParentOf(pattern: string): string {
     : segments.slice(0, firstGlob).join('/')
 }
 
+// The fingerprints of configurations this process has compiled at least once.
+// It is what lets a configuration given as an object or a function be skipped
+// at all: such a configuration has no file to stat, so an edit to it inside
+// `vite.config.ts` moves no mtime and the filesystem cannot tell the two
+// apart. Having built it here, the plugin can — the fingerprint changes with
+// the configuration.
+//
+// Module scope rather than the factory's, for the same reason `compilesInFlight`
+// below is: the instances that would otherwise repeat the work are different
+// instances, so per-instance state cannot see them. A `vitest run` stands up
+// several, and a function configuration — the form the README recommends for
+// registering custom formats — would be the one form that never skipped.
+//
+// The fingerprint carries the root, so two projects in one process never share
+// one. A configuration given as a path needs none of this: its own file is one
+// of the sources the mtime comparison reads, so an edit to it is visible across
+// processes as well as within one.
+const compiledFingerprints = new Set<string>()
+
 // A compile that is running right now, keyed by `buildKey`, so bundler
 // instances in one process wait on each other rather than each starting their
 // own.
@@ -350,6 +369,42 @@ function buildKey(root: string, resolved: ResolvedConfig[]): null | string {
   }
 }
 
+// The patterns one configuration reads, resolved the way the build resolves
+// them. The same `source`/`include` walk `getWatchTargets` does, for one
+// item rather than the whole set — against the working directory, because
+// that is where Style Dictionary's own `combineJSON` globs them.
+function sourcePatternsOf(configObj: Config): string[] {
+  const patterns: string[] = []
+
+  const add = (pattern: unknown) => {
+    if (typeof pattern === 'string') {
+      patterns.push(
+        (path.isAbsolute(pattern)
+          ? pattern
+          : path.resolve(process.cwd(), pattern)
+        ).replace(/\\/g, '/'),
+      )
+    }
+  }
+
+  for (const value of [configObj.source, configObj.include]) {
+    if (Array.isArray(value)) value.forEach(add)
+    else add(value)
+  }
+
+  return patterns
+}
+
+// `fs.statSync` without the throw. A file that is missing, or that cannot be
+// read, is the same answer to every caller here: nothing to compare against.
+function statOrNull(file: string): fs.Stats | null {
+  try {
+    return fs.statSync(file)
+  } catch {
+    return null
+  }
+}
+
 export const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
@@ -361,8 +416,10 @@ export const unpluginFactory: UnpluginFactory<
   // compilation exists.
   const isWebpack = meta.framework === 'webpack'
   const {
+    cache = true,
     failOnError = 'build',
     logLevel,
+    report = true,
     root: rootOption,
     silent = false,
   } = options
@@ -598,7 +655,7 @@ export const unpluginFactory: UnpluginFactory<
   // through instead.
   const readConfigObject = async (
     item: ResolvedConfig,
-    report: boolean,
+    reportErrors: boolean,
   ): Promise<Config | null> => {
     if (typeof item.config !== 'string') return item.config
 
@@ -613,14 +670,14 @@ export const unpluginFactory: UnpluginFactory<
 
       if (isConfig(loaded)) return loaded
 
-      if (report) {
+      if (reportErrors) {
         log(
           `Config file did not resolve to a configuration object: ${item.config}`,
           'error',
         )
       }
     } catch (err) {
-      if (report) {
+      if (reportErrors) {
         log(
           `Failed to parse config file: ${item.config}. Error: ${errorMessage(err)}`,
           'error',
@@ -735,6 +792,146 @@ export const unpluginFactory: UnpluginFactory<
     }
   }
 
+  // Every absolute destination a configuration declares, read off the
+  // configuration itself rather than off an extended Style Dictionary
+  // instance. Reading it here is the whole point: constructing the instance
+  // is what the skip exists to avoid.
+  //
+  // Resolved exactly as the build resolves it below, so the two name the same
+  // files — a relative `buildPath` against `root`, and a `destination`
+  // against that.
+  const declaredDestinations = (configObj: Config): string[] => {
+    const destinations: string[] = []
+
+    for (const platform of Object.values(configObj.platforms ?? {})) {
+      const buildPath = platform.buildPath ?? ''
+      const absoluteBuildPath = path.isAbsolute(buildPath)
+        ? buildPath
+        : path.resolve(root, buildPath)
+
+      for (const file of platform.files ?? []) {
+        if (file.destination) {
+          destinations.push(
+            path.isAbsolute(file.destination)
+              ? file.destination
+              : path.resolve(absoluteBuildPath, file.destination),
+          )
+        }
+      }
+    }
+
+    return destinations
+  }
+
+  // A stable identity for one resolved configuration, or `null` where it
+  // cannot have one. Functions are serialised by source rather than dropped,
+  // because an inline `format` or `transform` is exactly the edit a
+  // fingerprint has to notice, and `JSON.stringify` omits a function outright.
+  const configFingerprint = (item: ResolvedConfig): null | string => {
+    try {
+      return JSON.stringify(
+        [root, item.file ?? item.config],
+        (_key, value: unknown) =>
+          typeof value === 'function' ? `[fn]${String(value)}` : value,
+      )
+    } catch {
+      // Circular, or holding a BigInt. It takes no identity rather than a
+      // wrong one, so it compiles every time exactly as it did before.
+      return null
+    }
+  }
+
+  // Whether every file a configuration declares is already newer than every
+  // file it reads, so its compile can be skipped.
+  //
+  // Conservative in every direction it can be: anything it cannot establish —
+  // a destination that is missing, a source it cannot stat, a configuration
+  // declaring no destinations at all — is a reason to build rather than to
+  // skip.
+  const isUpToDate = async (
+    item: ResolvedConfig,
+    configObj: Config,
+  ): Promise<boolean> => {
+    // An action writes what no `destination` names, so there is nothing for
+    // the comparison below to check and skipping would leave its work undone.
+    const hasActions = Object.values(configObj.platforms ?? {}).some(
+      (platform) => (platform.actions?.length ?? 0) > 0,
+    )
+    if (hasActions) return false
+
+    const destinations = declaredDestinations(configObj)
+    if (destinations.length === 0) return false
+
+    // `options.watch` belongs in here as much as `source` does. A consumer
+    // names an extra file because something in the build reads it — a custom
+    // format's own data file, most obviously — and leaving it out let a change
+    // to it be skipped over while the watcher dutifully reported it.
+    const extraWatches = options.watch
+      ? Array.isArray(options.watch)
+        ? options.watch
+        : [options.watch]
+      : []
+
+    const sources = await expandPatterns([
+      ...sourcePatternsOf(configObj),
+      ...extraWatches.map((pattern) =>
+        (path.isAbsolute(pattern)
+          ? pattern
+          : path.resolve(root, pattern)
+        ).replace(/\\/g, '/'),
+      ),
+    ])
+    if (item.file) sources.push(item.file.replace(/\\/g, '/'))
+
+    if (sources.length === 0) return false
+
+    let newestSource = -Infinity
+    let sawFile = false
+
+    for (const source of sources) {
+      const stats = statOrNull(source)
+      if (!stats) return false
+
+      // Directories are in this list on purpose — `expandPatterns` registers
+      // each pattern's static parent so a token file created later is
+      // noticed — but their mtime cannot be read as an input signal here. A
+      // directory's mtime moves whenever an entry is added or renamed inside
+      // it, and the atomic write renames every generated file into place, so
+      // a `buildPath` inside a watched directory made the build itself the
+      // newest thing the comparison could see. Nothing was ever up to date.
+      if (stats.isDirectory()) continue
+
+      sawFile = true
+      newestSource = Math.max(newestSource, stats.mtimeMs)
+    }
+
+    // Every pattern expanded to directories alone, so nothing was actually
+    // read. Style Dictionary would build an empty dictionary from that, and a
+    // skip would present the empty result as current.
+    if (!sawFile) return false
+
+    let oldestDestination = Infinity
+    for (const destination of destinations) {
+      const stats = statOrNull(destination)
+      if (!stats) return false
+      oldestDestination = Math.min(oldestDestination, stats.mtimeMs)
+    }
+
+    if (oldestDestination <= newestSource) return false
+
+    // A configuration given as a path has its own file among the sources
+    // above, so an edit to it has already been accounted for and the skip
+    // holds across processes.
+    if (item.file) return true
+
+    // One given as an object or a function has not. Only this process knows
+    // what it looked like when those destinations were written, so the skip
+    // holds only against a fingerprint recorded here.
+    const fingerprint = configFingerprint(item)
+
+    return fingerprint !== null && compiledFingerprints.has(fingerprint)
+  }
+
   // The size-and-gzip table, in a function of its own so that the compile
   // `try` in `runBuilds` can stop before it. Everything here is presentation
   // over files Style Dictionary has already finished writing, so a throw from
@@ -815,6 +1012,10 @@ export const unpluginFactory: UnpluginFactory<
     // reads it and that reporting is deliberately outside.
     const generatedFiles = new Set<string>()
 
+    // How many configurations were already up to date. Read by the reporting
+    // below, which is why it sits out here with `generatedFiles`.
+    let skipped = 0
+
     try {
       if (!context) {
         log('Compiling design tokens...', 'info')
@@ -826,6 +1027,29 @@ export const unpluginFactory: UnpluginFactory<
       // swapped onto it below — overlapping builds would interleave those
       // writes and hand a reader a file assembled from both.
       for (const item of resolvedConfigs) {
+        // Read ahead of the instance, because avoiding the instance is the
+        // point: construction plus `extend` is the 15-30% of a build that
+        // parses the token sources, and `buildAllPlatforms` is the rest.
+        //
+        // `false` so a configuration that will not parse says nothing here —
+        // the build below hands Style Dictionary the path and lets its own
+        // message through, which is more specific than anything this could
+        // say.
+        const declared = cache ? await readConfigObject(item, false) : null
+
+        if (declared && (await isUpToDate(item, declared))) {
+          // The destinations still have to be collected. They are what stops
+          // the plugin's own output being treated as a watched source, so a
+          // skipped configuration that contributed none would have its files
+          // rebuild the moment a watcher noticed them.
+          for (const destination of declaredDestinations(declared)) {
+            generatedFiles.add(destination)
+          }
+
+          skipped++
+          continue
+        }
+
         // `{ init: false }` is the escape hatch Style Dictionary documents on
         // this constructor, and it is what makes a bad configuration
         // catchable. Left to itself the constructor ends in a call to
@@ -887,6 +1111,11 @@ export const unpluginFactory: UnpluginFactory<
             }
           }
         }
+
+        // Recorded only now, so a configuration whose build threw is never
+        // treated as one this process has compiled.
+        const fingerprint = configFingerprint(item)
+        if (fingerprint !== null) compiledFingerprints.add(fingerprint)
       }
 
       // Replaced wholesale rather than added to, so a destination dropped from
@@ -926,15 +1155,26 @@ export const unpluginFactory: UnpluginFactory<
     // with `failOnError` defaulting to `'build'` that stopped the bundler.
     const duration = Date.now() - startTime
 
+    // Every configuration was already current, so nothing was written. Said
+    // rather than left implied: a build that prints its opening line and then
+    // finishes in two milliseconds reads as one that silently did nothing.
+    const everythingSkipped = skipped === resolvedConfigs.length
+
     if (context) {
       log(
-        `Rebuilt design tokens due to change in ${context} (${duration}ms)`,
+        everythingSkipped
+          ? `Design tokens already up to date after change in ${context} (${duration}ms)`
+          : `Rebuilt design tokens due to change in ${context} (${duration}ms)`,
         'success',
       )
       return
     }
 
-    if (!quiet && generatedFiles.size > 0) {
+    // The table is skipped when nothing was written, on top of `report` and
+    // `quiet`. It reads every generated file in full and gzips it, and
+    // reprinting the sizes of files this build did not touch is the one case
+    // where that cost buys nothing at all.
+    if (report && !quiet && !everythingSkipped && generatedFiles.size > 0) {
       try {
         reportSizes(generatedFiles)
       } catch (err) {
@@ -948,7 +1188,17 @@ export const unpluginFactory: UnpluginFactory<
       }
     }
 
-    log(`Compiled successfully! (${duration}ms)`, 'success')
+    if (everythingSkipped) {
+      log(`Design tokens are already up to date (${duration}ms)`, 'success')
+      return
+    }
+
+    log(
+      skipped > 0
+        ? `Compiled successfully! (${duration}ms, ${skipped} already up to date)`
+        : `Compiled successfully! (${duration}ms)`,
+      'success',
+    )
   }
 
   // `runBuilds` for the first build of a process, with the compile shared

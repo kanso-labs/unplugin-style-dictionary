@@ -583,6 +583,18 @@ two overlapping builds and a four-file change produced ten. That overlap is the
 same one `runBuilds` avoids internally by building its configurations one after
 another, reintroduced one level up.
 
+**A directory's mtime is not an input signal, and reading it as one made nothing
+ever up to date.** `expandPatterns` deliberately registers each pattern's static
+parent directory alongside the files matching it today, so a token file created
+tomorrow is watched. `isUpToDate` walks the same list and must skip the
+directories in it: a directory's mtime moves whenever an entry is renamed inside
+it, and the atomic write renames every generated file into place. With a
+`buildPath` inside a `source` directory — the layout `generatedDestinations`
+exists to support — the build itself became the newest thing the comparison
+could see, so every configuration compiled every time and the skip looked
+implemented but dead. It survived the whole unit suite and only showed up
+against a real consumer. `tests/index.test.ts` pins that layout directly.
+
 **The scheduler serialises one plugin instance; `compilesInFlight` serialises
 the process.** They solve the same problem at different scopes and neither
 replaces the other. `hasCompiled` and the scheduler are closure state inside

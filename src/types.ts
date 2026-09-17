@@ -19,6 +19,36 @@ import type { Config } from 'style-dictionary'
  */
 export interface UnpluginStyleDictionaryOptions {
   /**
+   * Whether a configuration whose output is already up to date may skip its
+   * compile.
+   *
+   * A build's expensive half is `buildAllPlatforms` — around 80% of it on a
+   * 4,000-token, two-platform configuration — and under Vite it runs inside
+   * `server.listen()`, so the dev server does not accept a connection until
+   * it finishes whether or not a token changed. A configuration is treated as
+   * up to date when every file it declares exists and is newer than every
+   * file it reads, its own config file included.
+   *
+   * Two things are never skipped, because neither can be told from the
+   * filesystem:
+   *
+   * - **The first compile of a process, for a configuration given as an
+   *   object or a function.** There is no config file to stat, so an edit to
+   *   the object inside `vite.config.ts` moves no mtime. Within one process
+   *   the resolved configuration is compared against the one that was last
+   *   built; across processes there is nothing to compare, so it builds.
+   * - **A platform declaring `actions`.** An action writes what no
+   *   `destination` names, so a skip would leave its work undone.
+   *
+   * A custom format that reads something off-disk — an environment variable,
+   * a network call — cannot be detected this way either, and is what this
+   * option exists to turn off.
+   *
+   * @default true
+   */
+  cache?: boolean
+
+  /**
    * Style Dictionary configuration(s).
    * Can be:
    * - A file path string (e.g. 'sd.config.json')
@@ -81,6 +111,27 @@ export interface UnpluginStyleDictionaryOptions {
    * configuration's `log.verbosity` alone
    */
   logLevel?: 'info' | 'silent' | 'verbose' | 'warn'
+
+  /**
+   * Whether the table of generated files and their sizes is produced.
+   *
+   * Every generated file is read in full and gzipped at level 6 to fill the
+   * `gzip:` column — 4.5ms for 515kB of output, and 21ms at 6MB. That is
+   * small beside the compile it follows, and it is pure cost to a project
+   * large enough to care.
+   *
+   * This is not `logLevel`'s job, and the two differ in what they leave
+   * standing. `logLevel: 'warn'` silences the plugin's progress lines along
+   * with the table; `report: false` keeps them and drops only the table,
+   * along with the read and the compression behind it.
+   *
+   * Dropping to gzip level 1 instead was measured and rejected: it reported a
+   * figure up to 8.7% off — 21.4kB against 19.7kB on the same JSON — and that
+   * number is one a consumer compares against their own bundler's report.
+   *
+   * @default true
+   */
+  report?: boolean
 
   /**
    * The directory a relative `config` path is looked up in.

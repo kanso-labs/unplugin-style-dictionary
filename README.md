@@ -253,6 +253,29 @@ plugin subtracts its own output from the watch list, skips recompiling when a
 watch rebuild re-enters `buildStart`, and skips the write entirely when a
 rebuild renders bytes identical to what is already on disk.
 
+## Skipping a Build That Would Change Nothing
+
+A configuration whose output is already newer than everything it reads is not
+compiled again. `buildAllPlatforms` is around 80% of a build, and under Vite it
+runs inside `server.listen()` — so without this the dev server refused
+connections for the length of a compile whether or not a token had changed.
+
+Three things are compared: every file the configuration reads (its `source` and
+`include` matches, its own config file, and anything named by `watch`), every
+file it declares, and — for a configuration that is not a file — what the
+configuration looked like when those files were written.
+
+Two cases never skip, because neither can be settled from the filesystem:
+
+| Case                                                                                 | Why                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The first compile of a process, for a configuration given as an object or a function | There is no config file to stat, so an edit to the object inside `vite.config.ts` moves no mtime. Within one process the resolved configuration is compared against the one last built; across processes there is nothing to compare. |
+| A platform declaring `actions`                                                       | An action writes what no `destination` names, so a skip would leave its work undone.                                                                                                                                                  |
+
+A custom format that reads something off-disk — an environment variable, a
+network call — cannot be detected this way either. Set `cache: false` where that
+is the case, and every build runs.
+
 ## One Compile per Process
 
 A bundler instance that asks for a compile while an identical one is already
