@@ -148,6 +148,37 @@ fails on a rewritten condition too, without waiting for a build.
 `npm run lint` always did — `oxlint .` and `eslint .` take the whole tree — so
 the gap was only ever in the hook, which is the quiet kind.
 
+**`Test` sends its coverage report to two places.**
+`actions/upload-code-coverage` reports it under the `code-coverage/vitest`
+label, and `codecov/codecov-action` uploads the same Cobertura file to Codecov,
+which is what keeps the history the trend lines are drawn from. Both read the
+report the first leg wrote, so neither re-measures.
+
+Neither adds a way for `Test` to fail. `fail_ci_if_error` is left at its default
+of `false`, and `.github/codecov.yml` marks both of Codecov's statuses
+informational — its default project status fails a pull request that lowers
+coverage against its base by any amount, which the run-to-run branch swing the
+thresholds in `vite.config.ts` are sized for would trip on its own. The floor
+there stays the one thing a drop has to clear. That file is `.yml` rather than
+the `.yaml` everything else here uses because Codecov recognises `codecov.yml`
+and `.codecov.yml` alone.
+
+**A third report goes up beside them, and it is not coverage.** A second
+`codecov/codecov-action` step, this one with `report_type: test_results`,
+uploads the JUnit XML `vite.config.ts` now writes, which Codecov reads for which
+tests failed and which are flaky rather than for a percentage. It is the same
+action as the coverage step on purpose: `codecov/test-results-action`, which
+Codecov's own docs still point at, prints a deprecation warning naming this one
+as its replacement. It carries `if: ${{ !cancelled() }}`, which makes it the one
+step in the job that runs when the suite is red — the only time it has anything
+to say. Both legs write that file and the last write wins, so a failure on the
+floor reaches Codecov instead of the first leg's passes.
+
+Both Codecov uploads want `CODECOV_TOKEN` in the repository's secrets. Without
+it they fall back to a tokenless upload, which this repository being public
+makes possible but rate-limited, so a report lands intermittently rather than
+not at all — which reads as a flaky uploader rather than as a missing secret.
+
 Everything shared comes from `kanso-labs/github-actions` at an exact release
 tag, never a moving major — `actions/setup-node`, `actions/lint-workflows`,
 `_release-please.yaml`, `_publish-npm.yaml` and `_renovate-command.yaml`. A
