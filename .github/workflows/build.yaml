@@ -43,3 +43,19 @@ jobs:
       # script says which and why.
       - name: Verify the published package shape
         run: npm run package:check
+
+      # `package.json` declares five peer ranges and nothing stood behind any
+      # of them. `tests/targets.test.ts` drives all four bundlers, which covers
+      # the adapters, but only against the single version `devDependencies`
+      # pins — it cannot see a range end going stale.
+      #
+      # This packs the tarball and installs it into throwaway fixtures at each
+      # end, so what is exercised is the published file list resolved through
+      # the exports map rather than the working tree.
+      #
+      # A step of this job rather than a job of its own, for the same reason
+      # `package:check` is one: the ruleset requires `Build`, `Lint` and `Test`
+      # by exact string, and a new job would be a name nothing requires. It
+      # needs the build, so it comes after it.
+      - name: Smoke-test both ends of every peer range
+        run: npm run peers:check

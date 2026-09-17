@@ -61,6 +61,7 @@
     "format:check": "oxfmt --check",
     "lint": "oxlint --type-aware . && eslint . && npm run format:check",
     "package:check": "publint && node scripts/check-package.mjs",
+    "peers:check": "node scripts/check-peers.mjs",
     "prepare": "husky",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
