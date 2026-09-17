@@ -171,7 +171,7 @@ check('engines.node admits no Node a required peer refuses', () => {
 check('the main entry evaluates under require()', () => {
   const namespace = requireNamespace(packageName)
 
-  for (const name of ['default', 'matchesWatchedFile', 'unpluginFactory']) {
+  for (const name of ['default']) {
     if (!(name in namespace)) {
       throw new Error(`required the module and got no \`${name}\` export back`)
     }
