@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.6.0...unplugin-style-dictionary-v0.6.1) (2026-09-17)
+
+
+### Performance Improvements
+
+* **build:** skip up-to-date builds and make the size report optional ([#273](https://github.com/kanso-labs/unplugin-style-dictionary/issues/273)) ([08f4b29](https://github.com/kanso-labs/unplugin-style-dictionary/commit/08f4b29f8c0c4a7a26c7f4d981493406d1e3666a))
+
 ## [0.6.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.5.3...unplugin-style-dictionary-v0.6.0) (2026-09-17)
 
 
