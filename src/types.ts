@@ -11,6 +11,15 @@ import type { Config } from 'style-dictionary'
  * build (e.g. `tsdown`/`rolldown build` without `--watch`) only builds once, in
  * `buildStart`.
  *
+ * Everything the plugin says goes through the host rather than to the console:
+ * Vite's `config.logger`, the plugin context under rollup and rolldown, and
+ * `compilation.warnings` under webpack, which is what puts a failed compile in
+ * `stats.toJson()`. A failure is reported on the warning channel and never the
+ * error one — rollup's `this.error` aborts the bundle, and that decision is
+ * `failOnError`'s alone. Where no host offers a channel the console is used,
+ * with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the stream is a
+ * terminal.
+ *
  * The three `onBuild*` hooks are called synchronously and their return value
  * is not awaited, so a build never waits for one. A hook may still be written
  * `async`: a promise it returns is left to run on its own, and a rejection is
@@ -145,6 +154,13 @@ export interface UnpluginStyleDictionaryOptions {
    *
    * A compile that fails is reported at every level, so there is no
    * `'error'`: `'silent'` is the quietest and still reports a failure.
+   *
+   * This option governs what the plugin says, not where it goes. The messages
+   * are handed to the host — Vite's `config.logger`, the rollup and rolldown
+   * plugin context, webpack's `compilation` — so a host silenced by its own
+   * log level suppresses them after this option has let them through. A
+   * failure still stops the build whenever `failOnError` says it should,
+   * printed or not.
    *
    * @default undefined, which prints the plugin's own lines and leaves the
    * configuration's `log.verbosity` alone

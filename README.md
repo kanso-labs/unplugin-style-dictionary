@@ -358,6 +358,41 @@ A compile that fails is reported at every level, including `'silent'`, which is
 why there is no `'error'`. `log.warnings` is never touched: if your
 configuration turns a warning into a thrown build, that stays your decision.
 
+### Where the messages go
+
+Through your bundler, not straight to the console, and each one takes them its
+own way:
+
+| Target             | Progress lines           | A failed compile                   |
+| ------------------ | ------------------------ | ---------------------------------- |
+| Vite               | `config.logger.info`     | `config.logger.error`              |
+| Rollup, Rolldown   | the plugin context's log | the context's warning channel      |
+| Webpack            | the console              | `compilation.warnings`, so `stats` |
+| No host (one-shot) | the console              | the console                        |
+
+That is what makes a `customLogger` and `clearScreen` work under Vite, and what
+puts a failed compile into `stats.toJson()` under webpack — where it reaches CI
+annotations and anything else reading the build's own output.
+
+**A failure is reported as a warning, never on the host's error channel.**
+Rollup's `this.error` aborts the bundle, so reporting a failure through it would
+stop every build that reported one — taking the decision `failOnError` exists to
+make. The same reasoning puts webpack's report in `compilation.warnings` rather
+than `compilation.errors`, so `failOnError: false` really does leave the build
+passing.
+
+**Your bundler's own log level applies.** `vite --logLevel silent` silences
+Vite's logger, and the plugin's lines are Vite's logger's now, so they go too.
+Nothing is lost by it that matters: `failOnError` decides whether a broken token
+set stops the build, and it decides that whether or not anything was printed.
+
+Colour follows the usual conventions, which it previously ignored entirely: no
+escapes when `NO_COLOR` is set, or when the stream is not a terminal, or under
+`TERM=dumb`; escapes when `FORCE_COLOR` is set to anything but `0`, including on
+a non-terminal, which is what that variable is for. `NO_COLOR` wins over
+`FORCE_COLOR`. stdout and stderr are decided separately, because they are
+redirected separately.
+
 ## Failing the Build
 
 A token compile that fails stops the build. `vite build`, `rollup` and `webpack`
@@ -376,7 +411,9 @@ StyleDictionary({
 })
 ```
 
-A failure is always reported, whatever `failOnError` and `silent` are set to.
+A failure is always reported by the plugin, whatever `failOnError` and `silent`
+are set to — see [Where the messages go](#where-the-messages-go) for which
+channel it arrives on, and for the one thing that can still suppress it.
 
 Under Vite's dev server it is reported to the browser as well. A failed rebuild
 is pushed to Vite's error overlay, naming this plugin and carrying Style
@@ -465,6 +502,15 @@ const plugin = styleDictionary.rollup({ config: 'sd.config.json' })
  * --watch` and `webpack --watch` all rebuild on a token change, and a one-shot
  * build (e.g. `tsdown`/`rolldown build` without `--watch`) only builds once, in
  * `buildStart`.
+ *
+ * Everything the plugin says goes through the host rather than to the console:
+ * Vite's `config.logger`, the plugin context under rollup and rolldown, and
+ * `compilation.warnings` under webpack, which is what puts a failed compile in
+ * `stats.toJson()`. A failure is reported on the warning channel and never the
+ * error one — rollup's `this.error` aborts the bundle, and that decision is
+ * `failOnError`'s alone. Where no host offers a channel the console is used,
+ * with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the stream is a
+ * terminal.
  *
  * The three `onBuild*` hooks are called synchronously and their return value
  * is not awaited, so a build never waits for one. A hook may still be written
@@ -600,6 +646,13 @@ export interface UnpluginStyleDictionaryOptions {
    *
    * A compile that fails is reported at every level, so there is no
    * `'error'`: `'silent'` is the quietest and still reports a failure.
+   *
+   * This option governs what the plugin says, not where it goes. The messages
+   * are handed to the host — Vite's `config.logger`, the rollup and rolldown
+   * plugin context, webpack's `compilation` — so a host silenced by its own
+   * log level suppresses them after this option has let them through. A
+   * failure still stops the build whenever `failOnError` says it should,
+   * printed or not.
    *
    * @default undefined, which prints the plugin's own lines and leaves the
    * configuration's `log.verbosity` alone

@@ -112,13 +112,28 @@ const writeFixture = (
   }
 }
 
+// Where each host puts a message the plugin reports. The plugin routes through
+// the bundler now rather than writing to the console, so a `console.error` spy
+// sees nothing on three of these four — the collector is what replaces it, and
+// it is per target because no two hosts carry a plugin's message the same way.
+type MessageSink = (message: string) => void
+
 // One entry per target: how to run a single build of `directory` and hand back
 // whatever the bundler emitted, so the assertions below can be written once.
+// `onMessage` receives whatever the host was told, and is optional so the
+// build assertions that do not care can leave it out.
 const TARGETS = [
   {
-    build: async (directory: string, configFile: string) => {
+    build: async (
+      directory: string,
+      configFile: string,
+      onMessage?: MessageSink,
+    ) => {
       const bundle = await rollup.rollup({
         input: path.join(directory, 'entry.js'),
+        onwarn: (warning) => {
+          onMessage?.(warning.message)
+        },
         plugins: [rollupPlugin({ config: configFile, silent: true })],
       })
       const { output } = await bundle.generate({ format: 'es' })
@@ -129,9 +144,18 @@ const TARGETS = [
     name: 'rollup',
   },
   {
-    build: async (directory: string, configFile: string) => {
+    build: async (
+      directory: string,
+      configFile: string,
+      onMessage?: MessageSink,
+    ) => {
       const bundle = await rolldown.rolldown({
         input: path.join(directory, 'entry.js'),
+        // `onLog` rather than the `onwarn` its sibling above uses: rolldown
+        // deprecated that one, and the linter is type-aware enough to say so.
+        onLog: (_level, log) => {
+          onMessage?.(log.message)
+        },
         plugins: [rolldownPlugin({ config: configFile, silent: true })],
       })
       const { output } = await bundle.generate({ format: 'es' })
@@ -142,7 +166,13 @@ const TARGETS = [
     name: 'rolldown',
   },
   {
-    build: async (directory: string, configFile: string) => {
+    build: async (
+      directory: string,
+      configFile: string,
+      onMessage?: MessageSink,
+    ) => {
+      const record = (message: string) => onMessage?.(message)
+
       await vite.build({
         build: {
           lib: {
@@ -153,6 +183,15 @@ const TARGETS = [
           outDir: path.join(directory, 'dist'),
         },
         configFile: false,
+        customLogger: {
+          clearScreen: () => {},
+          error: record,
+          hasErrorLogged: () => false,
+          hasWarned: false,
+          info: record,
+          warn: record,
+          warnOnce: record,
+        },
         logLevel: 'silent',
         plugins: [vitePlugin({ config: configFile, silent: true })],
         root: directory,
@@ -163,7 +202,11 @@ const TARGETS = [
     name: 'vite',
   },
   {
-    build: async (directory: string, configFile: string) => {
+    build: async (
+      directory: string,
+      configFile: string,
+      onMessage?: MessageSink,
+    ) => {
       const stats = await new Promise<undefined | webpack.Stats>(
         (resolve, reject) => {
           webpack(
@@ -182,7 +225,15 @@ const TARGETS = [
         },
       )
 
-      const errors = stats?.toJson().errors ?? []
+      // `stats` is where a webpack plugin's message belongs, and reading it
+      // here is what proves the plugin's report got there rather than onto a
+      // console nothing in CI reads.
+      const json = stats?.toJson({ all: true })
+      for (const warning of json?.warnings ?? []) {
+        onMessage?.(warning.message)
+      }
+
+      const errors = json?.errors ?? []
       if (errors.length > 0) throw new Error(errors[0]?.message ?? 'unknown')
 
       return fs.readFileSync(path.join(directory, 'dist', 'main.js'), 'utf-8')
@@ -226,26 +277,30 @@ describe('every target compiles tokens through its own bundler', () => {
         config: '{ "platforms": {',
       })
 
-      // Captured rather than left to the terminal. The plugin reports a
-      // failed compile at every level by design, so a test that provokes one
-      // prints two red lines per target — sixteen across this file and its
-      // neighbours — and a real failure in a CI log is then something a
-      // reader has to pick out of the ones that were asked for.
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      // Two places a message can land, and the assertion accepts either.
+      // Three of the four hosts take the report on their own channel now; the
+      // console is what is left where a host has none to offer, and on webpack
+      // where a `beforeCompile` that throws ends the run before a compilation
+      // ever exists to attach it to.
+      const messages: string[] = []
+      const errorSpy = vi
+        .spyOn(console, 'error')
+        .mockImplementation((...call: unknown[]) => {
+          messages.push(String(call[0]))
+        })
 
       try {
         // Settling at all is half the assertion — a configuration that
         // rejects a promise nobody holds is what used to leave a host
         // building forever — and rejecting is the other half, since a broken
         // token set must not pass for a successful build on any target.
-        await expect(build(directory, configFile)).rejects.toThrow(
-          /JSON5|invalid|Failed to load/i,
-        )
+        await expect(
+          build(directory, configFile, (message) => messages.push(message)),
+        ).rejects.toThrow(/JSON5|invalid|Failed to load/i)
 
         // Capturing it is not the same as dropping it: the report is part of
         // what this asserts, since a failure the host stops for must also say
         // why.
-        const messages = errorSpy.mock.calls.map((call) => String(call[0]))
         expect(
           messages.some((message) =>
             message.includes('Compilation failed after'),
