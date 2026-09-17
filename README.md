@@ -128,6 +128,33 @@ _The subpaths also need a TypeScript `moduleResolution` of `bundler`, `node16`
 or `nodenext`. The deprecated `node10` cannot resolve them, and TypeScript 6
 already warns that it stops working in 7._
 
+### Finding a Config File
+
+With no `config`, the root is searched for `sd.config.json`, `config.json`,
+`sd.config.js` and `sd.config.mjs`, in that order — and the first one that
+**looks like a Style Dictionary configuration** wins. That means declaring at
+least one of `platforms`, `source`, `include` or `tokens`. A candidate that
+fails the check is reported and skipped rather than adopted, so an unrelated
+`config.json` — an extremely common name for something else — no longer gets
+compiled over and added to the watch set. The path that was picked is printed,
+so which configuration a build used is answerable from the console.
+
+`config.json` stays in the list because Style Dictionary's own CLI defaults to
+it, so a project relying on that default keeps working.
+
+**Two of the four names are modules, and reading a module runs it.** A root
+`sd.config.js` is imported — freshly, on every watch event — and validation
+cannot prevent that, because the check can only look at what the import
+returned. If you name your configuration explicitly, or have none, say so:
+
+```typescript
+StyleDictionary({ config: false })
+```
+
+That turns discovery off entirely: nothing is looked for, nothing is watched,
+and nothing is compiled. A configuration you name yourself is never
+second-guessed by the check above — it goes straight to Style Dictionary.
+
 ### Config File Formats
 
 A `config` path may be `.json`, `.json5`, `.jsonc`, `.js`, `.mjs` or `.ts`. The
@@ -679,7 +706,19 @@ export interface UnpluginStyleDictionaryOptions {
    *
    * If not provided, the root directory is searched for 'sd.config.json',
    * 'config.json', 'sd.config.js' and 'sd.config.mjs', in that order. The
-   * first one that exists wins, and the rest are not looked at.
+   * first one that *looks like a Style Dictionary configuration* wins — it has
+   * to declare at least one of `platforms`, `source`, `include` or `tokens` —
+   * and the path it picked is announced, so which file a build used is
+   * answerable from the console. A candidate that fails that check is reported
+   * and skipped rather than adopted, because `config.json` is an extremely
+   * common name for something else entirely.
+   *
+   * **`false` turns discovery off.** Two of the four names are modules rather
+   * than data, and reading a module means running it: a `sd.config.js` in the
+   * root is imported, freshly, on every watch event. Validation cannot prevent
+   * that, because the check can only look at what the import returned — so a
+   * project that names its configuration explicitly, or has none, should say
+   * `config: false` rather than rely on there being nothing to find.
    */
   config?:
     | ((
@@ -687,6 +726,7 @@ export interface UnpluginStyleDictionaryOptions {
       ) => Config | Config[] | Promise<Config | Config[]>)
     | Config
     | Config[]
+    | false
     | string
     | string[]
 

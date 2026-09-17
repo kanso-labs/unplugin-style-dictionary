@@ -713,6 +713,29 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**Discovery validates, and only what it went looking for.** Given no `config`,
+four generic names are tried in the root and the first that declares one of
+`platforms`, `source`, `include` or `tokens` is adopted; a candidate failing
+that is reported and **skipped rather than adopted, with the search continuing**
+— an unrelated `config.json` sitting ahead of a real `sd.config.js` in the order
+would otherwise take the real configuration out of play, which is worse than
+what the check replaced. The path is announced once per instance, because
+`resolveConfigs` runs on every rebuild.
+
+The check never applies to a configuration the consumer named. Style Dictionary
+accepts shapes this predicate does not know about, and the plugin overruling the
+host on its own contract is not a trade worth making. That distinction is
+testable only through _which_ failure arrives — an unusable configuration cannot
+build either way — so the test asserts on the message rather than on an outcome.
+
+**`config: false` is checked by identity, not truthiness.** It is falsy, and the
+`!rawConfig` test below it is what triggers discovery, so a truthiness check
+reads "do not discover anything" as "go and look". It exists because reading a
+module means running it: two of the four discovered names are modules, so
+validation happens _after_ the side effects and only opting out prevents them.
+Do not drop the `.js` and `.mjs` names to fix that — and do not drop
+`config.json` either; Style Dictionary's own CLI defaults to it.
+
 **An empty token set has to be caught before `buildAllPlatforms`, and the window
 is one line wide.** Style Dictionary treats a `source` matching no files as
 success: it writes the destination with no tokens in it, prints its usual tick

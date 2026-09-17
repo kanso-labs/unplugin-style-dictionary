@@ -120,6 +120,26 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   )
 }
 
+// Whether a discovered file looks like a Style Dictionary configuration at all.
+//
+// Only applied to a file the plugin went looking for, never to one a consumer
+// named: an explicit `config` is their choice and second-guessing it would
+// reject shapes Style Dictionary accepts and this does not know about.
+//
+// `config.json` is an extremely common name for something else entirely, and
+// the plugin used to adopt whatever it found under that name, add it to the
+// watch set, and report a successful compile over it.
+function looksLikeConfig(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+
+  // The four keys any usable configuration has at least one of. `platforms`
+  // alone is enough because a configuration can declare its tokens inline
+  // under `tokens`, or read them through `source`/`include`.
+  return ['include', 'platforms', 'source', 'tokens'].some(
+    (key) => key in value,
+  )
+}
+
 // Vite builds its dev-server watcher with a fixed ignore list — `**/.git/**`,
 // `**/node_modules/**`, `**/test-results/**` and the cache directory — and
 // spreads the consumer's own `server.watch.ignored` entries in *after* them.
@@ -800,6 +820,11 @@ const unpluginFactory: UnpluginFactory<
   const resolveConfigs = async (): Promise<ResolvedConfig[]> => {
     let rawConfig = options.config
 
+    // Checked ahead of the discovery below, and by identity rather than
+    // truthiness: `false` is falsy, so the `!rawConfig` test that triggers
+    // discovery would treat "do not discover anything" as "go and look".
+    if (rawConfig === false) return []
+
     // If config is not defined, look for default configuration files
     if (!rawConfig) {
       const defaults = [
@@ -808,12 +833,48 @@ const unpluginFactory: UnpluginFactory<
         'sd.config.js',
         'sd.config.mjs',
       ]
+
+      const rejected: string[] = []
+
       for (const file of defaults) {
         const fullPath = path.resolve(root, file)
-        if (fs.existsSync(fullPath)) {
-          rawConfig = file
-          break
+        if (!fs.existsSync(fullPath)) continue
+
+        // Read before adopting. For the two `.json` names this is a parse and
+        // nothing more; for the two module names it is an import, and the
+        // module has already run by the time there is anything to check —
+        // which is what `config: false` exists for and why validation alone
+        // does not cover them.
+        const candidate = await readConfigObject(
+          { config: fullPath, file: fullPath },
+          false,
+        )
+
+        if (!looksLikeConfig(candidate)) {
+          rejected.push(file)
+          continue
         }
+
+        // Announced, because "which configuration did it pick" was not
+        // answerable from the console at all, and discovery picks from four
+        // generic names.
+        if (!announcedDiscovery) {
+          announcedDiscovery = true
+          log(`Using the configuration it found at ${fullPath}`, 'info')
+        }
+
+        rawConfig = file
+        break
+      }
+
+      // Said whether or not something usable turned up after them. A skipped
+      // candidate is the interesting half of "no configuration found": the
+      // file is right there, and the reason it was not used is not guessable.
+      if (rejected.length > 0) {
+        log(
+          `Ignored ${rejected.join(', ')} in ${root}: nothing there declares platforms, source, include or tokens, so it does not look like a Style Dictionary configuration. Name it with the config option if it is one, or set config to false to stop looking.`,
+          'error',
+        )
       }
     }
 
@@ -1596,6 +1657,11 @@ const unpluginFactory: UnpluginFactory<
   let refreshServerWatchList:
     | ((resolved: ResolvedConfig[]) => Promise<void>)
     | undefined
+
+  // Whether the discovered path has been announced. Once per plugin instance:
+  // `resolveConfigs` runs on every build and rebuild, and a dev server would
+  // otherwise repeat the line for the rest of the session.
+  let announcedDiscovery = false
 
   // Resolved by `configResolved` so it can amend the watcher's ignore list, and
   // handed to `configureServer` rather than resolved again — one start-up, one

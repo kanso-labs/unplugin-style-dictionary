@@ -77,6 +77,20 @@ const callWatchChange = async (plugin: Plugin, id: string) => {
   return watched
 }
 
+// A minimal configuration that discovery will accept: it declares `platforms`
+// and supplies its tokens inline, so it needs no source files on disk.
+const usableConfig = (directory: string, destination: string) =>
+  JSON.stringify({
+    platforms: {
+      css: {
+        buildPath: path.join(directory, 'gen').replace(/\\/g, '/') + '/',
+        files: [{ destination, format: 'css/variables' }],
+        transformGroup: 'css',
+      },
+    },
+    tokens: { color: { brand: { value: '#123456' } } },
+  })
+
 // Identity of a file on disk, not just its content. The atomic write renames a
 // fresh file over the destination, so a build that rewrote it changes the
 // inode — which a content comparison would miss when the bytes happen to be
@@ -2557,6 +2571,183 @@ describe('unplugin-style-dictionary (vite target)', () => {
 
       const written = fs.readFileSync(path.join(tempDir, 'inline.css'), 'utf-8')
       expect(written).toContain('--color-inline: #00ff00;')
+    })
+  })
+
+  // Given no `config`, the plugin adopts the first file in the root whose name
+  // is one of four generic ones — and `config.json` is an extremely common name
+  // for something else entirely. It used to adopt whatever it found, add it to
+  // the watch set, and print `Compiled successfully!` over it, with no line
+  // saying which file it had picked.
+  describe('when it goes looking for a configuration', () => {
+    // Its own directory per case, because the suite's shared fixture writes an
+    // `sd.config.json` into `tempDir` that discovery would find first.
+    const rootWith = (name: string, files: Record<string, string>) => {
+      const directory = path.join(tempDir, `discovery-${name}`)
+      fs.mkdirSync(path.join(directory, 'gen'), { recursive: true })
+
+      for (const [file, contents] of Object.entries(files)) {
+        fs.writeFileSync(path.join(directory, file), contents)
+      }
+
+      return directory
+    }
+
+    it('refuses an unrelated config.json instead of compiling over it', async () => {
+      const directory = rootWith('unrelated', {
+        'config.json': JSON.stringify({
+          apiUrl: 'https://example.test',
+          featureFlags: { beta: true },
+        }),
+      })
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const watched = await callBuildStart(
+          vitePlugin({ logLevel: 'silent', root: directory }),
+        )
+
+        const said = errorSpy.mock.calls.map((call) => String(call[0]))
+
+        // Named, with the reason, rather than left to be guessed at.
+        expect(said.some((line) => line.includes('config.json'))).toBe(true)
+        expect(
+          said.some((line) =>
+            line.includes('platforms, source, include or tokens'),
+          ),
+        ).toBe(true)
+
+        // And not adopted: nothing was compiled and nothing is watched, so a
+        // later edit to it cannot trigger a rebuild either.
+        expect(watched).toEqual([])
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('skips a candidate that fails the check and takes a later one', async () => {
+      // The mixed case: an unrelated `config.json` sits earlier in the search
+      // order than a real `sd.config.js`. Rejecting and stopping would leave
+      // the real configuration unused, which is worse than what it replaced.
+      const directory = rootWith('mixed', {
+        'config.json': JSON.stringify({ apiUrl: 'https://example.test' }),
+      })
+      fs.writeFileSync(
+        path.join(directory, 'sd.config.js'),
+        `export default ${usableConfig(directory, 'mixed.css')}\n`,
+      )
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await callBuildStart(
+          vitePlugin({ logLevel: 'silent', root: directory }),
+        )
+
+        expect(
+          fs.readFileSync(path.join(directory, 'gen', 'mixed.css'), 'utf-8'),
+        ).toContain('--color-brand: #123456;')
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('says which file it picked', async () => {
+      const directory = rootWith('announce', {
+        'config.json': usableConfig(
+          path.join(tempDir, 'discovery-announce'),
+          'announced.css',
+        ),
+      })
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        // No `logLevel`, because the announcement is one of the plugin's own
+        // progress lines and `'silent'` is entitled to drop it.
+        await callBuildStart(vitePlugin({ root: directory }))
+
+        const said = logSpy.mock.calls.map((call) => String(call[0]))
+        expect(
+          said.some(
+            (line) =>
+              line.includes('Using the configuration it found') &&
+              line.includes('config.json'),
+          ),
+        ).toBe(true)
+      } finally {
+        logSpy.mockRestore()
+      }
+    })
+
+    it('does not look at all when config is false', async () => {
+      // The only thing that covers a discovered `.js`: reading a module means
+      // running it, so validation happens after the side effects. A project
+      // that names its configuration, or has none, says so.
+      const directory = rootWith('opted-out', {
+        'config.json': usableConfig(
+          path.join(tempDir, 'discovery-opted-out'),
+          'must-not-exist.css',
+        ),
+      })
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        const watched = await callBuildStart(
+          vitePlugin({ config: false, root: directory }),
+        )
+
+        expect(watched).toEqual([])
+        expect(
+          fs.existsSync(path.join(directory, 'gen', 'must-not-exist.css')),
+        ).toBe(false)
+
+        // Silent as well as inert: opting out is not a condition to report.
+        expect(errorSpy).not.toHaveBeenCalled()
+        expect(logSpy).not.toHaveBeenCalled()
+      } finally {
+        errorSpy.mockRestore()
+        logSpy.mockRestore()
+      }
+    })
+
+    it('hands a configuration the consumer named to Style Dictionary unchecked', async () => {
+      // The check is for a file the plugin went looking for. An explicit
+      // `config` is the consumer's choice, and Style Dictionary accepts shapes
+      // this predicate does not know about — rejecting one would be the plugin
+      // overruling the host on its own contract.
+      //
+      // Asserted on *which* failure arrives, because that is what the two
+      // paths differ by. A configuration declaring none of the four keys
+      // cannot build either way — after #294 an empty token set is a failure —
+      // so the observable difference is whether it reached Style Dictionary at
+      // all. Applying the discovery check here instead returns no
+      // configurations, and the compile never runs.
+      const directory = rootWith('explicit', {})
+      const named = path.join(directory, 'named.json')
+      fs.writeFileSync(named, JSON.stringify({ notAConfigKey: true }))
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(
+          callBuildStart(
+            vitePlugin({ config: named, logLevel: 'silent', root: directory }),
+          ),
+        ).rejects.toThrow('resolved no tokens')
+
+        const said = errorSpy.mock.calls.map((call) => String(call[0]))
+
+        // Style Dictionary's own verdict on it, not a refusal to look.
+        expect(said.some((line) => line.includes('resolved no tokens'))).toBe(
+          true,
+        )
+        expect(
+          said.some((line) =>
+            line.includes('does not look like a Style Dictionary'),
+          ),
+        ).toBe(false)
+      } finally {
+        errorSpy.mockRestore()
+      }
     })
   })
 })
