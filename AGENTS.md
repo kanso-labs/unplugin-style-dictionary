@@ -713,6 +713,29 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**An empty token set has to be caught before `buildAllPlatforms`, and the window
+is one line wide.** Style Dictionary treats a `source` matching no files as
+success: it writes the destination with no tokens in it, prints its usual tick
+at every verbosity, and returns. So the check sits between the `extend` that
+resolves the token set and the build that overwrites the output — one line later
+the previous good output is already truncated, and an error is accurate and
+useless. Measured: moving the check after the build leaves the destination
+emptied and fails the test that asserts the old bytes survive.
+
+**Judge it on `sd.allTokens`, never on the patterns.** A configuration may
+supply `tokens` inline and declare no `source` at all — valid, and it builds —
+so "no pattern matched" and "no tokens" are different questions and only the
+second may fail a build. Patterns are for the message: the token count says a
+configuration is empty, and only the patterns say which one moved. The failure
+is thrown rather than reported, so `failOnError` keeps owning the decision
+instead of a second way to fail a build growing beside it.
+
+Worth knowing that the `cache` option masks the dev-server half of this by
+accident: with the only source deleted, nothing a configuration reads is newer
+than its output, so `isUpToDate` skips the compile and the destination survives
+without the check running at all. That is why the test for it passes
+`cache: false` — otherwise it passes with the check removed.
+
 **Vite's dev-server watcher cannot be reached after `configResolved`, and its
 ignore list only grows.** It is built from the resolved config with
 `**/.git/**`, `**/node_modules/**`, `**/test-results/**` and the cache directory

@@ -2411,6 +2411,154 @@ describe('unplugin-style-dictionary (vite target)', () => {
       )
     })
   })
+
+  // A `source` matching no files was not an error anywhere in this stack.
+  // Style Dictionary wrote the destination with no custom properties in it,
+  // printed its usual tick at every verbosity, and returned — so a token file
+  // deleted mid-session took the generated output down with it and reported
+  // `Rebuilt design tokens` while doing it, and a `source` matching nothing
+  // shipped an empty stylesheet from a build that exited 0.
+  describe('when a configuration resolves no tokens', () => {
+    it('keeps the previous output and reports, rather than emptying it', async () => {
+      // `cache: false` because the up-to-date check would otherwise skip this
+      // configuration entirely — with its only source gone, nothing it reads
+      // is newer than the output, so the destination survives by accident
+      // rather than by this check. Turning the cache off is what puts the
+      // compile back in the path so the check is what saves the file.
+      //
+      // `failOnError: false` so the rebuild reports and continues, which is
+      // what a dev server does; the throwing half is the next case.
+      const plugin = vitePlugin({
+        cache: false,
+        config: configFile,
+        failOnError: false,
+        logLevel: 'silent',
+      })
+
+      await callBuildStart(plugin)
+      const firstBuild = fs.readFileSync(outputFile, 'utf-8')
+      expect(firstBuild).toContain('--color-primary: #0070f3;')
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        fs.rmSync(tokenFile)
+        await callWatchChange(plugin, tokenFile)
+
+        // The output is byte-for-byte what the good build wrote. Before this,
+        // it was `:root {\n\n}`.
+        expect(fs.readFileSync(outputFile, 'utf-8')).toBe(firstBuild)
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('resolved no tokens'),
+        )
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('fails a one-shot build rather than shipping an empty file', async () => {
+      // `failOnError` left at its default, which throws on the compile in
+      // `buildStart`. The point is that this is a *build*: it used to exit 0.
+      const barren = path.join(tempDir, 'barren.config.json')
+      const missing = path.join(tempDir, 'nowhere', '**', '*.json')
+      fs.writeFileSync(
+        barren,
+        JSON.stringify({
+          platforms: {
+            css: {
+              buildPath: tempDir.replace(/\\/g, '/') + '/',
+              files: [{ destination: 'empty.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [missing.replace(/\\/g, '/')],
+        }),
+      )
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(
+          callBuildStart(vitePlugin({ config: barren, logLevel: 'silent' })),
+        ).rejects.toThrow('resolved no tokens')
+
+        // Nothing was written, so there is no empty stylesheet to ship.
+        expect(fs.existsSync(path.join(tempDir, 'empty.css'))).toBe(false)
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('names the pattern that matched nothing', async () => {
+      // The token count says a configuration is empty; only the patterns say
+      // why. A message naming neither leaves a consumer to guess which of
+      // several sources moved.
+      const barren = path.join(tempDir, 'named.config.json')
+      const missing = (path.join(tempDir, 'gone') + '/**/*.json').replace(
+        /\\/g,
+        '/',
+      )
+      fs.writeFileSync(
+        barren,
+        JSON.stringify({
+          platforms: {
+            css: {
+              buildPath: tempDir.replace(/\\/g, '/') + '/',
+              files: [{ destination: 'named.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [missing],
+        }),
+      )
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        // Resolves rather than throws, because `failOnError: false` asked for
+        // the report without the failure — which is the case this asserts the
+        // message of.
+        await callBuildStart(
+          vitePlugin({
+            config: barren,
+            failOnError: false,
+            logLevel: 'silent',
+          }),
+        )
+
+        const said = errorSpy.mock.calls.map((call) => String(call[0]))
+        expect(said.some((line) => line.includes(missing))).toBe(true)
+        expect(said.some((line) => line.includes(barren))).toBe(true)
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('does not fire for a configuration that supplies its tokens inline', async () => {
+      // Style Dictionary accepts a `tokens` object with no `source` at all, so
+      // "no source matched" and "no tokens" are different questions and only
+      // the second may fail a build. Checking the patterns instead of the
+      // resolved set would reject this configuration, which is valid and
+      // builds correctly.
+      const inline = path.join(tempDir, 'inline.config.json')
+      fs.writeFileSync(
+        inline,
+        JSON.stringify({
+          platforms: {
+            css: {
+              buildPath: tempDir.replace(/\\/g, '/') + '/',
+              files: [{ destination: 'inline.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          tokens: { color: { inline: { value: '#00ff00' } } },
+        }),
+      )
+
+      await callBuildStart(vitePlugin({ config: inline, logLevel: 'silent' }))
+
+      const written = fs.readFileSync(path.join(tempDir, 'inline.css'), 'utf-8')
+      expect(written).toContain('--color-inline: #00ff00;')
+    })
+  })
 })
 
 // Nothing pinned the exports map, and two of the ways it breaks leave every
