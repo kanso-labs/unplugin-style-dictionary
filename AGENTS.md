@@ -185,6 +185,29 @@ be free to fail without stopping anything.
 so it has to come after the build, and a job of its own would be a check name
 the ruleset does not require.
 
+**`Build` also smoke-tests both ends of every declared peer range**, through
+`npm run peers:check`. `package.json` claims `vite ^6 || ^7 || ^8`,
+`style-dictionary ^5`, and `*` for rollup, rolldown and webpack, and nothing
+stood behind any of them: `tests/targets.test.ts` drives all four bundlers, so
+the adapters are covered, but only against the single version `devDependencies`
+pins — it cannot see a range end going stale.
+
+`scripts/check-peers.mjs` packs the tarball and installs it into six throwaway
+fixtures, so what it exercises is the published file list resolved through the
+exports map rather than the working tree. style-dictionary rides on rollup at
+each end of `^5` while the bundler stays constant, which is what isolates it.
+
+Two things about it are worth keeping. Each fixture emits a **JavaScript** token
+format, not CSS: rollup and rolldown cannot resolve a `.css` import without a
+loader plugin, and what is under test is this package's entry points. And the
+webpack fixture goes through the README's CommonJS `require` form, because the
+`.default` hop is the part most likely to break.
+
+A version outside a declared range fails at the install rather than the
+assertion — npm refuses it with ERESOLVE, which is the peer declaration doing
+its job. To prove the fixtures themselves bite, break the built package: with
+`resolveConfigs` stubbed to return nothing, all six fail.
+
 **That command is two tools, and the split is what each half can see.** publint
 reads `package.json` and the packed file list, so it catches an exports target
 aimed at a file the tarball does not carry — which is exactly what losing
