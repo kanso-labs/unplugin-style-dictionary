@@ -276,4 +276,72 @@ describe('under a real webpack compiler', () => {
     // wearing a different hat.
     expect(warnings.some((message) => message.includes('['))).toBe(false)
   }, 60000)
+
+  it('tells a config function webpack its mode and whether it watches', async () => {
+    // The issue expected this to be unreachable — webpack's `buildStart`
+    // context carries no `meta`, so it proposed `getNativeBuildContext()` or a
+    // hardcoded `false`. Neither is needed: the `webpack` hook is handed the
+    // compiler, which knows both. `mode` is a webpack option, and `watchMode`
+    // is only set once `watch()` has been called, so it is read per compile
+    // rather than when the plugin is installed.
+    const context = path.join(tempDir, 'config-context')
+    const tokensDirectory = path.join(context, 'tokens')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+    fs.writeFileSync(path.join(context, 'entry.js'), 'export default 1\n')
+    fs.writeFileSync(
+      path.join(tokensDirectory, 'color.json'),
+      JSON.stringify({ color: { brand: { value: '#0070f3' } } }),
+    )
+
+    const seen: Array<{ command: string; mode: string; watch: boolean }> = []
+
+    await new Promise<undefined | webpack.Stats>((resolve, reject) => {
+      webpack(
+        {
+          context,
+          entry: './entry.js',
+          mode: 'development',
+          output: { path: path.join(context, 'dist') },
+          plugins: [
+            webpackPlugin({
+              config: (buildContext) => {
+                seen.push({ ...buildContext })
+
+                return {
+                  platforms: {
+                    js: {
+                      buildPath:
+                        path.join(context, 'generated').replace(/\\/g, '/') +
+                        '/',
+                      files: [
+                        { destination: 'tokens.js', format: 'javascript/es6' },
+                      ],
+                      transformGroup: 'js',
+                    },
+                  },
+                  source: [
+                    path.join(tokensDirectory, '*.json').replace(/\\/g, '/'),
+                  ],
+                }
+              },
+              logLevel: 'silent',
+            }),
+          ],
+        },
+        (error, result) => {
+          if (error) reject(error)
+          else resolve(result)
+        },
+      )
+    })
+
+    expect(seen.length).toBeGreaterThan(0)
+
+    // webpack's own `mode`, not a value derived from `command`.
+    expect(seen[0]?.mode).toBe('development')
+
+    // webpack does not serve, so it builds — and this run is not a watch.
+    expect(seen[0]?.command).toBe('build')
+    expect(seen[0]?.watch).toBe(false)
+  }, 60000)
 })

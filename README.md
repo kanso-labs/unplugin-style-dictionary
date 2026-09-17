@@ -194,6 +194,38 @@ source and no config file does not reach it, so a dev server editing unrelated
 project files leaves it alone — treat it as the place to prepare a build, not as
 a general file-change hook.
 
+**It is handed what the host is doing**, so the configuration it returns can
+depend on it — build an expensive platform on `vite build` and skip it while the
+dev server runs:
+
+```typescript
+styleDictionaryPlugin({
+  config: ({ command, mode, watch }) => ({
+    source: ['tokens/**/*.json'],
+    platforms: {
+      css: {
+        transformGroup: 'css',
+        buildPath: 'dist/',
+        files: [{ destination: 'vars.css', format: 'css/variables' }],
+      },
+      // Shells out to a native toolchain, so it is worth a minute of a real
+      // build and not worth a second of every rebuild.
+      ...(command === 'build' && !watch ? { ios: iosPlatform(mode) } : {}),
+    },
+  }),
+})
+```
+
+`command` is `'serve'` only under Vite's dev server; every other target builds.
+`mode` is Vite's or webpack's own, and follows `command` on rollup and rolldown,
+which have no such concept. `watch` is read from the host rather than inferred
+from `command`, because `rollup --watch` both watches and builds. The full
+contract is [`StyleDictionaryConfigContext`](#options-reference).
+
+A function taking no arguments stays valid — TypeScript accepts one of fewer
+parameters and JavaScript ignores the extra argument — so the example below
+needs no change.
+
 ```typescript
 // Named `styleDictionaryPlugin` here to avoid colliding with the `StyleDictionary`
 // class imported from the `style-dictionary` package itself, below.
@@ -465,13 +497,14 @@ the host stops, the other is that a build went wrong.
 
 ## Public API
 
-Small on purpose. Four bundler entry points, one root entry, and one type.
+Small on purpose. Four bundler entry points, one root entry, and two types.
 
 | Import                                          | What it is                                                                                                             |
 | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `…/vite`, `…/rolldown`, `…/rollup`, `…/webpack` | Default export: the plugin for that bundler. Call it with the options below.                                           |
 | `…` (the root)                                  | Default export, also named `unplugin`: the unplugin instance, carrying `.vite`, `.rolldown`, `.rollup` and `.webpack`. |
 | `UnpluginStyleDictionaryOptions`                | The options type, exported from every entry above.                                                                     |
+| `StyleDictionaryConfigContext`                  | What the function form of `config` is handed, exported from every entry above.                                         |
 
 Anything not in that table is internal, whatever a build output happens to
 contain. In particular the watch filter and the raw unplugin factory are not
@@ -529,6 +562,46 @@ const plugin = styleDictionary.rollup({ config: 'sd.config.json' })
  * on a Linux runner the same edit reaches a rebuild. Do not rely on a token
  * edit triggering a rebuild there.
  */
+/**
+ * What the host is doing, handed to the function form of `config` so it can
+ * decide what to build.
+ *
+ * Only Vite reports all three. Where a host does not say, the value is
+ * derived rather than guessed at, and each field below says how.
+ */
+export interface StyleDictionaryConfigContext {
+  /**
+   * Whether the host is serving or building.
+   *
+   * `'serve'` comes from Vite's own `config.command` and is the dev server.
+   * Every other target builds, so it is `'build'` there — rollup, rolldown and
+   * webpack have no serving mode of their own to report.
+   */
+  command: 'build' | 'serve'
+
+  /**
+   * The host's mode, as it names it.
+   *
+   * Vite reports its `config.mode` — `'development'` serving,
+   * `'production'` building, or whatever `--mode` named. webpack reports its
+   * `mode` option. rollup and rolldown have no such concept, so the value
+   * follows `command`: `'development'` when serving, `'production'` when
+   * building.
+   */
+  mode: string
+
+  /**
+   * Whether the host will keep rebuilding.
+   *
+   * `true` under Vite's dev server, `rollup --watch`, `rolldown.watch()` and
+   * `webpack --watch`; `false` for a one-shot build. It is read from the
+   * host — the plugin context's `meta.watchMode` on the three rollup-shaped
+   * targets, and `compiler.watchMode` on webpack — rather than inferred from
+   * `command`, because `rollup --watch` both watches and builds.
+   */
+  watch: boolean
+}
+
 export interface UnpluginStyleDictionaryOptions {
   /**
    * Whether a configuration whose output is already up to date may skip its
@@ -570,13 +643,20 @@ export interface UnpluginStyleDictionaryOptions {
    * - A function that returns a config or array of configs (or resolves to them).
    *   Useful for calling `StyleDictionary.registerFormat()` (or other `register*`
    *   methods) before returning a config that references the custom format by name.
+   *   It is handed a `StyleDictionaryConfigContext` describing what the host is
+   *   doing, so an expensive platform can be built only when it is wanted —
+   *   skipped under the dev server, built by `vite build`. A function taking no
+   *   arguments stays valid: TypeScript accepts one of fewer parameters, and
+   *   JavaScript ignores the extra argument.
    *
    * If not provided, the root directory is searched for 'sd.config.json',
    * 'config.json', 'sd.config.js' and 'sd.config.mjs', in that order. The
    * first one that exists wins, and the rest are not looked at.
    */
   config?:
-    | (() => Config | Config[] | Promise<Config | Config[]>)
+    | ((
+        context: StyleDictionaryConfigContext,
+      ) => Config | Config[] | Promise<Config | Config[]>)
     | Config
     | Config[]
     | string

@@ -713,6 +713,32 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**Hook order under Vite decides what the first `config` function is told.**
+`configResolved` runs, then `configureServer`, and `buildStart` only when the
+plugin container comes up — so `configureServer`'s own `resolveConfigs` call
+happens before any plugin context has reported `meta.watchMode`. It therefore
+sets `isWatching` itself, because a dev server watches by definition, and
+without that the first `config` function of the process is handed `watch: false`
+while a dev server starts up around it.
+
+**What each host can say about a build, and what has to be derived.** Only Vite
+reports a command and a mode; the rest is read where it exists and followed from
+`command` where it does not, rather than guessed at.
+
+| Host     | `command`        | `mode`                  | `watch`              |
+| -------- | ---------------- | ----------------------- | -------------------- |
+| Vite     | `config.command` | `config.mode`           | `meta.watchMode`     |
+| Rollup   | always `'build'` | follows `command`       | `meta.watchMode`     |
+| Rolldown | always `'build'` | follows `command`       | `meta.watchMode`     |
+| Webpack  | always `'build'` | `compiler.options.mode` | `compiler.watchMode` |
+
+webpack's `buildStart` context carries no `meta` at all, so neither field can
+come from there — both come off the compiler the `webpack` hook is handed.
+`compiler.watchMode` is only set once `watch()` has been called, which is after
+that hook runs, so it is read per compile in `beforeCompile` rather than when
+the plugin is installed. A rolldown hook runs at `generate()` rather than at
+`rolldown()`, which is worth knowing before writing a probe that sees nothing.
+
 **A host's error channel is not a place to report to.** Rollup's `this.error`
 aborts the bundle — measured: a `buildStart` calling it ends the run with
 `THREW: [plugin err-probe] fatal?` — so a failure reported through it stops

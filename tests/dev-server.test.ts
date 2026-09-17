@@ -7,7 +7,10 @@ import StyleDictionary from 'style-dictionary'
 import { createServer } from 'vite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { UnpluginStyleDictionaryOptions } from '../src/types.ts'
+import type {
+  StyleDictionaryConfigContext,
+  UnpluginStyleDictionaryOptions,
+} from '../src/types.ts'
 
 import vitePlugin from '../src/vite.ts'
 
@@ -131,6 +134,7 @@ describe('under a real vite dev server', () => {
       configFile,
       directory,
       generated: path.join(directory, buildPath, destination),
+      tokensDirectory,
       tokenSource,
       writeConfig,
     }
@@ -500,6 +504,61 @@ describe('under a real vite dev server', () => {
       expect(frames.filter((f) => f.type === 'update')).toEqual([])
     } finally {
       socket.close()
+    }
+  }, 30000)
+
+  it('tells a config function it is serving, not building', async () => {
+    // `'serve'` is only reachable under a real dev server: it comes from
+    // Vite's own `config.command`, and nothing else here serves. A stubbed
+    // context cannot produce it, which is why this case lives beside a server
+    // rather than with the others.
+    // The fixture's own config file is unused here: the point is the function
+    // form of `config`, which this passes inline instead.
+    const { directory, generated, tokensDirectory } =
+      writeFixture('config-context')
+
+    const seen: StyleDictionaryConfigContext[] = []
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [
+        vitePlugin({
+          config: (context) => {
+            seen.push(context)
+
+            return {
+              platforms: {
+                js: {
+                  buildPath: posix(path.join(directory, 'generated')) + '/',
+                  files: [
+                    { destination: 'tokens.js', format: 'javascript/es6' },
+                  ],
+                  transformGroup: 'js',
+                },
+              },
+              source: [posix(tokensDirectory) + '/**/*.json'],
+            }
+          },
+          logLevel: 'silent',
+        }),
+      ],
+      root: directory,
+      server: { hmr: false, middlewareMode: true },
+    })
+
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    expect(seen.length).toBeGreaterThan(0)
+
+    // Every call agrees, including the one from `configureServer` that runs
+    // before `buildStart` — which is why `watch` is set there rather than left
+    // to the plugin context, and what would otherwise report `false` while a
+    // dev server started up around it.
+    for (const context of seen) {
+      expect(context.command).toBe('serve')
+      expect(context.mode).toBe('development')
+      expect(context.watch).toBe(true)
     }
   }, 30000)
 })
