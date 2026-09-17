@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.8.0...unplugin-style-dictionary-v0.9.0) (2026-09-17)
+
+
+### Features
+
+* **options:** add platform scoping ([#296](https://github.com/kanso-labs/unplugin-style-dictionary/issues/296)) ([39ea011](https://github.com/kanso-labs/unplugin-style-dictionary/commit/39ea0114d4fe97ceb912fe5763974a9573448d9f))
+
+
+### Bug Fixes
+
+* **build:** fail when a config's token set resolves to nothing ([#294](https://github.com/kanso-labs/unplugin-style-dictionary/issues/294)) ([b95cd90](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b95cd900b95c953ad9185b5ae5a2b85749ef86d6))
+* **config:** validate and announce a discovered config file ([#295](https://github.com/kanso-labs/unplugin-style-dictionary/issues/295)) ([d42ef52](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d42ef5202bcbd575d5d9324146d0cd1675644e35))
+* **vite:** watch token sources that resolve inside node_modules ([#291](https://github.com/kanso-labs/unplugin-style-dictionary/issues/291)) ([5ee8635](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5ee863517d74a5a7caf01a484454d81448606a95))
+* **watch:** stop resolving after the host's watcher has closed ([#299](https://github.com/kanso-labs/unplugin-style-dictionary/issues/299)) ([c1e4f6e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/c1e4f6ee68b398be165ffbf55254c26445a0b87c))
+
 ## [0.8.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.7.0...unplugin-style-dictionary-v0.8.0) (2026-09-17)
 
 
