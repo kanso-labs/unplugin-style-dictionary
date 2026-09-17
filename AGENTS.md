@@ -163,9 +163,17 @@ there stays the one thing a drop has to clear. That file is `.yml` rather than
 the `.yaml` everything else here uses because Codecov recognises `codecov.yml`
 and `.codecov.yml` alone.
 
-The upload wants `CODECOV_TOKEN` in the repository's secrets. Without it the
-action falls back to a tokenless upload, which this repository being public
-makes possible but rate-limited, so the number lands intermittently rather than
+**A third report goes up beside them, and it is not coverage.**
+`codecov/test-results-action` uploads the JUnit XML `vite.config.ts` now writes,
+which Codecov reads for which tests failed and which are flaky rather than for a
+percentage. It carries `if: ${{ !cancelled() }}`, which makes it the one step in
+the job that runs when the suite is red — the only time it has anything to say.
+Both legs write that file and the last write wins, so a failure on the floor
+reaches Codecov instead of the first leg's passes.
+
+Both Codecov uploads want `CODECOV_TOKEN` in the repository's secrets. Without
+it they fall back to a tokenless upload, which this repository being public
+makes possible but rate-limited, so a report lands intermittently rather than
 not at all — which reads as a flaky uploader rather than as a missing secret.
 
 Everything shared comes from `kanso-labs/github-actions` at an exact release
