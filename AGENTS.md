@@ -208,16 +208,34 @@ assertion — npm refuses it with ERESOLVE, which is the peer declaration doing
 its job. To prove the fixtures themselves bite, break the built package: with
 `resolveConfigs` stubbed to return nothing, all six fail.
 
-**That command is two tools, and the split is what each half can see.** publint
-reads `package.json` and the packed file list, so it catches an exports target
-aimed at a file the tarball does not carry — which is exactly what losing
+**That command is three tools, and the split is what each half can see.**
+publint reads `package.json` and the packed file list, so it catches an exports
+target aimed at a file the tarball does not carry — which is exactly what losing
 `fixedExtension: false` produces. `scripts/check-package.mjs` asks Node to
 resolve and then evaluate all five entries, which is the only way to reach the
 failures publint calls "All good!": `default` rewritten to `import`, a target
 entry that stops handing back a callable `.default`, and a subpath deleted from
 the map outright, since publint has no opinion on which subpaths ought to exist.
-Neither half is redundant; run the script through the npm script so the command
-that gates a branch is the command a contributor runs.
+attw is the third, and it sees exactly one thing the other two do not: a
+**transitive** declaration file that is not itself an exports target.
+`dist/types.d.ts` is imported by `dist/index.d.ts` and by all four target
+declarations, and no condition names it — so publint never looks at it. Delete
+it after a build and publint reports "All good!" and `check-package.mjs` passes
+every one of its checks, while attw exits 1 with _Import found in a type
+declaration file failed to resolve_.
+
+`--profile esm-only` on purpose. The default profile flags the `require(esm)`
+path as `CJSResolvesToESM`, and that path is deliberate, documented in the
+README, and verified empirically by the `require.resolve` half of
+`check-package.mjs` — so the warning is noise here. node10 is ignored with it,
+which is a resolution mode TypeScript is removing.
+
+Two things attw does **not** see, which is why it did not replace anything:
+deleting `dist/vite.d.ts` and reordering `types` behind `default` are both
+already caught by publint, with exact error text.
+
+None of the three halves is redundant; run the script through the npm script so
+the command that gates a branch is the command a contributor runs.
 
 `tests/index.test.ts` pins the same exports map from the source tree, so `Test`
 fails on a rewritten condition too, without waiting for a build.
