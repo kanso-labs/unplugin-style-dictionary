@@ -301,7 +301,7 @@ extends `:semanticPrefixFixDepsChoreOthers`, which sets the type through
 went on writing `chore:` while the setting sat there looking correct, and only
 production dependencies released at all.
 
-`deps` is not one of the Conventional Commits types, so `.commitlintrc.js`
+`deps` is not one of the Conventional Commits types, so `.commitlintrc.json`
 extends the `type-enum` rule from `@commitlint/config-conventional` to admit it
 alongside the standard eleven — which nothing enforces today, since commitlint
 never runs here, but is what `npx commitlint` accepts and what the `commit-msg`
@@ -1021,12 +1021,23 @@ output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
 merge to npm.
 
-**commitlint is installed but never runs.** `@commitlint/cli`,
-`@commitlint/config-conventional` and `.commitlintrc.json` are all present, and
-`.husky/` carries a `pre-commit` hook — but that hook runs lint-staged, not
-commitlint. There is no `commit-msg` hook and no workflow invoking one, so a
-malformed type reaches `main` unnoticed and lands in the changelog, and the pull
-request title is on the author to get right.
+**commitlint runs on the pull request title, and on nothing else.** `Lint` pipes
+`github.event.pull_request.title` into it, and that is the whole of the
+enforcement. There is still no `commit-msg` hook — `.husky/` carries only
+`pre-commit`, which runs lint-staged — and that is deliberate rather than an
+omission: branch commits are discarded by the squash and never reach history, so
+a hook would validate strings nothing reads. The title is release-please's
+single input, and no git hook can see it.
 
-The hook directory existing makes this easier to misread as solved than it was
-when the directory held nothing but husky's own `_`.
+Two things follow. **The title goes through `env` rather than `${{ }}`** — a
+title can contain anything, so interpolating it into the script is a
+command-injection sink, and actionlint says so by name:
+_"github.event.pull_request.title" is potentially untrusted. avoid using it
+directly in inline scripts_. And **`pull_request` carries an explicit `types:`
+list including `edited`**, which is not a default activity type. Without it the
+check is worse than nothing: a title corrected at review time leaves the stale
+green `Lint` standing and the ruleset satisfied. The cost is a full re-run of
+the job on every title or body edit.
+
+A malformed type can still reach `main` through a commit that is not squashed
+from a pull request.
