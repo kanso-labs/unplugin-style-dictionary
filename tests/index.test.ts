@@ -1478,7 +1478,15 @@ describe('unplugin-style-dictionary (vite target)', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
       try {
-        const plugin = vitePlugin({ config: brokenConfigFile })
+        // `'warn'` rather than `'silent'`: it drops the plugin's own progress
+        // lines, which are noise in a test that exists to provoke a failure,
+        // and leaves what Style Dictionary reports exactly as it was. A
+        // failure is reported at every level, so the spy below still sees the
+        // one this asserts on.
+        const plugin = vitePlugin({
+          config: brokenConfigFile,
+          logLevel: 'warn',
+        })
 
         // Settling at all is half the assertion — this is what used to hang —
         // and rejecting is the other half, since a configuration that cannot
@@ -2833,7 +2841,11 @@ describe('when a configuration cannot be used', () => {
     try {
       // Settling at all is half of every case here: a configuration that
       // rejects a promise nobody holds used to leave `buildStart` unfinished.
-      await callBuildStart(vitePlugin({ failOnError: 'serve', ...options }))
+      // `logLevel` ahead of the spread so a case can still override it. See
+      // the note on the other broken-config block above for why `'warn'`.
+      await callBuildStart(
+        vitePlugin({ failOnError: 'serve', logLevel: 'warn', ...options }),
+      )
 
       return errorSpy.mock.calls.map((call) => String(call[0]))
     } finally {
