@@ -78,7 +78,7 @@ jobs:
       # Codecov outage is not that — it is an upload that did not land, and it
       # should not take a passing run down with it.
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5.5.5
+        uses: codecov/codecov-action@v7.1.1
         with:
           disable_search: true
           files: coverage/cobertura-coverage.xml
@@ -101,7 +101,7 @@ jobs:
       # so the file reaching Codecov is that leg's.
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v5.5.5
+        uses: codecov/codecov-action@v7.1.1
         with:
           disable_search: true
           files: .vitest/test-results.junit.xml
