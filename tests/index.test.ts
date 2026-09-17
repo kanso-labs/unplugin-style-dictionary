@@ -3263,3 +3263,96 @@ describe('the options type on every target entry', () => {
     },
   )
 })
+
+// The README reproduces `UnpluginStyleDictionaryOptions` as a TypeScript
+// fence, and nothing checked it: `npm run lint` formats Markdown but does not
+// read a fence's contents, and the suite pinned `package.json`'s exports map
+// without ever opening README.md. The copy drifted for months — by the time
+// this was written it was missing `cache` and `report` entirely, two options
+// that exist and were therefore documented nowhere in the reference a reader
+// is pointed at.
+//
+// Compared whitespace-normalised rather than byte for byte, because oxfmt owns
+// the wrapping in both files and wraps a Markdown fence differently from a
+// TypeScript source. What has to match is the text, not the column it breaks
+// at.
+// Everything from the interface's own JSDoc to the end of the file. The
+// `import type` line above it is noise in a README, and this is the one place
+// that decides where the block starts — the README section is produced by
+// slicing `src/types.ts` at exactly this point.
+const optionsContract = () => {
+  const source = fs.readFileSync(
+    new URL('../src/types.ts', import.meta.url),
+    'utf-8',
+  )
+
+  return source.slice(source.indexOf('/**'))
+}
+
+const readmeFence = () => {
+  const readme = fs.readFileSync(
+    new URL('../README.md', import.meta.url),
+    'utf-8',
+  )
+
+  const heading = '## Options Reference'
+  const begin = readme.indexOf(heading)
+  if (begin === -1)
+    throw new Error('README.md has no Options Reference heading')
+
+  const section = readme.slice(begin, readme.indexOf('\n## ', begin + 5))
+  const fence = /```typescript\n(?<body>[\s\S]*?)\n```/.exec(section)
+  if (!fence?.groups?.body) {
+    throw new Error('the Options Reference section carries no typescript fence')
+  }
+
+  return fence.groups.body
+}
+
+// oxfmt owns the wrapping in both files and wraps a Markdown fence differently
+// from a TypeScript source, so what has to match is the text rather than the
+// column it breaks at.
+const normaliseWhitespace = (value: string) => value.replace(/\s+/g, ' ').trim()
+
+// The README reproduces `UnpluginStyleDictionaryOptions` as a TypeScript fence,
+// and nothing checked it: `npm run lint` formats Markdown but never reads a
+// fence's contents, and the suite pinned `package.json`'s exports map without
+// ever opening README.md. The copy drifted for months — by the time this was
+// written it had lost `cache` and `report` entirely, two options that exist and
+// were therefore absent from the reference a reader is pointed at.
+describe('the README options reference', () => {
+  it('reproduces the options interface, including its own JSDoc', () => {
+    // The interface-level JSDoc is the part the hand copy dropped, and it is
+    // where the per-target watch caveat lives — the most misread thing about
+    // this plugin. Asserted on its own so losing it fails with its own message
+    // rather than as one line inside a whole-block mismatch.
+    expect(normaliseWhitespace(readmeFence())).toContain(
+      normaliseWhitespace('Options for the Style Dictionary unplugin factory'),
+    )
+
+    expect(normaliseWhitespace(readmeFence())).toBe(
+      normaliseWhitespace(optionsContract()),
+    )
+  })
+
+  it('documents every default-discovery filename the code tries', () => {
+    // Wrong since the initial commit in both copies: they named two of the
+    // four. Pinned against the array rather than against a transcription, so a
+    // fifth filename fails here rather than going undocumented.
+    const source = fs.readFileSync(
+      new URL('../src/index.ts', import.meta.url),
+      'utf-8',
+    )
+    const defaults = /const defaults = \[(?<body>[\s\S]*?)\]/.exec(source)
+    const filenames = [
+      ...(defaults?.groups?.body ?? '').matchAll(/'([^']+)'/g),
+    ].map((match) => match[1])
+
+    expect(filenames.length).toBeGreaterThan(0)
+
+    const contract = optionsContract()
+    for (const filename of filenames) {
+      expect(contract, `${filename} is undocumented`).toContain(filename)
+    }
+  })
+})

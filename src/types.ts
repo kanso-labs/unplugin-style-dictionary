@@ -59,7 +59,9 @@ export interface UnpluginStyleDictionaryOptions {
    *   Useful for calling `StyleDictionary.registerFormat()` (or other `register*`
    *   methods) before returning a config that references the custom format by name.
    *
-   * If not provided, it will look for 'sd.config.json' or 'config.json' in the root directory.
+   * If not provided, the root directory is searched for 'sd.config.json',
+   * 'config.json', 'sd.config.js' and 'sd.config.mjs', in that order. The
+   * first one that exists wins, and the rest are not looked at.
    */
   config?:
     | (() => Config | Config[] | Promise<Config | Config[]>)
