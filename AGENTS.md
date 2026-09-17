@@ -713,6 +713,40 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**Vite's dev-server watcher cannot be reached after `configResolved`, and its
+ignore list only grows.** It is built from the resolved config with
+`**/.git/**`, `**/node_modules/**`, `**/test-results/**` and the cache directory
+already in the ignore list, and the consumer's own `server.watch.ignored`
+entries are spread in _after_ them. Entries are appended, never subtracted, so
+`server.watcher.add()` cannot reach a path an earlier entry covers — which made
+a token package resolved through `node_modules`, the shape of every workspace,
+build correctly once and then never rebuild, silently.
+
+The fix amends `config.server.watch.ignored` in `configResolved`, and that hook
+is the last one that can. `configureServer` receives `server.watcher` as a
+parameter, so by then it exists and a negation changes nothing — measured on
+Vite 6.4.3, 7.3.6 and 8.3.0, along with the confirmation that amending it in
+`configResolved` does reach the watcher on all three. The `config` hook works
+too and is the more sanctioned place, but it has no resolved `root` to resolve
+token paths against, so it would have to guess at what Vite computes.
+
+**The negation names each file, and must not be broadened.**
+`!**/node_modules/**` works and hands the entire dependency tree to the watcher;
+a leaf-file negation was measured to be enough, because chokidar still reaches a
+path that was explicitly added. Un-ignoring the package directory or the whole
+tree buys nothing and costs thousands of watched files.
+
+**`configResolved` resolves configurations now, and that has two consequences.**
+It needs the watch list to derive the negations, so it calls a consumer's
+`config` function — which is why `isWatching` is set there, before the
+resolution, rather than only in `configureServer`: the function has to be told
+`watch: true` on that call as much as on any later one. And the result is handed
+to `configureServer` through `startupResolved` rather than resolved again, so
+one dev-server start-up still calls the consumer's function once at this stage.
+Whatever else moves into that hook, the Vite logger assignment must stay _above_
+its `command !== 'serve'` return — `vite build` takes that return and needs the
+logger just as much.
+
 **Hook order under Vite decides what the first `config` function is told.**
 `configResolved` runs, then `configureServer`, and `buildStart` only when the
 plugin container comes up — so `configureServer`'s own `resolveConfigs` call

@@ -120,6 +120,33 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   )
 }
 
+// Vite builds its dev-server watcher with a fixed ignore list — `**/.git/**`,
+// `**/node_modules/**`, `**/test-results/**` and the cache directory — and
+// spreads the consumer's own `server.watch.ignored` entries in *after* them.
+// Entries are appended, never subtracted, so `server.watcher.add()` cannot
+// reach a path an earlier entry already covers.
+//
+// That makes a token package resolved through `node_modules` — the shape of
+// every workspace, `app/node_modules/@acme/tokens` symlinked to
+// `packages/tokens` — build correctly once and then never rebuild, with
+// nothing said about it. Measured on Vite 6.4.3, 7.3.6 and 8.3.0: zero watcher
+// events for an edit, while a token file outside the root but outside
+// `node_modules` rebuilt in the same run.
+//
+// A negation naming the file exactly is what un-ignores it, and is deliberately
+// the narrowest form that works. `!**/node_modules/**` would restore the whole
+// dependency tree to the watcher.
+function nodeModulesNegations(paths: string[]): string[] {
+  const negations = new Set<string>()
+
+  for (const file of paths) {
+    const normalised = file.replace(/\\/g, '/')
+    if (normalised.includes('/node_modules/')) negations.add(`!${normalised}`)
+  }
+
+  return Array.from(negations)
+}
+
 function paint(code: string, value: string, allowed: boolean): string {
   return allowed ? `\u001B[${code}m${value}\u001B[0m` : value
 }
@@ -1495,6 +1522,11 @@ const unpluginFactory: UnpluginFactory<
     | ((resolved: ResolvedConfig[]) => Promise<void>)
     | undefined
 
+  // Resolved by `configResolved` so it can amend the watcher's ignore list, and
+  // handed to `configureServer` rather than resolved again — one start-up, one
+  // call of the consumer's `config` function.
+  let startupResolved: ResolvedConfig[] | undefined
+
   // Also set by `configureServer`, and left undefined everywhere else: this is
   // how a compile outcome reaches Vite's error overlay. It is deliberately not
   // the same path as `failOnError`.
@@ -1628,7 +1660,7 @@ const unpluginFactory: UnpluginFactory<
     name: 'unplugin-style-dictionary',
 
     vite: {
-      configResolved(config) {
+      async configResolved(config) {
         if (rootOption === undefined) root = config.root || process.cwd()
 
         // The only host that has both. `command` is what makes `'serve'`
@@ -1640,6 +1672,9 @@ const unpluginFactory: UnpluginFactory<
         // `clearScreen` like every other line the dev server prints. It
         // colours and prefixes its own output, which is why nothing painted
         // reaches it.
+        //
+        // Ahead of the early return below, because `vite build` needs the
+        // logger just as much and takes that return.
         host = {
           error: (message) => {
             config.logger.error(message)
@@ -1647,6 +1682,60 @@ const unpluginFactory: UnpluginFactory<
           info: (message) => {
             config.logger.info(message)
           },
+        }
+
+        // Nothing below concerns a build: only the dev server has a watcher,
+        // and only its ignore list needs amending.
+        if (config.command !== 'serve') return
+
+        // Ahead of the resolution below, so the `config` function a consumer
+        // wrote is told `watch: true` on this call as well as on every later
+        // one. Setting it in `configureServer` alone was correct until this
+        // hook started resolving configurations too.
+        isWatching = true
+
+        // **This is the last hook that can reach the ignore list.** Vite
+        // builds the watcher from the resolved config, and `configureServer`
+        // runs after it exists — `server.watcher` is a parameter there — so a
+        // negation added then changes nothing. Measured on Vite 6.4.3, 7.3.6
+        // and 8.3.0: amending it here reaches the watcher on all three, and
+        // amending it in `configureServer` does not.
+        //
+        // The resolution is kept for `configureServer` to reuse rather than
+        // discarded, because resolving is how a `config` function gets called
+        // and doing it twice in one start-up would call the consumer's code an
+        // extra time for nothing.
+        try {
+          startupResolved = await resolveConfigs()
+          if (startupResolved.length === 0) return
+
+          const { paths } = await getWatchTargets(startupResolved)
+          const negations = nodeModulesNegations(paths)
+          if (negations.length === 0) return
+
+          // Appended to whatever the consumer asked for, not replacing it.
+          const existing = config.server.watch?.ignored
+          config.server.watch = {
+            ...config.server.watch,
+            ignored: [
+              ...(Array.isArray(existing)
+                ? existing
+                : existing === undefined
+                  ? []
+                  : [existing]),
+              ...negations,
+            ],
+          }
+        } catch (err) {
+          // A configuration that cannot be resolved is the build's problem to
+          // report, and it will: `buildStart` resolves again and fails there
+          // with the host watching. Throwing here would fail the dev server
+          // before it started, for the sake of a watch-list refinement.
+          log(
+            `Could not read the configuration while preparing the watch list: ${errorMessage(err)}`,
+            'error',
+          )
+          startupResolved = undefined
         }
       },
 
@@ -1659,7 +1748,11 @@ const unpluginFactory: UnpluginFactory<
         // around it.
         isWatching = true
 
-        const resolved = await resolveConfigs()
+        // `configResolved` has already resolved these, on its way to amending
+        // the watcher's ignore list. Taken rather than copied, so a later
+        // rebuild re-resolves as it always did.
+        const resolved = startupResolved ?? (await resolveConfigs())
+        startupResolved = undefined
         if (resolved.length === 0) return
 
         // Reassigned after every rebuild below, so a configuration that gains
