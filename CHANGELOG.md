@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.6.1...unplugin-style-dictionary-v0.6.2) (2026-09-17)
+
+
+### Dependencies
+
+* update codecov/codecov-action action to v7 ([#275](https://github.com/kanso-labs/unplugin-style-dictionary/issues/275)) ([269d5ba](https://github.com/kanso-labs/unplugin-style-dictionary/commit/269d5bafee8f4e24caf978829934066e7b69eb49))
+
 ## [0.6.1](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.6.0...unplugin-style-dictionary-v0.6.1) (2026-09-17)
 
 
