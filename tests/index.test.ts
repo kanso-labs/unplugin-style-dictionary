@@ -374,6 +374,127 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(reads).toBeGreaterThan(rebuilds)
   }, 30000)
 
+  // How many compiles actually ran, rather than how many were asked for.
+  // Style Dictionary invokes a format once per generated file per build, so
+  // with one file on one platform the count is the build count — which is
+  // what a shared compile has to be measured in. Timestamps cannot say it: a
+  // build that renders what is already there skips its own write.
+  const countingConfig = (name: string, destination: string) => {
+    const counter = { calls: 0 }
+
+    const config = () => {
+      StyleDictionary.registerFormat({
+        format: ({ dictionary }) => {
+          counter.calls++
+          return dictionary.allTokens
+            .map((token) => `${token.name}=${String(token.value)}`)
+            .join('\n')
+        },
+        name,
+      })
+
+      return {
+        platforms: {
+          text: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [{ destination, format: name }],
+            transformGroup: 'css',
+          },
+        },
+        source: [tokenFile.replace(/\\/g, '/')],
+      }
+    }
+
+    return { config, counter, output: path.join(tempDir, destination) }
+  }
+
+  it('compiles once when instances sharing a config start together', async () => {
+    // The reported shape: one `vitest run` with two test projects and browser
+    // mode stands up five Vite servers in one process, and the last two start
+    // together — two `Compiling design tokens...` lines with no
+    // `Compiled successfully!` between them. `hasCompiled` is closure state
+    // per instance, so it sees none of it.
+    //
+    // Starting together is the part that needs a shared promise. Neither
+    // instance has written a destination when the other begins, so there is
+    // nothing on disk for an up-to-date check to compare against — #212's
+    // check removes the repeats that arrive in turn, and cannot remove these.
+    const { config, counter, output } = countingConfig(
+      'custom/counting-together',
+      'together.txt',
+    )
+
+    await Promise.all(
+      Array.from({ length: 5 }, async () =>
+        callBuildStart(vitePlugin({ config, silent: true })),
+      ),
+    )
+
+    expect(counter.calls).toBe(1)
+    expect(fs.existsSync(output)).toBe(true)
+    expect(fs.readFileSync(output, 'utf-8')).toContain('color-primary=#0070f3')
+  })
+
+  it('reports the failure to every instance waiting on one compile', async () => {
+    // An instance that waited on a compile which failed must not carry on as
+    // though the tokens were written — the whole reason `failOnError`
+    // defaults to stopping the build.
+    const config = () => {
+      StyleDictionary.registerFormat({
+        format: () => {
+          throw new Error('the format blew up')
+        },
+        name: 'custom/counting-shared-failure',
+      })
+
+      return {
+        platforms: {
+          text: {
+            buildPath: tempDir.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'shared-failure.txt',
+                format: 'custom/counting-shared-failure',
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [tokenFile.replace(/\\/g, '/')],
+      }
+    }
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 3 }, async () =>
+        callBuildStart(vitePlugin({ config, silent: true })),
+      ),
+    )
+
+    expect(results.map((result) => result.status)).toEqual([
+      'rejected',
+      'rejected',
+      'rejected',
+    ])
+  })
+
+  it('does not share a compile between two different configurations', async () => {
+    // The key carries the root and the resolved configurations, so one
+    // process building two packages must not have the second wait on the
+    // first and skip its own output.
+    const first = countingConfig('custom/counting-first', 'first.txt')
+    const second = countingConfig('custom/counting-second', 'second.txt')
+
+    await Promise.all([
+      callBuildStart(vitePlugin({ config: first.config, silent: true })),
+      callBuildStart(vitePlugin({ config: second.config, silent: true })),
+    ])
+
+    expect(first.counter.calls).toBe(1)
+    expect(second.counter.calls).toBe(1)
+    expect(fs.existsSync(first.output)).toBe(true)
+    expect(fs.existsSync(second.output)).toBe(true)
+  })
+
   it('matchesWatchedFile matches config/token paths but not unrelated generated output', () => {
     const patterns = ['/project/tokens/*.tokens.json']
 

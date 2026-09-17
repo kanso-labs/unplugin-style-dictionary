@@ -253,6 +253,25 @@ plugin subtracts its own output from the watch list, skips recompiling when a
 watch rebuild re-enters `buildStart`, and skips the write entirely when a
 rebuild renders bytes identical to what is already on disk.
 
+## One Compile per Process
+
+A bundler instance that asks for a compile while an identical one is already
+running waits for it rather than starting a second. Generated token files are a
+side effect on the filesystem, not per-bundler output, so there is nothing to
+gain from writing them twice.
+
+This is not a rare case. One process often holds several instances of the
+plugin: a single `vitest run` on a project with two test projects and browser
+mode stands up five Vite servers — the root one, one per project, and one more
+per project once its HTTP server listens — and every one of them runs
+`buildStart`.
+
+Two configurations are treated as the same compile only when they resolve to the
+same root and the same configuration, functions included, so one script building
+two packages shares nothing between them. The sharing lasts exactly as long as
+the compile does: it stops two instances doing the same work at the same time,
+and does not cache anything for later.
+
 ## Where Paths Are Resolved From
 
 Two bases, and which one applies depends on whose path it is.
