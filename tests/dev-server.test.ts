@@ -561,4 +561,186 @@ describe('under a real vite dev server', () => {
       expect(context.watch).toBe(true)
     }
   }, 30000)
+
+  it('rebuilds for a token source that resolves inside node_modules', async () => {
+    // The workspace shape, which is the shape of nearly every real project:
+    //
+    //   app/                                   <- the Vite root
+    //     node_modules/@acme/tokens -> ../../packages/tokens   (a real symlink)
+    //   packages/tokens/src/color.json
+    //
+    // Vite builds its watcher with `**/node_modules/**` already in the ignore
+    // list and appends the consumer's entries after it, so `watcher.add()`
+    // cannot reach the token file. The first build was correct and no edit ever
+    // rebuilt, with nothing said about it — measured on Vite 6.4.3, 7.3.6 and
+    // 8.3.0 before the fix.
+    //
+    // A symlink rather than a copied directory on purpose: a workspace install
+    // produces one, and the ignore list is matched against the path walked
+    // rather than the realpath.
+    const base = path.join(tempDir, 'node-modules-source')
+    const app = path.join(base, 'app')
+    const pkg = path.join(base, 'packages', 'tokens')
+
+    fs.mkdirSync(path.join(pkg, 'src'), { recursive: true })
+    fs.mkdirSync(path.join(app, 'node_modules', '@acme'), { recursive: true })
+    fs.mkdirSync(path.join(app, 'generated'), { recursive: true })
+
+    fs.writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: '@acme/tokens', version: '1.0.0' }),
+    )
+
+    const tokenSource = path.join(pkg, 'src', 'color.json')
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#123456' } } }),
+    )
+
+    fs.symlinkSync(
+      pkg,
+      path.join(app, 'node_modules', '@acme', 'tokens'),
+      'dir',
+    )
+
+    // A literal path rather than a glob, so a glob-expansion defect cannot be
+    // what this passes or fails on.
+    const viaNodeModules = posix(
+      path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json'),
+    )
+
+    const configFile = path.join(app, 'sd.config.json')
+    const generated = path.join(app, 'generated', 'vars.css')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: posix(path.join(app, 'generated')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [viaNodeModules],
+      }),
+    )
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+      root: app,
+      server: { hmr: false, middlewareMode: true },
+    })
+
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    // The half that always worked: Style Dictionary reads through the symlink
+    // without trouble, which is why the failure was silent.
+    expect(fs.readFileSync(generated, 'utf-8')).toContain(
+      '--color-brand: #123456;',
+    )
+
+    await settle(300)
+
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+    )
+
+    await waitUntil(
+      () => fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
+      10000,
+    )
+
+    // The half that did not. Without the negation this stays at `#123456`
+    // forever and no watcher event is ever emitted for the edit.
+    expect(fs.readFileSync(generated, 'utf-8')).toContain(
+      '--color-brand: #ff0000;',
+    )
+  }, 30000)
+
+  it('leaves the rest of node_modules ignored', async () => {
+    // The negation names each file exactly, and that is the point:
+    // `!**/node_modules/**` would hand the whole dependency tree back to the
+    // watcher, which on a real project is thousands of files that no token
+    // build reads.
+    const base = path.join(tempDir, 'node-modules-scope')
+    const app = path.join(base, 'app')
+    const pkg = path.join(base, 'packages', 'tokens')
+
+    fs.mkdirSync(path.join(pkg, 'src'), { recursive: true })
+    fs.mkdirSync(path.join(app, 'node_modules', '@acme'), { recursive: true })
+    fs.mkdirSync(path.join(app, 'node_modules', 'unrelated'), {
+      recursive: true,
+    })
+    fs.mkdirSync(path.join(app, 'generated'), { recursive: true })
+
+    fs.writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: '@acme/tokens', version: '1.0.0' }),
+    )
+    fs.writeFileSync(
+      path.join(pkg, 'src', 'color.json'),
+      JSON.stringify({ color: { brand: { value: '#123456' } } }),
+    )
+    fs.symlinkSync(
+      pkg,
+      path.join(app, 'node_modules', '@acme', 'tokens'),
+      'dir',
+    )
+
+    // A file in node_modules the plugin never registered.
+    const unrelated = path.join(app, 'node_modules', 'unrelated', 'index.js')
+    fs.writeFileSync(unrelated, 'export default 1\n')
+
+    const configFile = path.join(app, 'sd.config.json')
+    const generated = path.join(app, 'generated', 'vars.css')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: posix(path.join(app, 'generated')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [
+          posix(
+            path.join(
+              app,
+              'node_modules',
+              '@acme',
+              'tokens',
+              'src',
+              'color.json',
+            ),
+          ),
+        ],
+      }),
+    )
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+      root: app,
+      server: { hmr: false, middlewareMode: true },
+    })
+
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    const events: string[] = []
+    server.watcher.on('all', (_event, file) => {
+      events.push(file)
+    })
+
+    await settle(300)
+
+    fs.writeFileSync(unrelated, 'export default 2\n')
+    await settle(1500)
+
+    expect(events.filter((file) => file.includes('unrelated'))).toEqual([])
+  }, 30000)
 })

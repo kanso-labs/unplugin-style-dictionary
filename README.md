@@ -21,8 +21,9 @@ build on Rolldown/tsdown) that both need tokens compiled ahead of them.
 - **Asynchronous builds**: Native support for Style Dictionary v4/v5 async
   compilation API.
 - **Automatic watching**: Reads the `source` and `include` patterns from your
-  Style Dictionary configurations and watches the files they match. What a
-  change then triggers depends on the target — see
+  Style Dictionary configurations and watches the files they match, including a
+  token package resolved through `node_modules` in a workspace. What a change
+  then triggers depends on the target — see
   [Watching, per target](#watching-per-target).
 - **Config flexibility**: Supports file paths (JSON, JSON5, JSONC, JS, MJS, TS),
   configuration objects, or functions — including registering custom formats at
@@ -286,6 +287,20 @@ on macOS a file registered through it is watched by nothing, so a token edit
 reaches no hook, while on a Linux runner the same edit reaches a rebuild. Treat
 rolldown's watch mode as compiling once and not tracking tokens, and reach for a
 one-shot build or another target if you need rebuild-on-change.
+
+**A token package resolved through `node_modules` is watched too, and that took
+a fix.** In a workspace — `app/node_modules/@acme/tokens` symlinked to
+`packages/tokens` — Vite's dev-server watcher is built with `**/node_modules/**`
+already in its ignore list, and the entries a consumer adds are appended after
+it rather than subtracted from it. So the first build was correct and no edit
+ever rebuilt, with nothing printed to say so. The plugin now un-ignores exactly
+the files it registers, by name, on Vite 6, 7 and 8. The rest of `node_modules`
+stays ignored, which matters: handing the whole dependency tree to the watcher
+is thousands of files no token build reads.
+
+Nothing is needed from you for that. If you had worked around it with a
+`server.watch.ignored` negation of your own, it still works — the plugin appends
+to your list rather than replacing it.
 
 "Safe from rebuild loops" is worth stating because consuming code imports the
 generated file, so every regenerate is itself a change the host reacts to. The
