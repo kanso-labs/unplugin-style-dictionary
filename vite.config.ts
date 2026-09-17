@@ -38,16 +38,20 @@ export default defineConfig({
     // rather than replacing them: `exclude` overrides wholesale, and dropping
     // `**/node_modules/**` would run every dependency's tests.
     exclude: [...configDefaults.exclude, '**/.claude/**'],
-    // The file `Upload test results to Codecov` hands over. `default` stays in
-    // the list so the job log still reads the same — a bare `--reporter=junit`
-    // replaces the console output rather than adding to it.
+    // The file `Upload test results to Codecov` hands over. It goes in a
+    // directory of its own beside `coverage/`, so the two reports this job
+    // produces sit next to each other and one gitignore entry covers each.
+    //
+    // `default` stays in the reporter list so the job log still reads the
+    // same — a bare `--reporter=junit` replaces the console output rather
+    // than adding to it.
     //
     // Both legs of the `Test` job write this, and the last write is the one
     // uploaded. That is deliberate: a failure on the Node floor then reaches
     // Codecov instead of being hidden by the passing run before it. Coverage
     // is the other way round, measured once on the first leg and left alone,
     // because the floor leg does not re-measure it.
-    outputFile: { junit: 'test-report.junit.xml' },
+    outputFile: { junit: 'test-results/junit.xml' },
     reporters: ['default', 'junit'],
   },
 })

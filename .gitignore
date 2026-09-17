@@ -131,4 +131,4 @@ vite.config.ts.timestamp-*
 .context/
 
 ### Vitest ###
-test-report.junit.xml
+test-results/
