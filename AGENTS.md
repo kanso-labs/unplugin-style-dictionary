@@ -859,6 +859,34 @@ so every regenerate is a change rolldown reacts to, and the guards that matter
 there are the ones stopping that from becoming a loop. `tests/targets.test.ts`
 asserts only that — an entry edit rebuilds and then settles.
 
+**Rollup drops a file change that arrives while it is awaiting `watchChange`,
+and that makes the moment a test writes a file load-bearing.** Its watcher
+records a changed path in `invalidatedIds` and, one `buildDelay` later, runs a
+callback that awaits the `change` emission — which is where `watchChange` runs,
+and so where this plugin does an entire compile — then clears the map, then
+builds (rollup 4.63.3, `dist/shared/watch.js:133-166`). A path recorded during
+that await is therefore discarded by the clear, while the timeout it scheduled
+fires afterwards on an empty map: no hook is called and no rebuild happens. The
+`Task.invalidated` flag it set has been consumed by the run that followed the
+clear, so what the run looks like from outside is a `START` and an `END` with no
+`BUNDLE_START` in between.
+
+Measured with rollup alone — a plugin that registers a directory through
+`addWatchFile`, and whose `watchChange` creates a file inside it and returns
+once the invalidation has been recorded, is never told about that file, on every
+run. It is a lost change rather than a slow one, so no deadline recovers it.
+
+The window is only open while an emission is being awaited, which is exactly
+when this plugin writes its generated file — so a test that waits for that file
+and then writes another is aiming at it. `tests/index.test.ts` therefore has a
+`watcherIdle` gate: `watch.onInvalidate` counts what rollup has recorded, the
+`restart` event zeroes the count because rollup emits it immediately after the
+clear, `START` and `END` say whether a build is running, and a case waits for
+all three to be quiet before it touches the fixture again. Waiting on the
+compiled output alone is what made
+`notices an edit and a new file under a glob source` fail about one run in
+fifteen.
+
 **`release_created` is compared against the string `'true'` on purpose.** The
 output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
