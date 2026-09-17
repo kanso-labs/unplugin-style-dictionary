@@ -2750,6 +2750,237 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     })
   })
+
+  // Every rebuild compiled every platform, so a dev server serving a web app
+  // paid for Objective-C headers, Android XML and Dart classes on every token
+  // save. Measured over a six-platform configuration with the timer around the
+  // build call alone: 36 ms for all of them against 2 ms for css at 3,000
+  // tokens, and 330 ms against 12 ms at 30,000.
+  describe('when only some platforms are wanted', () => {
+    const threePlatforms = (directory: string) => {
+      fs.mkdirSync(directory, { recursive: true })
+
+      const destination = (name: string) => path.join(directory, `${name}-out`)
+
+      const platformFor = (name: string, file: string, format: string) => ({
+        buildPath: destination(name).replace(/\\/g, '/') + '/',
+        files: [{ destination: file, format }],
+        transformGroup: name === 'android' ? 'android' : name,
+      })
+
+      const configFileFor = path.join(directory, 'three.config.json')
+      fs.writeFileSync(
+        configFileFor,
+        JSON.stringify({
+          platforms: {
+            android: platformFor('android', 'colors.xml', 'android/resources'),
+            css: platformFor('css', 'vars.css', 'css/variables'),
+            scss: platformFor('scss', 'vars.scss', 'scss/variables'),
+          },
+          source: [path.join(tempDir, 'tokens.json').replace(/\\/g, '/')],
+        }),
+      )
+
+      return {
+        configFile: configFileFor,
+        wrote: (name: string, file: string) =>
+          fs.existsSync(path.join(destination(name), file)),
+      }
+    }
+
+    it('builds the named platform and leaves the others unwritten', async () => {
+      const { configFile: scoped, wrote } = threePlatforms(
+        path.join(tempDir, 'scoped-array'),
+      )
+
+      await callBuildStart(
+        vitePlugin({
+          config: scoped,
+          logLevel: 'silent',
+          platforms: ['css'],
+        }),
+      )
+
+      expect(wrote('css', 'vars.css')).toBe(true)
+      expect(wrote('scss', 'vars.scss')).toBe(false)
+      expect(wrote('android', 'colors.xml')).toBe(false)
+    })
+
+    it('splits the first compile from the watch rebuilds', async () => {
+      // The common want, and the reason the object form exists: everything
+      // once, then only what the page uses. An omitted key means all.
+      const { configFile: split, wrote } = threePlatforms(
+        path.join(tempDir, 'scoped-object'),
+      )
+
+      const plugin = vitePlugin({
+        cache: false,
+        config: split,
+        logLevel: 'silent',
+        platforms: { watch: ['css'] },
+      })
+
+      await callBuildStart(plugin)
+
+      // `build` was omitted, so the first compile covered all three.
+      expect(wrote('css', 'vars.css')).toBe(true)
+      expect(wrote('scss', 'vars.scss')).toBe(true)
+      expect(wrote('android', 'colors.xml')).toBe(true)
+
+      // Remove two of them, then rebuild: only css should come back.
+      fs.rmSync(path.join(tempDir, 'scoped-object', 'scss-out'), {
+        force: true,
+        recursive: true,
+      })
+      fs.rmSync(path.join(tempDir, 'scoped-object', 'android-out'), {
+        force: true,
+        recursive: true,
+      })
+
+      fs.writeFileSync(
+        tokenFile,
+        JSON.stringify({ color: { primary: { value: '#ff0000' } } }),
+      )
+      await callWatchChange(plugin, tokenFile)
+
+      expect(wrote('css', 'vars.css')).toBe(true)
+      expect(wrote('scss', 'vars.scss')).toBe(false)
+      expect(wrote('android', 'colors.xml')).toBe(false)
+    })
+
+    it('rejects a platform the configuration does not define', async () => {
+      // Style Dictionary's own CLI says "Must be defined in the config", and a
+      // typo that silently built nothing would be worse than the cost this
+      // option exists to avoid.
+      const { configFile: scoped } = threePlatforms(
+        path.join(tempDir, 'scoped-typo'),
+      )
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(
+          callBuildStart(
+            vitePlugin({
+              config: scoped,
+              logLevel: 'silent',
+              platforms: ['ccs'],
+            }),
+          ),
+        ).rejects.toThrow('does not define the platform(s) ccs')
+
+        // And it says what is on offer, so the typo is fixable from the message.
+        const said = errorSpy.mock.calls.map((call) => String(call[0]))
+        expect(
+          said.some(
+            (line) =>
+              line.includes('It defines') &&
+              line.includes('css') &&
+              line.includes('scss'),
+          ),
+        ).toBe(true)
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('writes nothing when one of several names is wrong', async () => {
+      // Style Dictionary rejects an unknown platform itself — `Please supply a
+      // valid platform, "nope" does not exist` — but only when it reaches it,
+      // after building the names ahead of it. Verified: with the check removed,
+      // `css` is on disk when the throw arrives. Validating the whole selection
+      // first is what makes a typo write nothing, which is the same choice as
+      // failing an empty token set before the build rather than after.
+      const directory = path.join(tempDir, 'scoped-partial')
+      const { configFile: scoped, wrote } = threePlatforms(directory)
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(
+          callBuildStart(
+            vitePlugin({
+              config: scoped,
+              logLevel: 'silent',
+              platforms: ['css', 'nope'],
+            }),
+          ),
+        ).rejects.toThrow('does not define the platform(s) nope')
+
+        expect(wrote('css', 'vars.css')).toBe(false)
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('lets the up-to-date check skip a scoped build', async () => {
+      // The up-to-date check requires every declared destination to exist and
+      // be newer than the sources. A scoped build never writes the platforms it
+      // skipped, so asking about all of them means the answer is always "not
+      // up to date" and `cache` can never fire for a scoped configuration.
+      // Narrowing the question to the selected platforms is what makes the
+      // second build here a skip.
+      const { configFile: scoped } = threePlatforms(
+        path.join(tempDir, 'scoped-cache'),
+      )
+
+      const buildSpy = vi.spyOn(StyleDictionary.prototype, 'buildPlatform')
+      try {
+        await callBuildStart(
+          vitePlugin({
+            config: scoped,
+            logLevel: 'silent',
+            platforms: ['css'],
+          }),
+        )
+        expect(buildSpy.mock.calls.length).toBeGreaterThan(0)
+
+        const afterFirst = buildSpy.mock.calls.length
+
+        // A second plugin instance over the same configuration and the same
+        // untouched sources. Nothing needs building.
+        await callBuildStart(
+          vitePlugin({
+            config: scoped,
+            logLevel: 'silent',
+            platforms: ['css'],
+          }),
+        )
+
+        expect(buildSpy.mock.calls.length).toBe(afterFirst)
+      } finally {
+        buildSpy.mockRestore()
+      }
+    })
+
+    it('keeps an unselected platform out of the watch list', async () => {
+      // The own-output guard has to cover every declared platform, not only
+      // the ones this compile built: a file an unselected platform wrote
+      // earlier is still the plugin's, and treating it as a token source would
+      // rebuild on it forever.
+      const directory = path.join(tempDir, 'scoped-guard')
+      const { configFile: scoped } = threePlatforms(directory)
+
+      const plugin = vitePlugin({
+        config: scoped,
+        logLevel: 'silent',
+        platforms: ['css'],
+      })
+      await callBuildStart(plugin)
+
+      // scss was never built by this compile, and its destination is still
+      // recognised as the plugin's own output rather than as a source.
+      const unselectedOutput = path.join(directory, 'scss-out', 'vars.scss')
+      fs.mkdirSync(path.dirname(unselectedOutput), { recursive: true })
+      fs.writeFileSync(unselectedOutput, '// touched by the test\n')
+
+      const buildSpy = vi.spyOn(StyleDictionary.prototype, 'buildPlatform')
+      try {
+        await callWatchChange(plugin, unselectedOutput)
+        expect(buildSpy).not.toHaveBeenCalled()
+      } finally {
+        buildSpy.mockRestore()
+      }
+    })
+  })
 })
 
 // Nothing pinned the exports map, and two of the ways it breaks leave every
