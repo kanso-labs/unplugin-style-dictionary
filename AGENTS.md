@@ -49,11 +49,30 @@ compiles each Style Dictionary config in turn, and letting those overlap would
 have two builds writing the same destinations at once. The rule's advice to
 collect the promises and `Promise.all` them is a bug here, not an optimisation.
 
-**Install with the Node version in `.tool-versions` (24.19.0).** CI resolves it
-from that file, and an older npm silently drops the platform entries the
-lockfile carries for Linux builds — a rewrite with no visible symptom until a
-Linux runner installs the wrong native binary. If `node --version` disagrees,
-prefix the command: `mise exec node@24.19.0 -- npm install`.
+**Install with the Node version in `.tool-versions`.** The version is not
+repeated here on purpose: Renovate moves that file on its own schedule, through
+the `mise` rule in `.github/renovate.json`, and prose it does not edit goes
+stale. CI resolves it from the file too. If `node --version` disagrees, prefix
+the command:
+`mise exec node@"$(awk '/^nodejs/{print $2}' .tool-versions)" -- npm install`.
+
+**An npm older than 11 rewrites the lockfile, and `npm ci` cannot see it.** It
+compares the lock against `package.json` and passes either way, so nothing in CI
+noticed until `Lint` grew the regeneration check it ends with.
+
+What the rewrite does is narrower than this file used to claim. Measured on npm
+10.9.3 against this repository's own lock: 212 changed lines, the entry count
+untouched at 559, 52 native-binding entries losing their `libc` discriminator —
+`@napi-rs`, `@oxfmt`, `@oxlint`, `@rolldown`, `@rollup`, `@yuku-codegen`,
+`@yuku-parser` and `lightningcss` — and 55 gaining a `dev` marker they did not
+carry. Resolved for linux/x64/glibc that installs 453 packages where the
+committed lock installs 446: those seven families pulling both their `-gnu` and
+their `-musl` build.
+
+So the entries survive and the `libc` field inside them goes, and the result is
+duplicate binaries rather than wrong ones. Nothing breaks — it is install bloat
+that was invisible to CI, which is a weaker case than "a Linux runner installs
+the wrong native binary" but a free one to catch.
 
 ## Conventions
 

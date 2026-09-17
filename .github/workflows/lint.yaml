@@ -33,3 +33,29 @@ jobs:
 
       - name: Run lint
         run: npm run lint
+
+      # An npm older than 11 rewrites the lockfile, and `npm ci` cannot see it:
+      # it compares the lock against `package.json` and passes either way.
+      # Measured on npm 10.9.3 against this repository's own lock — 212 changed
+      # lines, the entry count untouched, 52 native-binding entries losing their
+      # `libc` discriminator and 55 gaining a `dev` marker. Resolved for
+      # linux/x64/glibc that is 453 packages where the committed lock installs
+      # 446: seven families pulling both their `-gnu` and their `-musl` build.
+      #
+      # Regenerating is a no-op under the pinned npm, so any diff here is a lock
+      # written by something else.
+      #
+      # A step of this job rather than a job of its own, for the same reason
+      # actionlint is: `Lint` is a check the ruleset requires, and a new job
+      # would be a new name nothing requires — free to fail without stopping
+      # anything.
+      #
+      # Last, so a lockfile problem does not mask the lint output that is the
+      # reason most people read this job.
+      - name: Check the lockfile was written by the pinned npm
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          if ! git diff --exit-code package-lock.json; then
+            echo "::error file=package-lock.json::package-lock.json changes when regenerated. It was written by an npm other than the one .tool-versions pins; re-run npm install with that version and commit the result."
+            exit 1
+          fi
