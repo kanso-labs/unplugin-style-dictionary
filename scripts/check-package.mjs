@@ -25,6 +25,7 @@
 
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
+import path from 'node:path'
 import semver from 'semver'
 
 const require = createRequire(import.meta.url)
@@ -225,6 +226,75 @@ for (const target of targets) {
       throw new Error(
         'the options type is imported for the signature but never exported',
       )
+    }
+  })
+}
+
+// Every generated source map carries the original TypeScript inline.
+//
+// `files` ships `dist` alone, so `sources` naming `../src/index.ts` points at a
+// path that exists nowhere on a consumer's disk. What makes a stack trace
+// readable there is `sourcesContent`: installed from the packed tarball and made
+// to throw from inside the plugin, `node --enable-source-maps` prints the
+// original TypeScript code frame. With only `sourcesContent` removed from that
+// same map, the frame degrades to the generated JavaScript while the stack still
+// names the dangling `src/` path.
+//
+// **This guards a deliberate future addition rather than an accidental
+// deletion**, which makes it a weaker case than the `fixedExtension` and
+// `default`-condition checks above. tsdown types `sourcemap` as
+// `boolean | 'inline' | 'hidden'`, so nothing in that option can drop the
+// content — it would take a new `outputOptions.sourcemapExcludeSources` entry
+// that `tsdown.config.ts` does not have. Neither publint nor attw looks at a
+// map at all: publint's source carries no reference to `sourcemap`,
+// `sourcesContent` or `sourceMappingURL`.
+// `toSorted` rather than `sort`, which is what the linter asks for and what
+// `src/index.ts` cannot use: `tsconfig.test.json` covers this directory at
+// ES2023, where `tsconfig.lib.json` is ES2022.
+const maps = fs
+  .readdirSync('dist')
+  .filter((file) => file.endsWith('.js.map'))
+  .toSorted((left, right) => left.localeCompare(right))
+
+if (maps.length === 0) {
+  failures.push('dist carries no source maps at all')
+}
+
+for (const file of maps) {
+  check(`${file} embeds its original source`, () => {
+    /** @type {unknown} */
+    const parsed = JSON.parse(fs.readFileSync(path.join('dist', file), 'utf8'))
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('is not an object')
+    }
+
+    const sources = 'sources' in parsed ? parsed.sources : undefined
+    const contents =
+      'sourcesContent' in parsed ? parsed.sourcesContent : undefined
+
+    if (!Array.isArray(sources) || sources.length === 0) {
+      throw new Error('names no sources')
+    }
+
+    if (!Array.isArray(contents)) {
+      throw new Error(
+        'has no sourcesContent, so a consumer gets a stack trace pointing at a src/ path that is not shipped',
+      )
+    }
+
+    if (contents.length !== sources.length) {
+      throw new Error(
+        `names ${sources.length} source(s) but carries ${contents.length} sourcesContent entr(ies)`,
+      )
+    }
+
+    const missing = sources.filter(
+      (_, index) =>
+        typeof contents[index] !== 'string' || contents[index] === '',
+    )
+
+    if (missing.length > 0) {
+      throw new Error(`carries no content for ${missing.join(', ')}`)
     }
   })
 }
