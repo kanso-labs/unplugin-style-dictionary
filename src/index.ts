@@ -51,6 +51,19 @@ function isConfig(value: unknown): value is Config {
   return typeof value === 'object' && value !== null
 }
 
+// A hook is the consumer's code, and what it hands back is not this plugin's to
+// assume. A predicate rather than `instanceof Promise`, which answers `false`
+// for a thenable from another realm or from a promise library — exactly the
+// case where letting a rejection escape does the damage.
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'then' in value &&
+    typeof value.then === 'function'
+  )
+}
+
 // A config module may expose its config as a `default` export or as the
 // namespace itself. `'default' in value` is what lets the compiler reach
 // `.default` without a cast.
@@ -379,6 +392,9 @@ const unpluginFactory: UnpluginFactory<
     errorOverlay = true,
     failOnError = 'build',
     logLevel,
+    onBuildEnd,
+    onBuildError,
+    onBuildStart,
     report = true,
     root: rootOption,
     silent = false,
@@ -521,6 +537,45 @@ const unpluginFactory: UnpluginFactory<
     } else {
       console.log(`\x1b[36m${prefix} ${message}\x1b[0m`)
     }
+  }
+
+  // Runs one of the consumer's `onBuild*` hooks without letting it decide the
+  // fate of the build that called it.
+  //
+  // Two ways a hook can go wrong, and neither may propagate. A throw is caught
+  // here, because a post-processing step that fails must not undo a compile the
+  // plugin itself completed — the files are written and correct. A rejected
+  // promise is the quieter one: the return value is deliberately not awaited,
+  // so a rejection has nothing holding it and reaches the host as an unhandled
+  // rejection, which under Node's default takes the process down — a dev server
+  // killed from inside a hook that was only meant to reformat a file.
+  //
+  // Both are reported at `'error'`, so they are said at every level including
+  // `silent`, and worded so neither can be read as the compile having failed.
+  const callHook = <A extends unknown[]>(
+    name: string,
+    hook: (...args: A) => Promise<void> | void,
+    ...args: A
+  ): void => {
+    let result: unknown
+
+    try {
+      // Captured rather than dropped, because the promise an `async` hook
+      // returns is the thing the check below needs. Wrapping this call in a
+      // block-bodied arrow — which is what the linter asks for when the return
+      // type is plain `void` — discarded it, and the rejection escaped exactly
+      // as it had before any of this existed.
+      result = hook(...args)
+    } catch (err) {
+      log(`The ${name} hook threw: ${errorMessage(err)}`, 'error')
+      return
+    }
+
+    if (!isThenable(result)) return
+
+    void Promise.resolve(result).catch((err: unknown) => {
+      log(`The ${name} hook rejected: ${errorMessage(err)}`, 'error')
+    })
   }
 
   // Resolve config file paths / objects
@@ -981,6 +1036,10 @@ const unpluginFactory: UnpluginFactory<
         log('Compiling design tokens...', 'info')
       }
 
+      // Before anything is resolved or built, and once per build — a watch
+      // rebuild is a build, so this fires again for each one.
+      if (onBuildStart) callHook('onBuildStart', onBuildStart)
+
       // Configurations are built one after another rather than with
       // `Promise.all`, and that is load-bearing. Two configurations may name
       // the same destination file, and each instance gets the atomic volume
@@ -1100,6 +1159,12 @@ const unpluginFactory: UnpluginFactory<
       // `catch` would see a rebuild that looked like it succeeded.
       notifyBuildOutcome?.(asError(err))
 
+      // Ahead of the throw decision for the same reason as the line above: a
+      // rebuild under the dev server's default does not throw, and a hook that
+      // only fired when something else was about to fail would be silent on
+      // exactly the builds a consumer is watching.
+      if (onBuildError) callHook('onBuildError', onBuildError, err)
+
       // Reported, and then rethrown so the host stops. Swallowing it left
       // every target exiting 0 with the previous run's tokens still on disk
       // and in the bundle — a green build shipping stale values.
@@ -1118,6 +1183,32 @@ const unpluginFactory: UnpluginFactory<
     // build looking unfinished.
     notifyBuildOutcome?.(null)
 
+    // One measurement, read by the hook below and by the reporting under it.
+    const duration = Date.now() - startTime
+
+    // Beside the overlay notification, and for the same reason it sits here
+    // rather than at the end of the function: the reporting below returns
+    // early in three places, and a build that finished has finished whether or
+    // not a size table gets printed for it.
+    //
+    // Sorted, so two runs of one configuration hand back the same order —
+    // `generatedFiles` is a set in platform-then-file order, which is stable
+    // in practice and guaranteed by nothing. The paths stay platform-native:
+    // this is a list a consumer is going to open files with, not one the
+    // watcher compares against.
+    if (onBuildEnd) {
+      // `toSorted` is what the linter asks for and what this cannot use:
+      // `lib` is ES2022 here and `toSorted` is ES2023, so it types as an error
+      // even though every Node this package supports has it. The rule guards
+      // against mutating an array someone else holds, and this one was built
+      // from the set on the line it appears on.
+      // oxlint-disable-next-line unicorn/no-array-sort
+      const files = Array.from(generatedFiles).sort((left, right) =>
+        left.localeCompare(right),
+      )
+      callHook('onBuildEnd', onBuildEnd, files, duration)
+    }
+
     // The `try` ends above, and everything from here down is reporting. Style
     // Dictionary has finished writing by now and `generatedDestinations` is
     // already replaced, so nothing below can put a file on disk in doubt —
@@ -1125,7 +1216,6 @@ const unpluginFactory: UnpluginFactory<
     // It used to be: a fault in the padding arithmetic printed `Compilation
     // failed after 19ms` over a build whose every token file was correct, and
     // with `failOnError` defaulting to `'build'` that stopped the bundler.
-    const duration = Date.now() - startTime
 
     // Every configuration was already current, so nothing was written. Said
     // rather than left implied: a build that prints its opening line and then

@@ -1885,6 +1885,201 @@ describe('unplugin-style-dictionary (vite target)', () => {
     const content = fs.readFileSync(outputFile, 'utf-8')
     expect(content).toContain('--color-primary: #ff0000;')
   })
+
+  // Nothing a consumer could hook into existed before these: formatting the
+  // generated files, type-checking them or telling something else they had
+  // landed all meant forking the plugin or bolting a second watcher onto the
+  // output directory. The data the hooks carry was already being computed for
+  // the size table and then dropped.
+  describe('the build hooks', () => {
+    it('calls onBuildStart and onBuildEnd once, with every generated file', async () => {
+      const started: number[] = []
+      const ended: Array<{ duration: number; files: string[] }> = []
+
+      await callBuildStart(
+        vitePlugin({
+          config: configFile,
+          logLevel: 'silent',
+          onBuildEnd: (files, durationMs) => {
+            ended.push({ duration: durationMs, files })
+          },
+          onBuildStart: () => {
+            started.push(Date.now())
+          },
+        }),
+      )
+
+      expect(started).toHaveLength(1)
+      expect(ended).toHaveLength(1)
+
+      // The absolute path of what was actually written, not a relative one and
+      // not a directory.
+      expect(ended[0]?.files).toEqual([outputFile])
+      expect(fs.existsSync(outputFile)).toBe(true)
+
+      // A duration rather than a placeholder. Nothing here pins how long a
+      // build takes, only that the number describes one.
+      expect(ended[0]?.duration).toBeTypeOf('number')
+      expect(ended[0]?.duration).toBeGreaterThanOrEqual(0)
+    })
+
+    it('hands a watch rebuild the same file list, not an empty one', async () => {
+      // This is the case the collection used to be gated against. `generatedFiles`
+      // was populated only when no `context` was passed, and a rebuild passes
+      // one — so a post-processing hook, which is the whole point of `onBuildEnd`,
+      // would have seen every file on the first build and nothing on any edit
+      // after it.
+      const ended: string[][] = []
+
+      const plugin = vitePlugin({
+        config: configFile,
+        logLevel: 'silent',
+        onBuildEnd: (files) => {
+          ended.push(files)
+        },
+      })
+
+      await callBuildStart(plugin)
+      expect(ended).toHaveLength(1)
+      expect(ended[0]).toEqual([outputFile])
+
+      fs.writeFileSync(
+        tokenFile,
+        JSON.stringify({ color: { primary: { value: '#ff0000' } } }),
+      )
+      await callWatchChange(plugin, tokenFile)
+
+      expect(ended).toHaveLength(2)
+      expect(ended[1]).toEqual([outputFile])
+      expect(fs.readFileSync(outputFile, 'utf-8')).toContain(
+        '--color-primary: #ff0000;',
+      )
+    })
+
+    it('calls onBuildError with what was thrown, before failOnError decides', async () => {
+      // Left at its default, so this build throws. The hook still has to have
+      // fired: it is called ahead of that decision, because under a dev server
+      // the same failure does not throw at all and a hook that waited for one
+      // would be silent on exactly the builds a consumer is watching.
+      fs.writeFileSync(
+        tokenFile,
+        JSON.stringify({ color: { primary: { value: '{color.nope.value}' } } }),
+      )
+
+      const failures: unknown[] = []
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      try {
+        await expect(
+          callBuildStart(
+            vitePlugin({
+              config: configFile,
+              logLevel: 'silent',
+              onBuildError: (error) => {
+                failures.push(error)
+              },
+            }),
+          ),
+        ).rejects.toThrow('Reference Errors')
+
+        expect(failures).toHaveLength(1)
+
+        // Narrowed rather than asserted, so the compiler checks the reach into
+        // `.message` instead of taking its word for it.
+        const [failure] = failures
+        if (!(failure instanceof Error)) {
+          throw new TypeError('onBuildError was handed a non-Error')
+        }
+        expect(failure.message).toContain('Reference Errors')
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Compilation failed'),
+        )
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('reports a hook that throws and builds anyway', async () => {
+      // A post-processing step that fails must not undo a compile the plugin
+      // itself completed. The files are written and correct; the hook is the
+      // thing that went wrong, and it says so.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      try {
+        await callBuildStart(
+          vitePlugin({
+            config: configFile,
+            logLevel: 'silent',
+            onBuildEnd: () => {
+              throw new Error('prettier fell over')
+            },
+          }),
+        )
+
+        expect(fs.existsSync(outputFile)).toBe(true)
+        expect(fs.readFileSync(outputFile, 'utf-8')).toContain(
+          '--color-primary: #0070f3;',
+        )
+
+        // Named as the hook's failure rather than the build's, so it cannot be
+        // read as the compile having gone wrong.
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('The onBuildEnd hook threw'),
+        )
+        expect(errorSpy).not.toHaveBeenCalledWith(
+          expect.stringContaining('Compilation failed'),
+        )
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+
+    it('reports a hook that rejects rather than leaving it unhandled', async () => {
+      // The quieter of the two failure modes. The return value is deliberately
+      // not awaited, so a rejection has nothing holding it and reaches the host
+      // as an unhandled rejection — which under Node's default exits the
+      // process, killing a dev server from inside a hook meant to reformat a
+      // file.
+      const unhandled: unknown[] = []
+      const record = (reason: unknown) => {
+        unhandled.push(reason)
+      }
+
+      // Vitest installs its own handler and fails the run on an unhandled
+      // rejection, so this asserts on Node's event rather than on the process
+      // surviving — the run would already be over by then.
+      process.on('unhandledRejection', record)
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      try {
+        await callBuildStart(
+          vitePlugin({
+            config: configFile,
+            logLevel: 'silent',
+            // The realistic shape: a consumer's post-processing step written
+            // `async`, which fails.
+            onBuildEnd: async () => {
+              await Promise.resolve()
+              throw new Error('async step fell over')
+            },
+          }),
+        )
+
+        // Node emits the event after the microtask queue drains, so the check
+        // waits out a macrotask rather than reading it on the same tick.
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        expect(unhandled).toEqual([])
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('The onBuildEnd hook rejected'),
+        )
+        expect(fs.existsSync(outputFile)).toBe(true)
+      } finally {
+        errorSpy.mockRestore()
+        process.off('unhandledRejection', record)
+      }
+    })
+  })
 })
 
 // Nothing pinned the exports map, and two of the ways it breaks leave every

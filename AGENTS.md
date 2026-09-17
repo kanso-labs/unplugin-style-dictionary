@@ -701,6 +701,24 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**A public callback typed `=> void` makes a consumer's `async` handler a lint
+error.** TypeScript's void-return rule accepts one either way, so this does not
+show up in a type-check — but oxlint's type-aware
+`typescript/no-misused-promises` rejects `onBuildEnd: async () => {…}` against a
+`=> void` property, and a consumer running the same recommended rule set gets
+the same error in their own config file. The three `onBuild*` hooks therefore
+return `Promise<void> | void`, which documents that an `async` hook is supported
+and lets one be written without a suppression. It is not a promise to await what
+comes back, and nothing does.
+
+Its mirror on this side: a hook's return value has to be **captured** so a
+rejection can be caught, and `typescript/no-confusing-void-expression` pushes
+exactly the other way, asking for a block-bodied arrow that throws the value
+away. Taking that advice reintroduced the unhandled rejection the hook wrapper
+exists to prevent, with every check green — the test that caught it asserts on
+Node's `unhandledRejection` event rather than on the process surviving, because
+by then the run is already over.
+
 **Vite has no frame for taking an error overlay down, so the clear is an empty
 update.** Its client creates the overlay on an `error` payload and removes it
 when an `update` arrives — `{ type: 'update', updates: [] }` therefore dismisses

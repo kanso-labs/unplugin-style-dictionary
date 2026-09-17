@@ -390,6 +390,42 @@ the first decides whether the host stops, the second whether the browser is
 told. The dev server's default is not to stop, which is exactly when the overlay
 is the only thing that can report the failure.
 
+## Build Hooks
+
+Three optional callbacks, for work that has to happen around a compile rather
+than inside one — formatting the generated files, type-checking them, telling
+something else they have landed.
+
+```typescript
+StyleDictionary({
+  config: 'sd.config.json',
+  onBuildStart: () => console.log('compiling tokens'),
+  onBuildEnd: async (files, durationMs) => {
+    console.log(`wrote ${files.length} files in ${durationMs}ms`)
+    await formatGeneratedFiles(files)
+  },
+  onBuildError: (error) => notifySomething(error),
+})
+```
+
+`files` holds the absolute, platform-native path of every file the build
+declares, sorted. It is what the build declares rather than what it happened to
+write this time: a configuration skipped because its output was already current
+contributes its destinations too, so a post-processing step still sees the whole
+set on a rebuild that changed one file.
+
+A rebuild is a build, so all three fire again on every watch-triggered one.
+
+**A hook cannot fail the build that called it.** The return value is not
+awaited, so nothing waits for post-processing; a hook that throws is reported
+and the build stands, and a promise that rejects is caught and reported rather
+than reaching the host as an unhandled rejection — which would otherwise take a
+dev server down from inside a step meant to reformat a file.
+
+`onBuildError` fires whatever `failOnError` is set to, and before that option
+decides whether to rethrow. The two answer different questions: one is whether
+the host stops, the other is that a build went wrong.
+
 ## Public API
 
 Small on purpose. Four bundler entry points, one root entry, and one type.
@@ -429,6 +465,17 @@ const plugin = styleDictionary.rollup({ config: 'sd.config.json' })
  * --watch` and `webpack --watch` all rebuild on a token change, and a one-shot
  * build (e.g. `tsdown`/`rolldown build` without `--watch`) only builds once, in
  * `buildStart`.
+ *
+ * The three `onBuild*` hooks are called synchronously and their return value
+ * is not awaited, so a build never waits for one. A hook may still be written
+ * `async`: a promise it returns is left to run on its own, and a rejection is
+ * caught and reported rather than reaching the host as an unhandled one. A
+ * hook that throws is reported and does not fail the build that called it.
+ *
+ * They return `Promise<void> | void` rather than `void` for that reason. Both
+ * accept an `async` hook as far as the compiler is concerned, but `void` alone
+ * makes one a `no-misused-promises` error under the type-aware lint rules a
+ * consumer is likely to be running — for a hook this documents as supported.
  *
  * Rolldown's watch mode is the exception, and it is not about glob patterns.
  * `addWatchFile` is accepted either way, but what happens next differs by
@@ -558,6 +605,47 @@ export interface UnpluginStyleDictionaryOptions {
    * configuration's `log.verbosity` alone
    */
   logLevel?: 'info' | 'silent' | 'verbose' | 'warn'
+
+  /**
+   * Called once a build has finished, with every file it declares and how long
+   * it took in milliseconds.
+   *
+   * The paths are absolute and platform-native, sorted so two runs of the same
+   * configuration hand back the same order. They are what the build declares
+   * rather than what it wrote this time: a configuration skipped by `cache`
+   * contributes its destinations too, because they are on disk and current,
+   * and a post-processing step that ignored them would leave half the output
+   * untouched on a rebuild that changed one file.
+   *
+   * This is where formatting the generated files, type-checking them, or
+   * telling something else they have landed belongs.
+   *
+   * @default undefined
+   */
+  onBuildEnd?: (files: string[], durationMs: number) => Promise<void> | void
+
+  /**
+   * Called when a build fails, with whatever was thrown.
+   *
+   * It fires whatever `failOnError` is set to, and before that option decides
+   * whether to rethrow — the two answer different questions, and under a dev
+   * server the default is not to throw at all.
+   *
+   * The failure is reported to the console either way, so this is for reacting
+   * to one rather than for noticing it.
+   *
+   * @default undefined
+   */
+  onBuildError?: (error: unknown) => Promise<void> | void
+
+  /**
+   * Called before a build begins, once per build.
+   *
+   * A watch-triggered rebuild is a build, so this fires again for each one.
+   *
+   * @default undefined
+   */
+  onBuildStart?: () => Promise<void> | void
 
   /**
    * Whether the table of generated files and their sizes is produced.
