@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.6.2...unplugin-style-dictionary-v0.7.0) (2026-09-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **exports:** make the watch filter and the factory internal ([#280](https://github.com/kanso-labs/unplugin-style-dictionary/issues/280))
+
+### Features
+
+* **exports:** make the watch filter and the factory internal ([#280](https://github.com/kanso-labs/unplugin-style-dictionary/issues/280)) ([ceff900](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ceff900d3165cbb820166616a98fa1e7bacd91b5))
+
 ## [0.6.2](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.6.1...unplugin-style-dictionary-v0.6.2) (2026-09-17)
 
 
