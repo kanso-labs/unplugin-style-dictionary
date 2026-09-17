@@ -1,5 +1,10 @@
 # unplugin-style-dictionary
 
+[![npm version][npm-version-shield]][npm]
+[![npm downloads][npm-downloads-shield]][npm]
+[![License][license-shield]][license] [![Build][build-shield]][build-workflow]
+[![Test][test-shield]][test-workflow] [![Coverage][coverage-shield]][codecov]
+
 A lightweight, robust [unplugin](https://unplugin.unjs.io/)-based plugin to
 compile **Style Dictionary** design tokens ahead of your bundler, with automatic
 watching, rebuilding, and hot reloading (HMR) under Vite's dev server.
@@ -504,3 +509,23 @@ plugin. As of this unplugin-based rewrite:
 ## License
 
 MIT
+
+[build-shield]:
+  https://img.shields.io/github/actions/workflow/status/kanso-labs/unplugin-style-dictionary/build.yaml?branch=main&label=Build
+[build-workflow]:
+  https://github.com/kanso-labs/unplugin-style-dictionary/actions/workflows/build.yaml
+[codecov]: https://codecov.io/gh/kanso-labs/unplugin-style-dictionary
+[coverage-shield]:
+  https://img.shields.io/codecov/c/github/kanso-labs/unplugin-style-dictionary?label=Coverage
+[license]: ./LICENSE
+[license-shield]:
+  https://img.shields.io/github/license/kanso-labs/unplugin-style-dictionary
+[npm]: https://www.npmjs.com/package/@kanso-labs/unplugin-style-dictionary
+[npm-downloads-shield]:
+  https://img.shields.io/npm/dm/@kanso-labs/unplugin-style-dictionary
+[npm-version-shield]:
+  https://img.shields.io/npm/v/@kanso-labs/unplugin-style-dictionary
+[test-shield]:
+  https://img.shields.io/github/actions/workflow/status/kanso-labs/unplugin-style-dictionary/test.yaml?branch=main&label=Test
+[test-workflow]:
+  https://github.com/kanso-labs/unplugin-style-dictionary/actions/workflows/test.yaml
