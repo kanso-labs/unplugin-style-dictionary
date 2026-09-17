@@ -151,6 +151,36 @@ function paint(code: string, value: string, allowed: boolean): string {
   return allowed ? `\u001B[${code}m${value}\u001B[0m` : value
 }
 
+// Which of a configuration's own `source`/`include` patterns match no file on
+// disk. Only for diagnosis: it is the emptiness of the resolved token set that
+// decides whether a build fails, because only that catches every route to an
+// empty set. This names the pattern at fault, which the token count cannot, and
+// it reports a mistyped pattern in a configuration whose others still match —
+// where nothing fails at all and one platform quietly loses its tokens.
+async function patternsMatchingNothing(patterns: string[]): Promise<string[]> {
+  const barren: string[] = []
+
+  for (const pattern of patterns) {
+    // A literal path is a `stat`, not a glob: `tinyglobby` treats a path with
+    // no magic characters as a literal anyway, and this keeps the common case
+    // off the filesystem walk.
+    if (!GLOB_CHARACTERS.test(pattern)) {
+      if (!fs.existsSync(pattern)) barren.push(pattern)
+      continue
+    }
+
+    try {
+      const matched = await glob([pattern], { absolute: true })
+      if (matched.length === 0) barren.push(pattern)
+    } catch {
+      // A pattern that cannot even be globbed is the build's problem to
+      // report; saying it twice, in a diagnostic, helps nobody.
+    }
+  }
+
+  return barren
+}
+
 // A config module may expose its config as a `default` export or as the
 // namespace itself. `'default' in value` is what lets the compiler reach
 // `.default` without a cast.
@@ -339,6 +369,16 @@ const IMPORTED_CONFIG_EXTENSIONS = ['.js', '.mjs', '.ts']
 interface ResolvedConfig {
   config: Config | string
   file?: string
+}
+
+// How to name a configuration in a message. A path is what a consumer
+// recognises; a configuration passed as an object or returned by a function has
+// no name, so it is identified by where it sits in the list rather than by a
+// stringified dump of itself.
+function describeConfig(item: ResolvedConfig, index: number): string {
+  return item.file
+    ? `The configuration ${item.file}`
+    : `The configuration at position ${index + 1}`
 }
 
 // Whether a config path is one Style Dictionary imports rather than parses.
@@ -1232,7 +1272,7 @@ const unpluginFactory: UnpluginFactory<
       // the same destination file, and each instance gets the atomic volume
       // swapped onto it below — overlapping builds would interleave those
       // writes and hand a reader a file assembled from both.
-      for (const item of resolvedConfigs) {
+      for (const [index, item] of resolvedConfigs.entries()) {
         // Read ahead of the instance, because avoiding the instance is the
         // point: construction plus `extend` is the 15-30% of a build that
         // parses the token sources, and `buildAllPlatforms` is the rest.
@@ -1291,6 +1331,41 @@ const unpluginFactory: UnpluginFactory<
         // touched either way: a consumer's `warnings: 'error'` turning a
         // missing output file into a thrown build is their decision.
         await sd.extend(undefined, { mutateOriginal: true, verbosity })
+
+        // **Before the build, and that is the whole of it.** A token set that
+        // resolved to nothing is not an error anywhere in this stack: Style
+        // Dictionary writes the file with no custom properties in it, prints
+        // its usual `✔︎` line at any verbosity, and returns. So a token file
+        // deleted mid-session took the generated output down with it and
+        // reported `Rebuilt design tokens` while doing it, and a `source`
+        // matching nothing shipped an empty stylesheet from a build that
+        // exited 0.
+        //
+        // Checked here because `buildAllPlatforms` truncates and rewrites the
+        // destination: one line later the previous good output is already gone
+        // and an error would be accurate and useless.
+        if (sd.allTokens.length === 0) {
+          // The configuration as an object, so its own patterns can be named.
+          // `false` because a configuration that will not parse never reaches
+          // here — the `extend` above would have thrown first.
+          const asObject = await readConfigObject(item, false)
+          const barren = asObject
+            ? await patternsMatchingNothing(sourcePatternsOf(asObject))
+            : []
+
+          // Thrown rather than reported, so it takes the path `failOnError`
+          // already owns — the same decision, made in one place, rather than a
+          // second way for a build to fail.
+          throw new Error(
+            [
+              `${describeConfig(item, index)} resolved no tokens, so its output would be emptied.`,
+              barren.length > 0
+                ? `These patterns matched no files: ${barren.join(', ')}`
+                : `It declares no source or include patterns that matched anything.`,
+              `Nothing was written. Set failOnError to false to build anyway.`,
+            ].join(' '),
+          )
+        }
 
         // Swap in the atomic volume only now that the instance has finished
         // reading its configs and token sources, so every write below lands

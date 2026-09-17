@@ -458,6 +458,19 @@ StyleDictionary({
 })
 ```
 
+**A configuration that resolves no tokens is a failure, not an empty build.**
+Style Dictionary writes the destination with nothing in it and reports success,
+so a token file deleted mid-session used to take the generated output down with
+it, and a `source` matching nothing shipped an empty stylesheet from a build
+that exited 0. The check runs before the compile, so the previous good output is
+still on disk when it fires and nothing is overwritten. The message names the
+configuration and the patterns that matched no files.
+
+This is about the resolved token set, not about the patterns: a configuration
+that supplies `tokens` inline and declares no `source` at all is valid and
+builds. And it goes through `failOnError` like any other compile failure, so
+`failOnError: false` reports it and carries on.
+
 A failure is always reported by the plugin, whatever `failOnError` and `silent`
 are set to — see [Where the messages go](#where-the-messages-go) for which
 channel it arrives on, and for the one thing that can still suppress it.
