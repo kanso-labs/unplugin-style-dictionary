@@ -713,6 +713,43 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**`platforms` narrows the build, and three things move with it.** The up-to-date
+check asks about the _selected_ platforms only — a scoped build never writes the
+ones it skipped, so asking about all of them means the answer is always "not up
+to date" and `cache` can never fire for a scoped configuration. The own-output
+set is the opposite and must keep covering _every_ declared platform: a file an
+unselected platform wrote on an earlier build is still the plugin's, and
+dropping it would let a watcher treat it as a token source and rebuild forever.
+And the whole selection is validated before anything is built, because Style
+Dictionary's `buildPlatform` rejects an unknown name only when it reaches it —
+measured: with the check removed, `css` is on disk when the throw for `nope`
+arrives.
+
+The per-platform loop is sequential, matching the configuration loop it sits
+inside. `buildAllPlatforms` fanning its own platforms out with `Promise.all` is
+Style Dictionary's choice over configurations it owns, not this plugin's over a
+selection a consumer wrote.
+
+**There is deliberately no `clean` option, and `cleanAllPlatforms` is why.** The
+orphan problem is real — measured, output dropped from a configuration survives
+every later build — but Style Dictionary's counterpart does not address it.
+`cleanAllPlatforms()` removes the destinations the _current_ configuration
+declares, which are exactly the files that are not orphans:
+
+```
+two files built            : ["legacy.scss","vars.css"]
+clean, declaring only one  : ["legacy.scss"]        <- the orphan survived
+clean, declaring both      : (the buildPath directory is gone)
+```
+
+So calling it before a build would delete and rewrite every file in use, leave
+every orphan standing, and remove the `buildPath` directory — losing any
+hand-written file sharing it. What would work is diffing the plugin's own
+`generatedDestinations` between builds, since that set is exactly what the
+plugin wrote; it only covers one process, which is the dev-server case the
+problem shows up in. Not built here. The stale-file behaviour is documented in
+README instead, under "Generated Output Is Disposable".
+
 **Discovery validates, and only what it went looking for.** Given no `config`,
 four generic names are tried in the root and the first that declares one of
 `platforms`, `source`, `include` or `tokens` is adopted; a candidate failing

@@ -542,6 +542,7 @@ const unpluginFactory: UnpluginFactory<
     onBuildEnd,
     onBuildError,
     onBuildStart,
+    platforms: platformsOption,
     report = true,
     root: rootOption,
     silent = false,
@@ -570,6 +571,19 @@ const unpluginFactory: UnpluginFactory<
         : level === 'silent'
           ? 'silent'
           : 'default'
+
+  // Which platforms this compile covers, or `undefined` for all of them.
+  //
+  // The array form applies to every build; the object form splits the first
+  // compile from the watch rebuilds, and `context` is what tells them apart —
+  // only the rebuild paths pass one. An absent key means every platform, so
+  // `{ watch: ['css'] }` builds everything once and then only css.
+  const platformsFor = (context: string | undefined): string[] | undefined => {
+    if (platformsOption === undefined) return undefined
+    if (Array.isArray(platformsOption)) return platformsOption
+
+    return context === undefined ? platformsOption.build : platformsOption.watch
+  }
 
   // Whether a failure in this compile should be thrown rather than only
   // reported. The two compiles are told apart by `runBuilds`'s `context`,
@@ -1094,10 +1108,23 @@ const unpluginFactory: UnpluginFactory<
   // Resolved exactly as the build resolves it below, so the two name the same
   // files — a relative `buildPath` against `root`, and a `destination`
   // against that.
-  const declaredDestinations = (configObj: Config): string[] => {
+  // `only` narrows this to named platforms, and exactly one caller wants that:
+  // the up-to-date check, which asks whether the work *this* compile would do
+  // is already done. Everywhere else the answer has to cover every declared
+  // platform, because a file an unselected platform wrote earlier is still the
+  // plugin's own output and has to stay out of the watch list.
+  const declaredDestinations = (
+    configObj: Config,
+    only?: string[],
+  ): string[] => {
     const destinations: string[] = []
 
-    for (const platform of Object.values(configObj.platforms ?? {})) {
+    const entries = Object.entries(configObj.platforms ?? {})
+    const selected = only
+      ? entries.filter(([name]) => only.includes(name))
+      : entries
+
+    for (const [, platform] of selected) {
       const buildPath = platform.buildPath ?? ''
       const absoluteBuildPath = path.isAbsolute(buildPath)
         ? buildPath
@@ -1145,6 +1172,7 @@ const unpluginFactory: UnpluginFactory<
   const isUpToDate = async (
     item: ResolvedConfig,
     configObj: Config,
+    only?: string[],
   ): Promise<boolean> => {
     // An action writes what no `destination` names, so there is nothing for
     // the comparison below to check and skipping would leave its work undone.
@@ -1153,7 +1181,7 @@ const unpluginFactory: UnpluginFactory<
     )
     if (hasActions) return false
 
-    const destinations = declaredDestinations(configObj)
+    const destinations = declaredDestinations(configObj, only)
     if (destinations.length === 0) return false
 
     // `options.watch` belongs in here as much as `source` does. A consumer
@@ -1343,8 +1371,9 @@ const unpluginFactory: UnpluginFactory<
         // message through, which is more specific than anything this could
         // say.
         const declared = cache ? await readConfigObject(item, false) : null
+        const selectedPlatforms = platformsFor(context)
 
-        if (declared && (await isUpToDate(item, declared))) {
+        if (declared && (await isUpToDate(item, declared, selectedPlatforms))) {
           // The destinations still have to be collected. They are what stops
           // the plugin's own output being treated as a watched source, so a
           // skipped configuration that contributed none would have its files
@@ -1432,8 +1461,38 @@ const unpluginFactory: UnpluginFactory<
         // reading its configs and token sources, so every write below lands
         // through `rename` while the read path stays exactly as it was.
         sd.volume = atomicVolume
-        await sd.buildAllPlatforms()
 
+        if (selectedPlatforms === undefined) {
+          await sd.buildAllPlatforms()
+        } else {
+          // Named, so a typo is an error rather than a platform silently not
+          // built — which is what Style Dictionary's own CLI means by "Must be
+          // defined in the config".
+          const defined = Object.keys(sd.platforms)
+          const unknown = selectedPlatforms.filter(
+            (name) => !defined.includes(name),
+          )
+          if (unknown.length > 0) {
+            throw new Error(
+              `${describeConfig(item, index)} does not define the platform(s) ${unknown.join(', ')}. It defines ${defined.join(', ')}.`,
+            )
+          }
+
+          // One after another, matching the loop this sits inside: two
+          // platforms may name the same destination, and `buildAllPlatforms`
+          // fanning its own out with `Promise.all` is Style Dictionary's
+          // choice over configurations it owns, not this plugin's over a
+          // selection a consumer wrote.
+          for (const name of selectedPlatforms) {
+            await sd.buildPlatform(name)
+          }
+        }
+
+        // Every declared platform, not only the ones this compile built. A
+        // file an unselected platform wrote on an earlier build is still the
+        // plugin's own output, and dropping it from this set would let a
+        // watcher treat it as a token source and rebuild on it forever.
+        //
         // Collected on every build rather than only on the ones whose size
         // report prints it below. The set is also what keeps a rebuild from
         // being triggered by the write it just made, and a rebuild passes a

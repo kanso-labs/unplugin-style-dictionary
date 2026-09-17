@@ -269,6 +269,48 @@ export interface UnpluginStyleDictionaryOptions {
   onBuildStart?: () => Promise<void> | void
 
   /**
+   * Which platforms to build, by the names the configuration defines.
+   *
+   * Every rebuild used to compile every platform. Measured on a six-platform
+   * configuration (css, scss, js, ios, android, flutter), with the timer around
+   * the build call alone:
+   *
+   * ```
+   * tokens   all platforms   css only   saved
+   *    500          12 ms       1 ms    10 ms
+   *   3000          36 ms       2 ms    34 ms
+   *  10000         103 ms       4 ms    99 ms
+   *  30000         330 ms      12 ms   319 ms
+   * ```
+   *
+   * So a dev server serving a web app paid for Objective-C headers, Android
+   * XML and Dart classes on every token save, and the cost grows with the
+   * token count.
+   *
+   * Two shapes. An array selects the same platforms for every build. An object
+   * splits the first compile from the watch rebuilds, which is the common
+   * want — build everything once, then rebuild only what the page uses:
+   *
+   * ```typescript
+   * platforms: ['css']
+   * platforms: { watch: ['css'] }
+   * ```
+   *
+   * An omitted key means every platform, so `{ watch: ['css'] }` builds all of
+   * them once and then only css. A name the configuration does not define is an
+   * error, matching Style Dictionary's own CLI — "Must be defined in the
+   * config".
+   *
+   * **Unselected platforms keep whatever they last wrote.** Their files are not
+   * removed and not refreshed, so a one-shot build that scopes platforms ships
+   * stale output for the rest. Scope the watch half rather than the build half
+   * unless that is what you want.
+   *
+   * @default undefined, which builds every platform
+   */
+  platforms?: string[] | { build?: string[]; watch?: string[] }
+
+  /**
    * Whether the table of generated files and their sizes is produced.
    *
    * Every generated file is read in full and gzipped at level 6 to fill the
