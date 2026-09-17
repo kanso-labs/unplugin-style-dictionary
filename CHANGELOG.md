@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.7.0...unplugin-style-dictionary-v0.8.0) (2026-09-17)
+
+
+### Features
+
+* **config:** give the config function a context argument ([#288](https://github.com/kanso-labs/unplugin-style-dictionary/issues/288)) ([63f2a3f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/63f2a3ff06abc58605fb548881f72d44c54d8fe7))
+* **options:** add onBuildStart, onBuildEnd and onBuildError hooks ([#286](https://github.com/kanso-labs/unplugin-style-dictionary/issues/286)) ([48dd8d1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/48dd8d193980c4024175ae18bbbf43cb64112976))
+* **vite:** push failed rebuilds to the error overlay ([#284](https://github.com/kanso-labs/unplugin-style-dictionary/issues/284)) ([ca38af6](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ca38af61c022447dbaea9cd32ed579fd598592a0))
+
+
+### Bug Fixes
+
+* **build:** respect NO_COLOR and route messages through the host ([#287](https://github.com/kanso-labs/unplugin-style-dictionary/issues/287)) ([415efd6](https://github.com/kanso-labs/unplugin-style-dictionary/commit/415efd60e8f6cd308ff9047c3cd96f7f156a74ea))
+
 ## [0.7.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.6.2...unplugin-style-dictionary-v0.7.0) (2026-09-17)
 
 
