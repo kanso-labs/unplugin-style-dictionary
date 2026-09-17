@@ -701,6 +701,28 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**Vite has no frame for taking an error overlay down, so the clear is an empty
+update.** Its client creates the overlay on an `error` payload and removes it
+when an `update` arrives — `{ type: 'update', updates: [] }` therefore dismisses
+it and then iterates nothing, reloading no page and touching no stylesheet.
+There is no `clear-error` type to reach for, and sending `full-reload` instead
+would throw away the page's state to achieve the same thing.
+
+That update is not free, which is why `configureServer` sends one only when an
+overlay of this plugin's is actually showing. Vite's client spends a one-time
+`isFirstUpdate` flag on the first update it receives, and an overlay standing at
+that moment makes it reload the page rather than clear. A clear per successful
+rebuild would spend that flag on a build nothing was wrong with.
+
+**The overlay reads its outcome from `runBuilds`, not from whether a caller
+caught something.** `notifyBuildOutcome` is called inside `runBuilds` ahead of
+the `failsTheBuild` decision, and that ordering is the whole point: under the
+dev server's default a failed rebuild is reported and _not_ rethrown, so a
+caller's `catch` never runs and the rebuild is indistinguishable from one that
+worked. `failOnError` decides whether the host stops; `errorOverlay` decides
+whether the browser is told. Wiring the second to the first would silence it on
+the only configuration where it matters.
+
 **A one-shot build only compiles once, in `buildStart`.** Anything without a
 persistent watch mode — `rolldown build` or `tsdown` with no `--watch` — gets no
 rebuild-on-change, and that is expected rather than a bug to fix.

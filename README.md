@@ -27,6 +27,9 @@ build on Rolldown/tsdown) that both need tokens compiled ahead of them.
 - **Config flexibility**: Supports file paths (JSON, JSON5, JSONC, JS, MJS, TS),
   configuration objects, or functions — including registering custom formats at
   config-resolution time.
+- **Error overlay**: A rebuild that fails under Vite's dev server is pushed to
+  the error overlay rather than only to the terminal, and cleared on the next
+  one that succeeds.
 - **Atomic writes**: Every generated file is written to a temporary sibling and
   renamed into place, so code importing a token file while it is being rebuilt
   never reads a half-written file.
@@ -375,6 +378,18 @@ StyleDictionary({
 
 A failure is always reported, whatever `failOnError` and `silent` are set to.
 
+Under Vite's dev server it is reported to the browser as well. A failed rebuild
+is pushed to Vite's error overlay, naming this plugin and carrying Style
+Dictionary's message, and the overlay is dismissed by the next rebuild that
+succeeds — so a page left rendering the last good token file says so instead of
+looking current. Set `errorOverlay: false` to keep the failure in the terminal
+only.
+
+`failOnError` and `errorOverlay` answer different questions and do not interact:
+the first decides whether the host stops, the second whether the browser is
+told. The dev server's default is not to stop, which is exactly when the overlay
+is the only thing that can report the failure.
+
 ## Public API
 
 Small on purpose. Four bundler entry points, one root entry, and one type.
@@ -473,6 +488,32 @@ export interface UnpluginStyleDictionaryOptions {
     | Config[]
     | string
     | string[]
+
+  /**
+   * Whether a failed rebuild is pushed to Vite's error overlay.
+   *
+   * A rebuild that fails under the dev server used to reach the browser
+   * nowhere: the page went on rendering the last good generated file, and the
+   * only trace was one red terminal line the developer may not have been
+   * looking at. With this on, the failure is sent to the page as an error
+   * frame naming this plugin, and the overlay is dismissed on the next
+   * rebuild that succeeds.
+   *
+   * This is Vite's overlay, so it does nothing on the other three targets,
+   * and nothing under `vite build` — there is no page to draw on.
+   *
+   * It is not `failOnError`'s job, and the two are independent. `failOnError`
+   * decides whether the host stops; this decides whether the browser is told.
+   * A dev server deliberately keeps serving through a failed rebuild, which is
+   * precisely the case where the overlay is the only thing that can say so.
+   *
+   * A failure Style Dictionary raises before this plugin can catch it — a
+   * token file that is not valid JSON, which rejects out of band — reaches
+   * neither the overlay nor this option.
+   *
+   * @default true
+   */
+  errorOverlay?: boolean
 
   /**
    * Whether a compile that fails should throw rather than only be reported.
