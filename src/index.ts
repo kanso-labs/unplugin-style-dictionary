@@ -376,6 +376,7 @@ const unpluginFactory: UnpluginFactory<
   const isWebpack = meta.framework === 'webpack'
   const {
     cache = true,
+    errorOverlay = true,
     failOnError = 'build',
     logLevel,
     report = true,
@@ -1093,6 +1094,12 @@ const unpluginFactory: UnpluginFactory<
         'error',
       )
 
+      // Ahead of the throw decision on purpose, so the overlay sees a failure
+      // whatever `failOnError` does with it. Under the dev server's default
+      // the line below does not throw, and reading the outcome from a caller's
+      // `catch` would see a rebuild that looked like it succeeded.
+      notifyBuildOutcome?.(asError(err))
+
       // Reported, and then rethrown so the host stops. Swallowing it left
       // every target exiting 0 with the previous run's tokens still on disk
       // and in the bundle — a green build shipping stale values.
@@ -1104,6 +1111,12 @@ const unpluginFactory: UnpluginFactory<
       // compile that did not happen.
       return
     }
+
+    // The compile is what the overlay reflects, so this is said here rather
+    // than at the end: everything below is reporting, it returns early in
+    // three places, and a size table that throws must not leave a successful
+    // build looking unfinished.
+    notifyBuildOutcome?.(null)
 
     // The `try` ends above, and everything from here down is reporting. Style
     // Dictionary has finished writing by now and `generatedDestinations` is
@@ -1232,6 +1245,18 @@ const unpluginFactory: UnpluginFactory<
     | ((resolved: ResolvedConfig[]) => Promise<void>)
     | undefined
 
+  // Also set by `configureServer`, and left undefined everywhere else: this is
+  // how a compile outcome reaches Vite's error overlay. It is deliberately not
+  // the same path as `failOnError`.
+  //
+  // `failOnError` decides whether the host stops; this decides whether the
+  // browser is told. Under a dev server the default is not to stop, so the
+  // failure is reported and swallowed — and that is exactly the case where the
+  // page is left rendering the last good file with nothing to say it is stale.
+  // Reading the outcome off whether `runBuilds` threw would therefore see
+  // nothing at all on the only configuration that matters.
+  let notifyBuildOutcome: ((error: Error | null) => void) | undefined
+
   const drain = async (): Promise<void> => {
     // A loop rather than a single pass: anything scheduled while the build
     // below is running is picked up here instead of starting a second one.
@@ -1262,8 +1287,12 @@ const unpluginFactory: UnpluginFactory<
         // `runBuilds` reports its own failure before rethrowing, so only the
         // other things that can throw here — a `config` function of the
         // consumer's that raises, a watch list that cannot be rebuilt — need
-        // reporting.
-        if (!compiling) log(`Rebuild failed: ${errorMessage(err)}`, 'error')
+        // reporting. They reach the overlay for the same reason: from the
+        // page's point of view the rebuild failed, whichever half of it did.
+        if (!compiling) {
+          log(`Rebuild failed: ${errorMessage(err)}`, 'error')
+          notifyBuildOutcome?.(asError(err))
+        }
       }
 
       // Handed on to whatever awaited this rebuild, which is `watchChange`
@@ -1367,6 +1396,44 @@ const unpluginFactory: UnpluginFactory<
         refreshServerWatchList = async (rebuilt) => {
           targets = await getWatchTargets(rebuilt)
           server.watcher.add(targets.paths)
+        }
+
+        if (errorOverlay) {
+          // Whether the page is currently showing an overlay this plugin put
+          // there. Only the clearing frame reads it: a success that follows a
+          // success has no overlay to take down, and sending an update frame
+          // for it would be traffic for nothing — and would spend the client's
+          // one-time `isFirstUpdate`, which Vite uses to decide that an
+          // overlay standing at the first update means a full reload.
+          let overlayShowing = false
+
+          notifyBuildOutcome = (error) => {
+            if (error) {
+              // Sent on every failure rather than only on the transition into
+              // one. Vite's client replaces the overlay wholesale, so a repeat
+              // is idempotent — and two different failures in a row must not
+              // leave the first one's message on screen describing the second.
+              overlayShowing = true
+              server.hot.send({
+                err: {
+                  message: error.message,
+                  plugin: 'unplugin-style-dictionary',
+                  stack: error.stack ?? '',
+                },
+                type: 'error',
+              })
+              return
+            }
+
+            if (!overlayShowing) return
+            overlayShowing = false
+
+            // Vite's protocol has no frame for "take the overlay down". The
+            // client clears it when an update arrives, so an update carrying
+            // nothing is the clear: it dismisses the overlay and then iterates
+            // an empty list, reloading no page and touching no stylesheet.
+            server.hot.send({ type: 'update', updates: [] })
+          }
         }
 
         // chokidar types its listener as returning void and does not await

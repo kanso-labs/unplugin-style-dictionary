@@ -71,6 +71,32 @@ export interface UnpluginStyleDictionaryOptions {
     | string[]
 
   /**
+   * Whether a failed rebuild is pushed to Vite's error overlay.
+   *
+   * A rebuild that fails under the dev server used to reach the browser
+   * nowhere: the page went on rendering the last good generated file, and the
+   * only trace was one red terminal line the developer may not have been
+   * looking at. With this on, the failure is sent to the page as an error
+   * frame naming this plugin, and the overlay is dismissed on the next
+   * rebuild that succeeds.
+   *
+   * This is Vite's overlay, so it does nothing on the other three targets,
+   * and nothing under `vite build` — there is no page to draw on.
+   *
+   * It is not `failOnError`'s job, and the two are independent. `failOnError`
+   * decides whether the host stops; this decides whether the browser is told.
+   * A dev server deliberately keeps serving through a failed rebuild, which is
+   * precisely the case where the overlay is the only thing that can say so.
+   *
+   * A failure Style Dictionary raises before this plugin can catch it — a
+   * token file that is not valid JSON, which rejects out of band — reaches
+   * neither the overlay nor this option.
+   *
+   * @default true
+   */
+  errorOverlay?: boolean
+
+  /**
    * Whether a compile that fails should throw rather than only be reported.
    *
    * A failed compile used to be logged and swallowed, so `vite build`,

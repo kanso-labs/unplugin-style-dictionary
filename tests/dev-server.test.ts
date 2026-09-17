@@ -7,6 +7,8 @@ import StyleDictionary from 'style-dictionary'
 import { createServer } from 'vite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { UnpluginStyleDictionaryOptions } from '../src/types.ts'
+
 import vitePlugin from '../src/vite.ts'
 
 // The dev server is the plugin's headline feature — the README sells
@@ -27,6 +29,47 @@ const settle = async (ms: number) => {
 const waitUntil = async (satisfied: () => boolean, timeoutMs: number) => {
   const deadline = Date.now() + timeoutMs
   while (!satisfied() && Date.now() < deadline) await settle(25)
+}
+
+// A frame as it arrives on the wire. Only the fields the assertions read are
+// named; Vite's payloads carry more.
+type HmrFrame = {
+  err?: { message?: string; plugin?: string }
+  type: string
+}
+
+// A type predicate rather than an assertion, for the reason `src/index.ts`
+// gives for the same choice at its own config boundary: a predicate is a check
+// the compiler verifies, where a cast is only a claim.
+const isHmrFrame = (value: unknown): value is HmrFrame =>
+  typeof value === 'object' &&
+  value !== null &&
+  'type' in value &&
+  typeof value.type === 'string'
+
+// `JSON.parse` hands back `any`, so what comes off the socket is narrowed here
+// once. Anything that fails the guard is dropped rather than counted as a
+// frame — which matters, because two of the cases below assert that no frame
+// of a given type arrived at all.
+const asHmrFrame = (data: unknown): HmrFrame | null => {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(String(data))
+  } catch {
+    return null
+  }
+
+  return isHmrFrame(parsed) ? parsed : null
+}
+
+// Style Dictionary reports an unresolvable reference by count, so two broken
+// references produce a message that differs from one broken reference's.
+const breakReferences = (tokenSource: string, count: number) => {
+  const color: Record<string, { value: string }> = {}
+  for (let index = 0; index < count; index++) {
+    color[`broken${index}`] = { value: `{color.missing${index}.value}` }
+  }
+  fs.writeFileSync(tokenSource, JSON.stringify({ color }))
 }
 
 describe('under a real vite dev server', () => {
@@ -226,6 +269,226 @@ describe('under a real vite dev server', () => {
       expect(buildSpy.mock.calls.length - afterFirstBuild).toBe(1)
     } finally {
       buildSpy.mockRestore()
+    }
+  }, 30000)
+
+  // A real client on the same `vite-hmr` subprotocol Vite's own browser client
+  // uses, reading frames off the socket. Spying on `server.hot.send` would pass
+  // just as happily on a payload Vite declines to transmit, and the claim here
+  // is that the failure reaches the page.
+  const connectHmrClient = async (running: ViteDevServer) => {
+    const url = running.resolvedUrls?.local[0]
+    if (!url) throw new Error('the dev server reported no local URL')
+
+    const frames: HmrFrame[] = []
+    const socket = new WebSocket(url.replace(/^http/, 'ws'), 'vite-hmr')
+
+    socket.addEventListener('message', (event) => {
+      const frame = asHmrFrame(event.data)
+      if (frame) frames.push(frame)
+    })
+
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => {
+        resolve()
+      })
+      socket.addEventListener('error', () => {
+        reject(new Error('could not open an hmr connection'))
+      })
+    })
+
+    return { frames, socket }
+  }
+
+  // `logLevel: 'silent'` rather than the `'warn'` that is usually right for a
+  // test not asserting on the progress lines. `'warn'` leaves Style
+  // Dictionary's own file table on stdout, and nothing here reads it; the one
+  // thing these cases do assert on is the failure report, which is printed at
+  // every level including this one, so silencing the rest costs them nothing.
+  //
+  // The rest of this file runs in middleware mode with HMR off, which is what
+  // keeps a websocket server from outliving a test. The overlay cases cannot:
+  // the thing under test is a frame on that socket. Vite picks the port rather
+  // than this pinning one, and the host is spelled numerically because
+  // `localhost` resolves to ::1 first on some machines while the server is
+  // listening on 127.0.0.1 — a mismatch that fails as a refused connection.
+  const bootServing = async (
+    root: string,
+    config: string,
+    overrides: Partial<UnpluginStyleDictionaryOptions> = {},
+  ) => {
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [vitePlugin({ config, logLevel: 'silent', ...overrides })],
+      root,
+      server: { host: '127.0.0.1' },
+    })
+
+    await server.listen()
+    return server
+  }
+
+  it('pushes a failed rebuild to the overlay and clears it on the next success', async () => {
+    const { configFile, directory, generated, tokenSource } =
+      writeFixture('overlay-error')
+
+    const running = await bootServing(directory, configFile)
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    const { frames, socket } = await connectHmrClient(running)
+    await settle(300)
+    frames.length = 0
+
+    // A failed compile is reported at every log level, `silent` included, so
+    // it reaches the console whatever the plugin was configured with. Spied so
+    // the suite stays quiet, and asserted so the spy cannot become the thing
+    // that hides a regression in the report itself.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // A rebuild that succeeds with no overlay standing sends nothing at all.
+      // The clearing frame is not free: Vite's client spends a one-time flag on
+      // the first update it sees, and reloads the page rather than clearing if
+      // an overlay is showing when it arrives. Sending one per successful
+      // rebuild would spend that flag on a build nothing was wrong with.
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#123456' } } }),
+      )
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#123456'),
+        10000,
+      )
+      await settle(500)
+      expect(frames.filter((f) => f.type === 'update')).toEqual([])
+
+      breakReferences(tokenSource, 1)
+      await waitUntil(() => frames.some((f) => f.type === 'error'), 10000)
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Compilation failed'),
+      )
+
+      const failure = frames.find((f) => f.type === 'error')
+      expect(failure?.err?.plugin).toBe('unplugin-style-dictionary')
+      expect(failure?.err?.message).toContain('Reference Errors')
+
+      // The page went on rendering the last good file, which is the whole
+      // reason the frame above has to exist.
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#123456')
+
+      frames.length = 0
+
+      // Vite's protocol has no "clear the overlay" frame; its client takes the
+      // overlay down when an update arrives, so an empty update is the clear.
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#00ff00' } } }),
+      )
+
+      await waitUntil(() => frames.some((f) => f.type === 'update'), 10000)
+      expect(frames.some((f) => f.type === 'update')).toBe(true)
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#00ff00')
+    } finally {
+      errorSpy.mockRestore()
+      socket.close()
+    }
+  }, 30000)
+
+  it('replaces the overlay when the next failure says something different', async () => {
+    // Sent on every failure rather than only on the way into one. Vite's client
+    // replaces the overlay wholesale, so a repeat costs nothing — and two
+    // different failures in a row must not leave the first one's message on
+    // screen describing the second.
+    const { configFile, directory, generated, tokenSource } =
+      writeFixture('overlay-replace')
+
+    const running = await bootServing(directory, configFile)
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    const { frames, socket } = await connectHmrClient(running)
+    await settle(300)
+    frames.length = 0
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      breakReferences(tokenSource, 1)
+      await waitUntil(() => frames.some((f) => f.type === 'error'), 10000)
+      expect(frames.at(-1)?.err?.message).toContain('(1)')
+
+      frames.length = 0
+
+      breakReferences(tokenSource, 2)
+      await waitUntil(
+        () => frames.some((f) => f.err?.message?.includes('(2)') === true),
+        10000,
+      )
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Compilation failed'),
+      )
+      expect(frames.at(-1)?.type).toBe('error')
+      expect(frames.at(-1)?.err?.message).toContain('(2)')
+    } finally {
+      errorSpy.mockRestore()
+      socket.close()
+    }
+  }, 30000)
+
+  it('sends nothing to the page when errorOverlay is off', async () => {
+    const { configFile, directory, generated, tokenSource } =
+      writeFixture('overlay-disabled')
+
+    const running = await bootServing(directory, configFile, {
+      errorOverlay: false,
+    })
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    const { frames, socket } = await connectHmrClient(running)
+    await settle(300)
+    frames.length = 0
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      breakReferences(tokenSource, 1)
+
+      // Waited out rather than polled for, because the assertion is that
+      // nothing arrives: the terminal report is what says the rebuild has been
+      // and gone, and the frames are read after it.
+      await waitUntil(
+        () =>
+          errorSpy.mock.calls.some((call) =>
+            String(call[0]).includes('Compilation failed'),
+          ),
+        10000,
+      )
+      await settle(1000)
+
+      // The terminal line is unchanged — the option governs the page, not the
+      // report.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Compilation failed'),
+      )
+      expect(frames.filter((f) => f.type === 'error')).toEqual([])
+
+      frames.length = 0
+
+      // And the success that follows sends no clear either, since there is no
+      // overlay of this plugin's to take down.
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#00ff00' } } }),
+      )
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#00ff00'),
+        10000,
+      )
+      await settle(1000)
+
+      expect(frames.filter((f) => f.type === 'update')).toEqual([])
+    } finally {
+      errorSpy.mockRestore()
+      socket.close()
     }
   }, 30000)
 })
