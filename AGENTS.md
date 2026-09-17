@@ -196,6 +196,23 @@ it they fall back to a tokenless upload, which this repository being public
 makes possible but rate-limited, so a report lands intermittently rather than
 not at all — which reads as a flaky uploader rather than as a missing secret.
 
+**`Build` also uploads the bundle to Codecov**, through `@codecov/rollup-plugin`
+in `tsdown.config.ts`. Codecov's rollup plugin rather than its Vite one: tsdown
+is what builds the published package, `vite.config.ts` here configures Vitest
+and nothing else, and rolldown's plugin API is rollup's.
+
+`CODECOV_TOKEN` is what switches it on, and `enableBundleAnalysis` reads it
+directly. The token is an organisation secret, so it is undefined outside CI and
+a local `npm run build` neither writes the stats file nor uploads anything —
+which is also what a fork's pull request gets, rather than a failure for want of
+a secret it was never going to be given.
+
+**A failed upload does not fail the build**, which is worth knowing before
+trusting the absence of an error. An invalid token spends three retries and some
+seconds, logs `Failed to get pre-signed URL`, and lets `Run build` pass — so a
+bundle that stopped being reported looks exactly like one that is fine. Check
+the job log rather than the check mark.
+
 Everything shared comes from `kanso-labs/github-actions` at an exact release
 tag, never a moving major — `actions/setup-node`, `actions/lint-workflows`,
 `_release-please.yaml`, `_publish-npm.yaml` and `_renovate-command.yaml`. A
