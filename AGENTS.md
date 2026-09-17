@@ -148,6 +148,26 @@ fails on a rewritten condition too, without waiting for a build.
 `npm run lint` always did — `oxlint .` and `eslint .` take the whole tree — so
 the gap was only ever in the hook, which is the quiet kind.
 
+**`Test` sends its coverage report to two places.**
+`actions/upload-code-coverage` reports it under the `code-coverage/vitest`
+label, and `codecov/codecov-action` uploads the same Cobertura file to Codecov,
+which is what keeps the history the trend lines are drawn from. Both read the
+report the first leg wrote, so neither re-measures.
+
+Neither adds a way for `Test` to fail. `fail_ci_if_error` is left at its default
+of `false`, and `.github/codecov.yml` marks both of Codecov's statuses
+informational — its default project status fails a pull request that lowers
+coverage against its base by any amount, which the run-to-run branch swing the
+thresholds in `vite.config.ts` are sized for would trip on its own. The floor
+there stays the one thing a drop has to clear. That file is `.yml` rather than
+the `.yaml` everything else here uses because Codecov recognises `codecov.yml`
+and `.codecov.yml` alone.
+
+The upload wants `CODECOV_TOKEN` in the repository's secrets. Without it the
+action falls back to a tokenless upload, which this repository being public
+makes possible but rate-limited, so the number lands intermittently rather than
+not at all — which reads as a flaky uploader rather than as a missing secret.
+
 Everything shared comes from `kanso-labs/github-actions` at an exact release
 tag, never a moving major — `actions/setup-node`, `actions/lint-workflows`,
 `_release-please.yaml`, `_publish-npm.yaml` and `_renovate-command.yaml`. A

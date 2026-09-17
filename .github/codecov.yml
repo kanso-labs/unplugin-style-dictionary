@@ -1,0 +1,24 @@
+# Codecov looks for this file under the name codecov.yml or .codecov.yml, in
+# the repository root, dev/ or .github/, and nowhere else. The .yaml spelling
+# every other YAML file in this repository uses is not one it recognises, so
+# this filename is a deliberate exception to that convention rather than an
+# oversight — renaming it to codecov.yaml silently restores the defaults below.
+#
+# Both statuses are informational because coverage is already gated, by the
+# thresholds in vite.config.ts, and those are a floor with a margin under it.
+# Codecov's default project status is a different question: it fails a pull
+# request that lowers coverage against its base by any amount at all. Branch
+# coverage here moves from run to run on identical code — the watcher cases
+# take different paths depending on what the filesystem reports and when, which
+# is the swing the margin under those thresholds is sized for — so that default
+# would fail pull requests that changed nothing. informational keeps the number
+# reported and leaves the floor in vite.config.ts as the one thing a drop has
+# to clear.
+coverage:
+  status:
+    patch:
+      default:
+        informational: true
+    project:
+      default:
+        informational: true
