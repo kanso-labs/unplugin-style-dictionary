@@ -195,4 +195,85 @@ describe('under a real webpack compiler', () => {
     expect(fs.existsSync(generated)).toBe(true)
     expect(fs.readFileSync(generated, 'utf-8')).toContain('#0070f3')
   }, 60000)
+
+  it('reports a failed compile through stats rather than only the console', async () => {
+    // webpack has no `this.warn` — its `buildStart` context is exactly
+    // `parse`, `addWatchFile`, `emitFile`, `getWatchFiles` and
+    // `getNativeBuildContext`, measured — so the plugin's messages went to the
+    // console and nowhere else. Absent from `stats.toJson()`, they were absent
+    // from the CI annotations built on it and from the dev-server overlay.
+    //
+    // `failOnError: false` so the build completes: a failure that stops the
+    // run ends it before a compilation exists to carry the report, and this is
+    // the case where webpack has somewhere to put it.
+    const context = path.join(tempDir, 'stats-report')
+    const tokensDirectory = path.join(context, 'tokens')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+    fs.writeFileSync(path.join(context, 'entry.js'), 'export default 1\n')
+
+    // A reference that cannot resolve — Style Dictionary fails the compile and
+    // says why, which is the message that has to reach `stats`.
+    fs.writeFileSync(
+      path.join(tokensDirectory, 'color.json'),
+      JSON.stringify({ color: { brand: { value: '{color.missing.value}' } } }),
+    )
+
+    const configFile = path.join(context, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath:
+              path.join(context, 'generated').replace(/\\/g, '/') + '/',
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [path.join(tokensDirectory, '*.json').replace(/\\/g, '/')],
+      }),
+    )
+
+    const stats = await new Promise<undefined | webpack.Stats>(
+      (resolve, reject) => {
+        webpack(
+          {
+            context,
+            entry: './entry.js',
+            mode: 'development',
+            output: { path: path.join(context, 'dist') },
+            plugins: [
+              webpackPlugin({
+                config: configFile,
+                failOnError: false,
+                logLevel: 'silent',
+              }),
+            ],
+          },
+          (error, result) => {
+            if (error) reject(error)
+            else resolve(result)
+          },
+        )
+      },
+    )
+
+    const warnings = (stats?.toJson({ all: true }).warnings ?? []).map(
+      (warning) => warning.message,
+    )
+
+    expect(
+      warnings.some((message) => message.includes('Compilation failed after')),
+    ).toBe(true)
+
+    // A warning rather than an error, and that distinction is load-bearing:
+    // `failOnError: false` asked for the build not to fail, and putting the
+    // report in `compilation.errors` would fail it anyway.
+    expect(stats?.hasErrors()).toBe(false)
+
+    // No escapes, because a `stats` entry is read by machines as often as by
+    // people — a CI annotation carrying `[31m` is the colour problem
+    // wearing a different hat.
+    expect(warnings.some((message) => message.includes('['))).toBe(false)
+  }, 60000)
 })

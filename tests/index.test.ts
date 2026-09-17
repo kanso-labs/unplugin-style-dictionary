@@ -2080,6 +2080,211 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     })
   })
+
+  // Every line the plugin wrote carried hardcoded escapes, and nothing read
+  // `NO_COLOR`, `FORCE_COLOR` or `isTTY` — so a redirected build, a CI log and
+  // a `NO_COLOR=1` run all got them anyway, while the host's own lines beside
+  // them came out clean.
+  describe('when the terminal says what it wants', () => {
+    const ESCAPE = '['
+
+    // The decision is taken when the plugin is constructed and held for its
+    // life, so the environment has to be in place before the factory runs —
+    // which is why each case builds its own plugin rather than sharing one.
+    const captureBuild = async (
+      env: Record<string, string | undefined>,
+      isTTY: boolean,
+    ) => {
+      const previousEnv = { ...process.env }
+      const previousTTY = process.stdout.isTTY
+
+      const written: string[] = []
+      const collect = (...call: unknown[]) => {
+        written.push(String(call[0]))
+      }
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(collect)
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(collect)
+
+      try {
+        for (const key of ['FORCE_COLOR', 'NO_COLOR', 'TERM']) {
+          delete process.env[key]
+        }
+        for (const [key, value] of Object.entries(env)) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
+        }
+        process.stdout.isTTY = isTTY
+
+        // No `silent`, because the progress lines and the size table are two
+        // thirds of what carried escapes.
+        await callBuildStart(vitePlugin({ config: configFile }))
+      } finally {
+        process.stdout.isTTY = previousTTY
+        process.env = previousEnv
+        logSpy.mockRestore()
+        errorSpy.mockRestore()
+      }
+
+      return written
+    }
+
+    it('writes no escapes under NO_COLOR, including in the size table', async () => {
+      const written = await captureBuild({ NO_COLOR: '1' }, true)
+
+      // The table is the half a check on the progress lines alone would miss:
+      // it is built in a different function with its own escapes.
+      expect(written.some((line) => line.includes('gzip:'))).toBe(true)
+      expect(written.some((line) => line.includes(ESCAPE))).toBe(false)
+    })
+
+    it('honours FORCE_COLOR on something that is not a terminal', async () => {
+      // The case a single conjunction gets wrong. Written as
+      // `!NO_COLOR && FORCE_COLOR !== '0' && stream.isTTY`, the TTY check has
+      // the last word and answers `false` — so `FORCE_COLOR=1` in CI, which is
+      // the only job that variable has, would do nothing at all.
+      const written = await captureBuild({ FORCE_COLOR: '1' }, false)
+
+      expect(written.some((line) => line.includes(ESCAPE))).toBe(true)
+    })
+
+    it('lets NO_COLOR win over FORCE_COLOR', async () => {
+      const written = await captureBuild(
+        { FORCE_COLOR: '1', NO_COLOR: '1' },
+        true,
+      )
+
+      expect(written.some((line) => line.includes(ESCAPE))).toBe(false)
+    })
+
+    it('writes no escapes when FORCE_COLOR is 0 on a terminal', async () => {
+      const written = await captureBuild({ FORCE_COLOR: '0' }, true)
+
+      expect(written.some((line) => line.includes(ESCAPE))).toBe(false)
+    })
+
+    it('writes no escapes when nothing is a terminal', async () => {
+      const written = await captureBuild({}, false)
+
+      expect(written.some((line) => line.includes(ESCAPE))).toBe(false)
+    })
+
+    it('writes escapes on a plain terminal', async () => {
+      const written = await captureBuild({}, true)
+
+      expect(written.some((line) => line.includes(ESCAPE))).toBe(true)
+    })
+
+    it('writes no escapes on a terminal that says it is dumb', async () => {
+      const written = await captureBuild({ TERM: 'dumb' }, true)
+
+      expect(written.some((line) => line.includes(ESCAPE))).toBe(false)
+    })
+  })
+
+  // Nothing the plugin said went through the bundler: `this.warn`, `this.error`
+  // and `config.logger` appear nowhere in the source it was written against, so
+  // under webpack the messages were absent from `stats.toJson()` and everything
+  // built on it, and under Vite they bypassed `customLogger` and `clearScreen`.
+  describe('when the host offers somewhere to put a message', () => {
+    // A richer plugin context than `callBuildStart` binds. The stub there
+    // carries `addWatchFile` and nothing else on purpose — it is what a hook
+    // sees when no host has claimed the messages, and the console fallback is
+    // what this contrasts against.
+    const callWithContext = async (
+      plugin: Plugin,
+      context: Record<string, unknown>,
+    ) => {
+      if (!isPluginHook<[]>(plugin.buildStart)) {
+        throw new TypeError('buildStart is not a callable hook')
+      }
+
+      // Assigned to the declared context type first, so the extra channels
+      // ride along as a widened object rather than through a cast.
+      const bound: BuildContext = { addWatchFile: () => {}, ...context }
+      await plugin.buildStart.call(bound)
+    }
+
+    it('reports through the plugin context rather than the console', async () => {
+      const warned: string[] = []
+      const infos: string[] = []
+      const fatal: string[] = []
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      try {
+        fs.writeFileSync(
+          tokenFile,
+          JSON.stringify({
+            color: { primary: { value: '{color.nope.value}' } },
+          }),
+        )
+
+        await expect(
+          callWithContext(
+            vitePlugin({ config: configFile, failOnError: false }),
+            {
+              error: (message: string) => fatal.push(message),
+              info: (message: string) => infos.push(message),
+              warn: (message: string) => warned.push(message),
+            },
+          ),
+        ).resolves.toBeUndefined()
+
+        // The failure reached the host.
+        expect(
+          warned.some((message) => message.includes('Compilation failed')),
+        ).toBe(true)
+
+        // **And never through `this.error`.** Rollup's aborts the bundle, so a
+        // report sent that way would stop every build that reported anything
+        // and take the decision `failOnError` exists to make — measured: a
+        // `buildStart` calling it ends the run with `THREW: [plugin …]`.
+        expect(fatal).toEqual([])
+
+        // The progress lines went to the host too, so the console saw none of
+        // it — a message delivered twice is worse than one delivered once.
+        expect(infos.some((message) => message.includes('Compiling'))).toBe(
+          true,
+        )
+        expect(errorSpy).not.toHaveBeenCalled()
+        expect(logSpy).not.toHaveBeenCalled()
+      } finally {
+        errorSpy.mockRestore()
+        logSpy.mockRestore()
+      }
+    })
+
+    it('falls back to the console when the context offers nothing', async () => {
+      // The unit-test stub, and any host whose context carries no channels.
+      // Feature-detected rather than assumed: calling `this.warn` against a
+      // context without one throws, and the failure reads as a plugin bug.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      try {
+        fs.writeFileSync(
+          tokenFile,
+          JSON.stringify({
+            color: { primary: { value: '{color.nope.value}' } },
+          }),
+        )
+
+        await callBuildStart(
+          vitePlugin({
+            config: configFile,
+            failOnError: false,
+            logLevel: 'silent',
+          }),
+        )
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Compilation failed'),
+        )
+      } finally {
+        errorSpy.mockRestore()
+      }
+    })
+  })
 })
 
 // Nothing pinned the exports map, and two of the ways it breaks leave every

@@ -122,6 +122,18 @@ duration, **asserts the message is there**, and restores in a `finally`.
 Capturing without checking would remove the only evidence it was said — reword
 the report and ten tests fail today.
 
+**`console.error` is only where the message lands when no host claimed it.** The
+plugin hands its lines to the bundler now, so a spy sees them only on the
+unit-test path, where `callBuildStart` binds a context carrying `addWatchFile`
+and nothing else. Everywhere a real host is driven, the assertion goes to that
+host's channel instead: a recording `customLogger` under Vite, `onwarn` under
+rollup, `onLog` under rolldown — `onwarn` is deprecated there and the type-aware
+lint says so — and `stats.toJson().warnings` under webpack.
+
+Leave the unit-test stub channel-less. Adding `warn` to it would route sixteen
+existing `console.error` assertions somewhere they are not looking, and the
+fallback is a real path worth keeping covered.
+
 _`console.error` is not the whole surface._ Style Dictionary warns on its own
 account — an unrecognised config extension, for one — and that goes to
 `console.warn`, which an error spy never sees.
@@ -700,6 +712,31 @@ drop them, because an inline `format` or `transform` is exactly what tells two
 otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
+
+**A host's error channel is not a place to report to.** Rollup's `this.error`
+aborts the bundle — measured: a `buildStart` calling it ends the run with
+`THREW: [plugin err-probe] fatal?` — so a failure reported through it stops
+every build that reports one, which is `failOnError`'s decision and not the
+logger's. The report goes on the warning channel on every host, and webpack's
+lands in `compilation.warnings` rather than `compilation.errors` for the same
+reason: `failOnError: false` has to leave the build passing.
+
+**webpack's compile runs before its compilation exists.** unplugin gives webpack
+no `this.warn` at all — its `buildStart` context is exactly `parse`,
+`addWatchFile`, `emitFile`, `getWatchFiles` and `getNativeBuildContext`,
+measured — and the plugin compiles in `beforeCompile`, which webpack awaits
+_before_ creating the compilation a message would attach to. So messages are
+buffered and flushed on `compilation`. A `beforeCompile` that throws ends the
+run without ever creating one, which is exactly the case that produced the
+message, so `failed` and `done` drain whatever is still held to the console.
+
+**Colour is three signals in order, never one conjunction.**
+`!NO_COLOR && FORCE_COLOR !== '0' && stream.isTTY` looks like it honours all
+three and never honours `FORCE_COLOR=1` on a non-TTY — the TTY check has the
+last word — which is the single job that variable has. `NO_COLOR` first and
+absolute, then `FORCE_COLOR`, then `TERM=dumb`, then `isTTY`. stdout and stderr
+are asked separately: `build 2>err.log` leaves one a terminal and the other a
+file.
 
 **A public callback typed `=> void` makes a consumer's `async` handler a lint
 error.** TypeScript's void-return rule accepts one either way, so this does not

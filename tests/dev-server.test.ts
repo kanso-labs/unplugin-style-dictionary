@@ -317,23 +317,41 @@ describe('under a real vite dev server', () => {
     config: string,
     overrides: Partial<UnpluginStyleDictionaryOptions> = {},
   ) => {
+    // The plugin's lines now go through Vite's logger rather than the console,
+    // so a `console.error` spy sees nothing and a `logLevel: 'silent'` server
+    // would discard the report before anything could read it. A recording
+    // logger replaces both: it keeps the suite quiet and is where the failure
+    // report actually arrives.
+    const logged: string[] = []
+    const record = (message: string) => {
+      logged.push(message)
+    }
+
     server = await createServer({
       configFile: false,
-      logLevel: 'silent',
+      customLogger: {
+        clearScreen: () => {},
+        error: record,
+        hasErrorLogged: () => false,
+        hasWarned: false,
+        info: record,
+        warn: record,
+        warnOnce: record,
+      },
       plugins: [vitePlugin({ config, logLevel: 'silent', ...overrides })],
       root,
       server: { host: '127.0.0.1' },
     })
 
     await server.listen()
-    return server
+    return { logged, server }
   }
 
   it('pushes a failed rebuild to the overlay and clears it on the next success', async () => {
     const { configFile, directory, generated, tokenSource } =
       writeFixture('overlay-error')
 
-    const running = await bootServing(directory, configFile)
+    const { logged, server: running } = await bootServing(directory, configFile)
     await waitUntil(() => fs.existsSync(generated), 10000)
 
     const { frames, socket } = await connectHmrClient(running)
@@ -344,7 +362,6 @@ describe('under a real vite dev server', () => {
     // it reaches the console whatever the plugin was configured with. Spied so
     // the suite stays quiet, and asserted so the spy cannot become the thing
     // that hides a regression in the report itself.
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       // A rebuild that succeeds with no overlay standing sends nothing at all.
       // The clearing frame is not free: Vite's client spends a one-time flag on
@@ -365,8 +382,8 @@ describe('under a real vite dev server', () => {
       breakReferences(tokenSource, 1)
       await waitUntil(() => frames.some((f) => f.type === 'error'), 10000)
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Compilation failed'),
+      expect(logged.some((line) => line.includes('Compilation failed'))).toBe(
+        true,
       )
 
       const failure = frames.find((f) => f.type === 'error')
@@ -390,7 +407,6 @@ describe('under a real vite dev server', () => {
       expect(frames.some((f) => f.type === 'update')).toBe(true)
       expect(fs.readFileSync(generated, 'utf-8')).toContain('#00ff00')
     } finally {
-      errorSpy.mockRestore()
       socket.close()
     }
   }, 30000)
@@ -403,14 +419,13 @@ describe('under a real vite dev server', () => {
     const { configFile, directory, generated, tokenSource } =
       writeFixture('overlay-replace')
 
-    const running = await bootServing(directory, configFile)
+    const { logged, server: running } = await bootServing(directory, configFile)
     await waitUntil(() => fs.existsSync(generated), 10000)
 
     const { frames, socket } = await connectHmrClient(running)
     await settle(300)
     frames.length = 0
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       breakReferences(tokenSource, 1)
       await waitUntil(() => frames.some((f) => f.type === 'error'), 10000)
@@ -424,13 +439,12 @@ describe('under a real vite dev server', () => {
         10000,
       )
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Compilation failed'),
+      expect(logged.some((line) => line.includes('Compilation failed'))).toBe(
+        true,
       )
       expect(frames.at(-1)?.type).toBe('error')
       expect(frames.at(-1)?.err?.message).toContain('(2)')
     } finally {
-      errorSpy.mockRestore()
       socket.close()
     }
   }, 30000)
@@ -439,16 +453,17 @@ describe('under a real vite dev server', () => {
     const { configFile, directory, generated, tokenSource } =
       writeFixture('overlay-disabled')
 
-    const running = await bootServing(directory, configFile, {
-      errorOverlay: false,
-    })
+    const { logged, server: running } = await bootServing(
+      directory,
+      configFile,
+      { errorOverlay: false },
+    )
     await waitUntil(() => fs.existsSync(generated), 10000)
 
     const { frames, socket } = await connectHmrClient(running)
     await settle(300)
     frames.length = 0
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       breakReferences(tokenSource, 1)
 
@@ -456,18 +471,15 @@ describe('under a real vite dev server', () => {
       // nothing arrives: the terminal report is what says the rebuild has been
       // and gone, and the frames are read after it.
       await waitUntil(
-        () =>
-          errorSpy.mock.calls.some((call) =>
-            String(call[0]).includes('Compilation failed'),
-          ),
+        () => logged.some((line) => line.includes('Compilation failed')),
         10000,
       )
       await settle(1000)
 
       // The terminal line is unchanged — the option governs the page, not the
       // report.
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Compilation failed'),
+      expect(logged.some((line) => line.includes('Compilation failed'))).toBe(
+        true,
       )
       expect(frames.filter((f) => f.type === 'error')).toEqual([])
 
@@ -487,7 +499,6 @@ describe('under a real vite dev server', () => {
 
       expect(frames.filter((f) => f.type === 'update')).toEqual([])
     } finally {
-      errorSpy.mockRestore()
       socket.close()
     }
   }, 30000)

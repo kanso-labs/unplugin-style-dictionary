@@ -24,8 +24,54 @@ export type * from './types.js'
 // A rejected promise must carry an Error, and `catch` binds `unknown`. What
 // Style Dictionary throws is already one; anything else is wrapped rather than
 // handed on raw.
+// Where the plugin's own lines go when a host offers somewhere better than the
+// console: Vite's `config.logger`, rollup's and rolldown's plugin context, or
+// webpack's `compilation`.
+//
+// **There is no `error` channel that merely reports.** Rollup's `this.error`
+// aborts the bundle — measured: a `buildStart` calling it ends the run with
+// `THREW: [plugin err-probe] fatal?` — so routing a failure report through it
+// would stop every build that reported one and silently override `failOnError`,
+// whose entire job is deciding that. A failure is therefore reported on the
+// host's warning channel, and whether the build stops stays `failOnError`'s
+// decision alone.
+interface HostMessenger {
+  error: (message: string) => void
+
+  // Optional because not every host has somewhere for a progress line to go.
+  // webpack's `stats` carries warnings and errors and nothing else, and
+  // `Compiling design tokens...` is neither — so there it stays on the
+  // console rather than being dressed up as a warning.
+  info?: (message: string) => void
+}
+
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(errorMessage(error))
+}
+
+// Whether escapes may be written to this stream.
+//
+// **The three signals are ordered rather than combined into one conjunction**,
+// and that ordering is the whole of it. `FORCE_COLOR=1` on a non-TTY — a CI job
+// that wants colour in a log it will render itself — is the single job that
+// variable has, and
+// `!process.env.NO_COLOR && process.env.FORCE_COLOR !== '0' && stream.isTTY`
+// never honours it: the TTY check has the last word and answers `false`.
+//
+// `NO_COLOR` wins over `FORCE_COLOR` because the convention says so: any
+// non-empty value turns colour off, and nothing may turn it back on.
+function colourAllowed(stream: { isTTY?: boolean }): boolean {
+  if (process.env.NO_COLOR) return false
+
+  const forced = process.env.FORCE_COLOR
+  if (forced === '0') return false
+  if (forced !== undefined && forced !== '') return true
+
+  // A terminal that has told us it cannot render escapes. Not one of the three
+  // the issue named, but it is what `TERM=dumb` means and it costs a line.
+  if (process.env.TERM === 'dumb') return false
+
+  return stream.isTTY === true
 }
 
 // Best-effort cleanup of a temporary file whose write or rename failed. The
@@ -51,6 +97,13 @@ function isConfig(value: unknown): value is Config {
   return typeof value === 'object' && value !== null
 }
 
+// A host's message channel, narrowed by a predicate rather than asserted: what
+// a plugin context carries under `warn` is the host's business, and a cast
+// would only claim it is callable.
+function isMessageChannel(value: unknown): value is (message: string) => void {
+  return typeof value === 'function'
+}
+
 // A hook is the consumer's code, and what it hands back is not this plugin's to
 // assume. A predicate rather than `instanceof Promise`, which answers `false`
 // for a thenable from another realm or from a promise library — exactly the
@@ -62,6 +115,10 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     'then' in value &&
     typeof value.then === 'function'
   )
+}
+
+function paint(code: string, value: string, allowed: boolean): string {
+  return allowed ? `\u001B[${code}m${value}\u001B[0m` : value
 }
 
 // A config module may expose its config as a `default` export or as the
@@ -516,6 +573,49 @@ const unpluginFactory: UnpluginFactory<
     !generatedDestinations.has(file.replace(/\\/g, '/')) &&
     matchesWatchedFile(file, patterns)
 
+  // Decided once, when the plugin is constructed, and held for its life. The
+  // two streams are asked separately because they are redirected separately —
+  // `build 2>err.log` leaves stdout a terminal and stderr a file.
+  const stdoutColour = colourAllowed(process.stdout)
+  const stderrColour = colourAllowed(process.stderr)
+
+  // Where a message goes once a host has offered somewhere better than the
+  // console. Set by `configResolved` under Vite, by the build hooks under
+  // rollup and rolldown, and by the `webpack` block; left undefined when no
+  // host has claimed it, which is every unit test binding its own context.
+  let host: HostMessenger | undefined
+
+  // Adopts a plugin context as the message host, if it has the channels — the
+  // unit tests bind a context carrying `addWatchFile` and nothing else, and a
+  // hook calling `this.warn` against that throws in a way that reads as a
+  // plugin bug rather than as a missing stub.
+  //
+  // Only when nothing has claimed the host yet. Under Vite `configResolved`
+  // has already installed the dev server's own logger, and `buildStart` runs
+  // after it with a rollup-shaped context that would otherwise replace it.
+  const adoptHost = (context: object): void => {
+    if (host) return
+
+    const warn: unknown = 'warn' in context ? context.warn : undefined
+    if (!isMessageChannel(warn)) return
+
+    const info: unknown = 'info' in context ? context.info : undefined
+
+    host = {
+      // `warn`, never `error`. Rollup's `this.error` aborts the bundle, so
+      // reporting through it would stop every build that reported anything and
+      // take the decision `failOnError` exists to make.
+      error: (message) => {
+        warn.call(context, message)
+      },
+      info: isMessageChannel(info)
+        ? (message) => {
+            info.call(context, message)
+          }
+        : undefined,
+    }
+  }
+
   // Helper to log at the configured level
   const log = (
     message: string,
@@ -527,16 +627,32 @@ const unpluginFactory: UnpluginFactory<
     // lines and the size table; a compile that failed is not noise, and
     // hiding it left a broken token set shipping with nothing said at all.
     if (type === 'error') {
-      console.error(`\x1b[31m${prefix} ${message}\x1b[0m`)
+      // The host renders and colours its own output, so nothing painted here
+      // is handed to one — an escape inside a webpack `stats` entry survives
+      // into `stats.toJson()` and into whatever reads it.
+      if (host) {
+        host.error(`${prefix} ${message}`)
+        return
+      }
+
+      console.error(paint('31', `${prefix} ${message}`, stderrColour))
       return
     }
 
     if (quiet) return
-    if (type === 'success') {
-      console.log(`\x1b[32m${prefix} ${message}\x1b[0m`)
-    } else {
-      console.log(`\x1b[36m${prefix} ${message}\x1b[0m`)
+
+    if (host?.info) {
+      host.info(`${prefix} ${message}`)
+      return
     }
+
+    console.log(
+      paint(
+        type === 'success' ? '32' : '36',
+        `${prefix} ${message}`,
+        stdoutColour,
+      ),
+    )
   }
 
   // Runs one of the consumer's `onBuild*` hooks without letting it decide the
@@ -964,10 +1080,13 @@ const unpluginFactory: UnpluginFactory<
         const displayPath = path.relative(root, filePath).replace(/\\/g, '/')
         const dir = path.dirname(displayPath)
         const base = path.basename(displayPath)
+        // The table goes to stdout, so it follows stdout's decision — which
+        // is not always stderr's, since the two are redirected separately.
         const coloredPath =
           dir === '.'
-            ? `\x1b[32m${base}\x1b[0m`
-            : `\x1b[90m${dir}/\x1b[0m\x1b[32m${base}\x1b[0m`
+            ? paint('32', base, stdoutColour)
+            : paint('90', `${dir}/`, stdoutColour) +
+              paint('32', base, stdoutColour)
 
         try {
           const stats = fs.statSync(filePath)
@@ -1010,7 +1129,13 @@ const unpluginFactory: UnpluginFactory<
         )
         const sizePadded = info.sizeStr.padStart(longestSizeLength)
         console.log(
-          `${info.coloredPath}${pathPadding}\x1b[90m${sizePadded} │ gzip: ${info.gzipSizeStr}\x1b[0m`,
+          info.coloredPath +
+            pathPadding +
+            paint(
+              '90',
+              `${sizePadded} │ gzip: ${info.gzipSizeStr}`,
+              stdoutColour,
+            ),
         )
       }
     }
@@ -1418,6 +1543,8 @@ const unpluginFactory: UnpluginFactory<
 
   return {
     async buildStart() {
+      adoptHost(this)
+
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
 
@@ -1467,6 +1594,19 @@ const unpluginFactory: UnpluginFactory<
     vite: {
       configResolved(config) {
         if (rootOption === undefined) root = config.root || process.cwd()
+
+        // Vite's own logger, so the plugin's lines obey `customLogger` and
+        // `clearScreen` like every other line the dev server prints. It
+        // colours and prefixes its own output, which is why nothing painted
+        // reaches it.
+        host = {
+          error: (message) => {
+            config.logger.error(message)
+          },
+          info: (message) => {
+            config.logger.info(message)
+          },
+        }
       },
 
       async configureServer(server: ViteDevServer) {
@@ -1546,6 +1686,8 @@ const unpluginFactory: UnpluginFactory<
     // than the hook made to lie about finishing.
     // oxlint-disable-next-line typescript/no-misused-promises
     async watchChange(id) {
+      adoptHost(this)
+
       // Raised before any decision about `id`, because whatever this change
       // was, the host is now on its way back into `buildStart`.
       watchRebuild = true
@@ -1594,6 +1736,48 @@ const unpluginFactory: UnpluginFactory<
       if (rootOption === undefined) {
         root = compiler.options.context ?? process.cwd()
       }
+
+      // The compile happens in `beforeCompile`, which webpack awaits *before*
+      // the compilation exists — so a message from it has nothing to attach to
+      // yet and is held until one appears.
+      //
+      // Only failures are routed. `stats` carries warnings and errors and
+      // nothing else, so the progress lines stay on the console rather than
+      // being reported as warnings they are not.
+      //
+      // A warning rather than an error, for the same reason as on rollup: this
+      // is the report, and `failOnError` decides separately whether the build
+      // stops. Pushing to `compilation.errors` would fail a webpack build that
+      // asked not to be failed.
+      const pending: string[] = []
+      host = {
+        error: (message) => {
+          pending.push(message)
+        },
+      }
+
+      compiler.hooks.compilation.tap(
+        'unplugin-style-dictionary',
+        (compilation) => {
+          for (const message of pending.splice(0)) {
+            const reported = new Error(message)
+            reported.name = 'UnpluginStyleDictionaryWarning'
+            compilation.warnings.push(reported)
+          }
+        },
+      )
+
+      // A `beforeCompile` that throws ends the run without ever creating a
+      // compilation, and that is exactly the case that produced the message.
+      // Left to the buffer it would be reported nowhere at all, so whatever is
+      // still held when the run ends goes to the console after all.
+      const drainToConsole = () => {
+        for (const message of pending.splice(0)) {
+          console.error(paint('31', message, stderrColour))
+        }
+      }
+      compiler.hooks.failed.tap('unplugin-style-dictionary', drainToConsole)
+      compiler.hooks.done.tap('unplugin-style-dictionary', drainToConsole)
 
       // `beforeCompile` is awaited before the compilation exists, so the
       // tokens are on disk before webpack resolves the module that imports
