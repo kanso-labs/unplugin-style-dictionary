@@ -846,6 +846,29 @@ than its output, so `isUpToDate` skips the compile and the destination survives
 without the check running at all. That is why the test for it passes
 `cache: false` — otherwise it passes with the check removed.
 
+**Windows fails two cases, and CI does not run there.** A `windows-latest` job
+was added, run once and removed: a job ruleset 19123565 does not require is free
+to go red without stopping a merge, and these two go red.
+
+`npm run format:check` passes there — `.gitattributes` carries `eol=lf` for that
+reason, because a Windows checkout otherwise yields CRLF and `oxfmt --check`
+rejects it. Keep that line even though nothing runs on Windows; it is what a
+Windows contributor's formatting depends on.
+
+What fails is the plugin, not the harness:
+
+- **The atomic write.** `EPERM: operation not permitted, rename` when a reader
+  holds the destination open — the exact case
+  `never exposes a partially written file to a concurrent reader` models. This
+  **refutes** the reasoning that put the case in doubt: libuv's
+  `FILE_SHARE_DELETE` does not save the rename here.
+- **`node_modules` watching.** The negation added in #291 is built from
+  forward-slashed absolute paths, and on Windows the edit reaches no rebuild.
+  That was flagged as unverified in that pull request and is now measured.
+
+164 of 166 cases pass, including all four bundlers and the real dev server, so
+this is two defects rather than a dead platform.
+
 **Vite's dev-server watcher cannot be reached after `configResolved`, and its
 ignore list only grows.** It is built from the resolved config with
 `**/.git/**`, `**/node_modules/**`, `**/test-results/**` and the cache directory
