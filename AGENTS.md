@@ -254,9 +254,20 @@ the command that gates a branch is the command a contributor runs.
 fails on a rewritten condition too, without waiting for a build.
 
 `scripts/check-package.mjs` is the repository's first `.mjs` file, and
-`.lintstagedrc.json` matches `*.{mjs,ts}` so the pre-commit hook covers it.
-`npm run lint` always did — `oxlint .` and `eslint .` take the whole tree — so
-the gap was only ever in the hook, which is the quiet kind.
+`.lintstagedrc.json` matches `*.{cjs,js,mjs,ts}` so the pre-commit hook covers
+it. `npm run lint` always did — `oxlint .` and `eslint .` take the whole tree —
+so the gap was only ever in the hook, which is the quiet kind.
+
+**That pattern names four extensions because the hook and `npm run lint` have to
+walk the same tree.** It read `*.{mjs,ts}` at first, which left
+`eslint.config.js` — the only `.js` file here — covered by neither oxlint,
+ESLint nor oxfmt on commit. The formatter is the half that bit: `npm run lint`
+ends in `oxfmt --check`, not `--fix`, so drift in that file failed CI with no
+local hook that would have fixed it first. Measured both ways: with `*.{mjs,ts}`
+a commit carrying a duplicate object key and stray blank lines in
+`eslint.config.js` lands untouched, and with the wider pattern the same commit
+is rejected by `oxlint(no-dupe-keys)`. Keep it in step with the `files` glob
+`eslint.config.js` declares for itself.
 
 **`Test` sends its coverage report to two places.**
 `actions/upload-code-coverage` reports it under the `code-coverage/vitest`
