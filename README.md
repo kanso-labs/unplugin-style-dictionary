@@ -538,6 +538,13 @@ That is what makes a `customLogger` and `clearScreen` work under Vite, and what
 puts a failed compile into `stats.toJson()` under webpack — where it reaches CI
 annotations and anything else reading the build's own output.
 
+**Rspack reformats what it is given, and webpack does not.** The plugin hands
+both the same plain text; rspack wraps every diagnostic in its own frame — a `⚠`
+marker and a `│` gutter — and colours that frame whenever it thinks colour is
+wanted, which setting `CI` is enough to do. So a warning read out of rspack's
+`stats` can carry ANSI escapes that came from rspack rather than from here.
+Strip them before feeding that text to anything that expects plain output.
+
 **A failure is reported as a warning, never on the host's error channel.**
 Rollup's `this.error` aborts the bundle, so reporting a failure through it would
 stop every build that reported one — taking the decision `failOnError` exists to

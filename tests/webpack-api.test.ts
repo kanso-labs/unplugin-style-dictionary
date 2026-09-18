@@ -49,7 +49,19 @@ interface StatsLike {
 // Each host builds its own plugin instance and its own compiler, because the
 // two type the plugin differently — `WebpackPluginInstance` against
 // `RspackPluginInstance` — even though the call shapes are identical.
-const COMPILERS: Array<{ compile: Compile; name: string }> = [
+//
+// `reportsVerbatim` is the one place they genuinely differ. webpack hands back
+// the message it was given, byte for byte; rspack reformats it into its own
+// diagnostic frame — a `⚠` marker and a `│` gutter — and colours that frame
+// whenever it thinks colour is wanted. Setting `CI=true`, which is what a
+// GitHub runner does, is enough. So the escape-free assertion below can only be
+// asked of the host that does not decorate: on rspack it would be testing
+// rspack's renderer rather than this plugin's output.
+const COMPILERS: Array<{
+  compile: Compile
+  name: string
+  reportsVerbatim: boolean
+}> = [
   {
     compile: async (context, outputPath, options) =>
       new Promise<undefined | webpack.Stats>((resolve, reject) => {
@@ -68,6 +80,7 @@ const COMPILERS: Array<{ compile: Compile; name: string }> = [
         )
       }),
     name: 'webpack',
+    reportsVerbatim: true,
   },
   {
     compile: async (context, outputPath, options) =>
@@ -87,6 +100,7 @@ const COMPILERS: Array<{ compile: Compile; name: string }> = [
         )
       }),
     name: 'rspack',
+    reportsVerbatim: false,
   },
 ]
 
@@ -119,216 +133,157 @@ const buildWithSlowConfig = async (
     silent: true,
   })
 
-describe.each(COMPILERS)('under a real $name compiler', ({ compile, name }) => {
-  const tempDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `unplugin-style-dictionary-${name}-`),
-  )
-
-  afterEach(() => {
-    if (fs.existsSync(tempDir))
-      fs.rmSync(tempDir, { force: true, recursive: true })
-  })
-
-  // A fixture whose entry imports the generated file, so the host has to
-  // resolve it — which is the thing that used to happen while the compile was
-  // still running.
-  const writeRaceFixture = (fixture: string, stale?: string) => {
-    const context = path.join(tempDir, fixture)
-    fs.mkdirSync(path.join(context, 'tokens'), { recursive: true })
-    fs.mkdirSync(path.join(context, 'generated'), { recursive: true })
-
-    fs.writeFileSync(
-      path.join(context, 'tokens', 'color.json'),
-      JSON.stringify({ color: { primary: { value: '#00ff00' } } }),
-    )
-    fs.writeFileSync(
-      path.join(context, 'entry.js'),
-      [
-        "import { ColorPrimary } from './generated/tokens.js'",
-        'export const primary = ColorPrimary',
-        '',
-      ].join('\n'),
+describe.each(COMPILERS)(
+  'under a real $name compiler',
+  ({ compile, name, reportsVerbatim }) => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `unplugin-style-dictionary-${name}-`),
     )
 
-    // Pre-seeding is what turns the race from an error into silence: with a
-    // file already there webpack resolves it happily and bundles whatever it
-    // held when the read happened.
-    if (stale !== undefined) {
+    afterEach(() => {
+      if (fs.existsSync(tempDir))
+        fs.rmSync(tempDir, { force: true, recursive: true })
+    })
+
+    // A fixture whose entry imports the generated file, so the host has to
+    // resolve it — which is the thing that used to happen while the compile was
+    // still running.
+    const writeRaceFixture = (fixture: string, stale?: string) => {
+      const context = path.join(tempDir, fixture)
+      fs.mkdirSync(path.join(context, 'tokens'), { recursive: true })
+      fs.mkdirSync(path.join(context, 'generated'), { recursive: true })
+
       fs.writeFileSync(
-        path.join(context, 'generated', 'tokens.js'),
-        `export const ColorPrimary = "${stale}";\n`,
+        path.join(context, 'tokens', 'color.json'),
+        JSON.stringify({ color: { primary: { value: '#00ff00' } } }),
       )
+      fs.writeFileSync(
+        path.join(context, 'entry.js'),
+        [
+          "import { ColorPrimary } from './generated/tokens.js'",
+          'export const primary = ColorPrimary',
+          '',
+        ].join('\n'),
+      )
+
+      // Pre-seeding is what turns the race from an error into silence: with a
+      // file already there webpack resolves it happily and bundles whatever it
+      // held when the read happened.
+      if (stale !== undefined) {
+        fs.writeFileSync(
+          path.join(context, 'generated', 'tokens.js'),
+          `export const ColorPrimary = "${stale}";\n`,
+        )
+      }
+
+      return context
     }
 
-    return context
-  }
+    it(`compiles before ${name} resolves the generated module`, async () => {
+      const context = writeRaceFixture('race')
 
-  it(`compiles before ${name} resolves the generated module`, async () => {
-    const context = writeRaceFixture('race')
+      const stats = await buildWithSlowConfig(compile, context, 400)
 
-    const stats = await buildWithSlowConfig(compile, context, 400)
+      // Unpatched this is `Module not found: Error: Can't resolve
+      // './generated/tokens.js'` from about 10ms of real latency upward.
+      expect(stats?.toJson().errors ?? []).toEqual([])
+      expect(
+        fs.readFileSync(path.join(context, 'dist', 'main.js'), 'utf-8'),
+      ).toContain('#00ff00')
+    }, 60000)
 
-    // Unpatched this is `Module not found: Error: Can't resolve
-    // './generated/tokens.js'` from about 10ms of real latency upward.
-    expect(stats?.toJson().errors ?? []).toEqual([])
-    expect(
-      fs.readFileSync(path.join(context, 'dist', 'main.js'), 'utf-8'),
-    ).toContain('#00ff00')
-  }, 60000)
+    it('does not bundle a stale generated file it is about to replace', async () => {
+      // The failure worth fixing, because nothing reports it: with a generated
+      // file already on disk the build succeeds and ships the old values, in
+      // the same run the plugin logs as a success.
+      const context = writeRaceFixture('stale', '#STALE00')
 
-  it('does not bundle a stale generated file it is about to replace', async () => {
-    // The failure worth fixing, because nothing reports it: with a generated
-    // file already on disk the build succeeds and ships the old values, in
-    // the same run the plugin logs as a success.
-    const context = writeRaceFixture('stale', '#STALE00')
+      const stats = await buildWithSlowConfig(compile, context, 50)
 
-    const stats = await buildWithSlowConfig(compile, context, 50)
+      expect(stats?.toJson().errors ?? []).toEqual([])
 
-    expect(stats?.toJson().errors ?? []).toEqual([])
+      const bundle = fs.readFileSync(
+        path.join(context, 'dist', 'main.js'),
+        'utf-8',
+      )
+      expect(bundle).toContain('#00ff00')
+      expect(bundle).not.toContain('#STALE00')
 
-    const bundle = fs.readFileSync(
-      path.join(context, 'dist', 'main.js'),
-      'utf-8',
-    )
-    expect(bundle).toContain('#00ff00')
-    expect(bundle).not.toContain('#STALE00')
+      // And the fresh value really was written, so the assertion above is about
+      // what the host read rather than about what the plugin produced.
+      expect(
+        fs.readFileSync(path.join(context, 'generated', 'tokens.js'), 'utf-8'),
+      ).toContain('#00ff00')
+    }, 60000)
 
-    // And the fresh value really was written, so the assertion above is about
-    // what the host read rather than about what the plugin produced.
-    expect(
-      fs.readFileSync(path.join(context, 'generated', 'tokens.js'), 'utf-8'),
-    ).toContain('#00ff00')
-  }, 60000)
+    it('finds a config relative to the compiler context', async () => {
+      const context = path.join(tempDir, 'app')
+      fs.mkdirSync(path.join(context, 'tokens'), { recursive: true })
 
-  it('finds a config relative to the compiler context', async () => {
-    const context = path.join(tempDir, 'app')
-    fs.mkdirSync(path.join(context, 'tokens'), { recursive: true })
+      fs.writeFileSync(
+        path.join(context, 'tokens', 'color.json'),
+        JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+      )
 
-    fs.writeFileSync(
-      path.join(context, 'tokens', 'color.json'),
-      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
-    )
-
-    // Absolute, because what is under test is whether the *configuration* is
-    // found under `context`. Style Dictionary reads the paths inside it
-    // against the working directory, which is not `context` here, and that
-    // separation is the documented contract.
-    fs.writeFileSync(
-      path.join(context, 'sd.config.json'),
-      JSON.stringify({
-        platforms: {
-          js: {
-            buildPath:
-              path.join(context, 'generated').replace(/\\/g, '/') + '/',
-            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
-            transformGroup: 'js',
+      // Absolute, because what is under test is whether the *configuration* is
+      // found under `context`. Style Dictionary reads the paths inside it
+      // against the working directory, which is not `context` here, and that
+      // separation is the documented contract.
+      fs.writeFileSync(
+        path.join(context, 'sd.config.json'),
+        JSON.stringify({
+          platforms: {
+            js: {
+              buildPath:
+                path.join(context, 'generated').replace(/\\/g, '/') + '/',
+              files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+              transformGroup: 'js',
+            },
           },
-        },
-        source: [path.join(context, 'tokens', '*.json').replace(/\\/g, '/')],
-      }),
-    )
+          source: [path.join(context, 'tokens', '*.json').replace(/\\/g, '/')],
+        }),
+      )
 
-    fs.writeFileSync(path.join(context, 'entry.js'), 'export const entry = 1\n')
+      fs.writeFileSync(
+        path.join(context, 'entry.js'),
+        'export const entry = 1\n',
+      )
 
-    // `config` is relative, so only the compiler's context can find it.
-    const stats = await compile(context, path.join(tempDir, 'dist'), {
-      config: 'sd.config.json',
-      silent: true,
-    })
+      // `config` is relative, so only the compiler's context can find it.
+      const stats = await compile(context, path.join(tempDir, 'dist'), {
+        config: 'sd.config.json',
+        silent: true,
+      })
 
-    expect(stats?.hasErrors()).toBe(false)
+      expect(stats?.hasErrors()).toBe(false)
 
-    const generated = path.join(context, 'generated', 'tokens.js')
-    expect(fs.existsSync(generated)).toBe(true)
-    expect(fs.readFileSync(generated, 'utf-8')).toContain('#0070f3')
-  }, 60000)
+      const generated = path.join(context, 'generated', 'tokens.js')
+      expect(fs.existsSync(generated)).toBe(true)
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#0070f3')
+    }, 60000)
 
-  it('reports a failed compile through stats rather than only the console', async () => {
-    // Neither host offers `this.warn` — the `buildStart` context is exactly
-    // `parse`, `addWatchFile`, `emitFile`, `getWatchFiles` and
-    // `getNativeBuildContext`, measured — so the plugin's messages went to the
-    // console and nowhere else. Absent from `stats.toJson()`, they were absent
-    // from the CI annotations built on it and from the dev-server overlay.
-    //
-    // `failOnError: false` so the build completes: a failure that stops the
-    // run ends it before a compilation exists to carry the report, and this is
-    // the case where the host has somewhere to put it.
-    const context = path.join(tempDir, 'stats-report')
-    const tokensDirectory = path.join(context, 'tokens')
-    fs.mkdirSync(tokensDirectory, { recursive: true })
-    fs.writeFileSync(path.join(context, 'entry.js'), 'export default 1\n')
+    // `failOnError: false` so the build completes: a failure that stops the run
+    // ends it before a compilation exists to carry the report, and a report in
+    // `stats` is exactly what these two cases are about.
+    const compileFailingTokens = async (fixture: string) => {
+      const context = path.join(tempDir, fixture)
+      const tokensDirectory = path.join(context, 'tokens')
+      fs.mkdirSync(tokensDirectory, { recursive: true })
+      fs.writeFileSync(path.join(context, 'entry.js'), 'export default 1\n')
 
-    // A reference that cannot resolve — Style Dictionary fails the compile and
-    // says why, which is the message that has to reach `stats`.
-    fs.writeFileSync(
-      path.join(tokensDirectory, 'color.json'),
-      JSON.stringify({ color: { brand: { value: '{color.missing.value}' } } }),
-    )
+      // A reference that cannot resolve — Style Dictionary fails the compile and
+      // says why, which is the message that has to reach `stats`.
+      fs.writeFileSync(
+        path.join(tokensDirectory, 'color.json'),
+        JSON.stringify({
+          color: { brand: { value: '{color.missing.value}' } },
+        }),
+      )
 
-    const configFile = path.join(context, 'sd.config.json')
-    fs.writeFileSync(
-      configFile,
-      JSON.stringify({
-        platforms: {
-          js: {
-            buildPath:
-              path.join(context, 'generated').replace(/\\/g, '/') + '/',
-            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
-            transformGroup: 'js',
-          },
-        },
-        source: [path.join(tokensDirectory, '*.json').replace(/\\/g, '/')],
-      }),
-    )
-
-    const stats = await compile(context, path.join(context, 'dist'), {
-      config: configFile,
-      failOnError: false,
-      logLevel: 'silent',
-    })
-
-    const warnings = (stats?.toJson({ all: true }).warnings ?? []).map(
-      (warning) => warning.message,
-    )
-
-    expect(
-      warnings.some((message) => message.includes('Compilation failed after')),
-    ).toBe(true)
-
-    // A warning rather than an error, and that distinction is load-bearing:
-    // `failOnError: false` asked for the build not to fail, and putting the
-    // report in `compilation.errors` would fail it anyway.
-    expect(stats?.hasErrors()).toBe(false)
-
-    // No escapes, because a `stats` entry is read by machines as often as by
-    // people — a CI annotation carrying `[31m` is the colour problem
-    // wearing a different hat.
-    expect(warnings.some((message) => message.includes('['))).toBe(false)
-  }, 60000)
-
-  it(`tells a config function ${name} its mode and whether it watches`, async () => {
-    // The issue expected this to be unreachable — the `buildStart` context
-    // carries no `meta`, so it proposed `getNativeBuildContext()` or a
-    // hardcoded `false`. Neither is needed: the host's own hook is handed the
-    // compiler, which knows both. `mode` is a compiler option, and `watchMode`
-    // is only set once `watch()` has been called, so it is read per compile
-    // rather than when the plugin is installed.
-    const context = path.join(tempDir, 'config-context')
-    const tokensDirectory = path.join(context, 'tokens')
-    fs.mkdirSync(tokensDirectory, { recursive: true })
-    fs.writeFileSync(path.join(context, 'entry.js'), 'export default 1\n')
-    fs.writeFileSync(
-      path.join(tokensDirectory, 'color.json'),
-      JSON.stringify({ color: { brand: { value: '#0070f3' } } }),
-    )
-
-    const seen: Array<{ command: string; mode: string; watch: boolean }> = []
-
-    await compile(context, path.join(context, 'dist'), {
-      config: (buildContext) => {
-        seen.push({ ...buildContext })
-
-        return {
+      const configFile = path.join(context, 'sd.config.json')
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
           platforms: {
             js: {
               buildPath:
@@ -338,18 +293,113 @@ describe.each(COMPILERS)('under a real $name compiler', ({ compile, name }) => {
             },
           },
           source: [path.join(tokensDirectory, '*.json').replace(/\\/g, '/')],
-        }
+        }),
+      )
+
+      const stats = await compile(context, path.join(context, 'dist'), {
+        config: configFile,
+        failOnError: false,
+        logLevel: 'silent',
+      })
+
+      return {
+        stats,
+        warnings: (stats?.toJson({ all: true }).warnings ?? []).map(
+          (warning) => warning.message,
+        ),
+      }
+    }
+
+    it('reports a failed compile through stats rather than only the console', async () => {
+      // Neither host offers `this.warn` — the `buildStart` context is exactly
+      // `parse`, `addWatchFile`, `emitFile`, `getWatchFiles` and
+      // `getNativeBuildContext`, measured — so the plugin's messages went to the
+      // console and nowhere else. Absent from `stats.toJson()`, they were absent
+      // from the CI annotations built on it and from the dev-server overlay.
+      const { stats, warnings } = await compileFailingTokens('stats-report')
+
+      expect(
+        warnings.some((message) =>
+          message.includes('Compilation failed after'),
+        ),
+      ).toBe(true)
+
+      // A warning rather than an error, and that distinction is load-bearing:
+      // `failOnError: false` asked for the build not to fail, and putting the
+      // report in `compilation.errors` would fail it anyway.
+      expect(stats?.hasErrors()).toBe(false)
+    }, 60000)
+
+    // Its own case rather than an assertion inside the one above, because only
+    // one host can answer it — and a conditional `expect` is the shape that
+    // looks green while asserting nothing.
+    it.runIf(reportsVerbatim)(
+      'puts no escape sequences into what stats carries',
+      async () => {
+        // A `stats` entry is read by machines as often as by people, so a CI
+        // annotation carrying `[31m` is the colour problem wearing a different
+        // hat. What is asserted is that the plugin adds none.
+        //
+        // rspack is excluded because it decorates: every diagnostic goes into
+        // its own `⚠`/`│` frame, coloured whenever it thinks colour is wanted,
+        // and `CI=true` alone is enough — which is what a GitHub runner sets. So
+        // an escape in rspack's `stats` is rspack's and says nothing about this
+        // plugin. Asserting it there passed on a developer's machine and failed
+        // on the runner.
+        const { warnings } = await compileFailingTokens('stats-escapes')
+
+        expect(
+          warnings.some((message) => message.includes(String.fromCharCode(27))),
+        ).toBe(false)
       },
-      logLevel: 'silent',
-    })
+      60000,
+    )
 
-    expect(seen.length).toBeGreaterThan(0)
+    it(`tells a config function ${name} its mode and whether it watches`, async () => {
+      // The issue expected this to be unreachable — the `buildStart` context
+      // carries no `meta`, so it proposed `getNativeBuildContext()` or a
+      // hardcoded `false`. Neither is needed: the host's own hook is handed the
+      // compiler, which knows both. `mode` is a compiler option, and `watchMode`
+      // is only set once `watch()` has been called, so it is read per compile
+      // rather than when the plugin is installed.
+      const context = path.join(tempDir, 'config-context')
+      const tokensDirectory = path.join(context, 'tokens')
+      fs.mkdirSync(tokensDirectory, { recursive: true })
+      fs.writeFileSync(path.join(context, 'entry.js'), 'export default 1\n')
+      fs.writeFileSync(
+        path.join(tokensDirectory, 'color.json'),
+        JSON.stringify({ color: { brand: { value: '#0070f3' } } }),
+      )
 
-    // The compiler's own `mode`, not a value derived from `command`.
-    expect(seen[0]?.mode).toBe('development')
+      const seen: Array<{ command: string; mode: string; watch: boolean }> = []
 
-    // Neither host serves, so it builds — and this run is not a watch.
-    expect(seen[0]?.command).toBe('build')
-    expect(seen[0]?.watch).toBe(false)
-  }, 60000)
-})
+      await compile(context, path.join(context, 'dist'), {
+        config: (buildContext) => {
+          seen.push({ ...buildContext })
+
+          return {
+            platforms: {
+              js: {
+                buildPath:
+                  path.join(context, 'generated').replace(/\\/g, '/') + '/',
+                files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+                transformGroup: 'js',
+              },
+            },
+            source: [path.join(tokensDirectory, '*.json').replace(/\\/g, '/')],
+          }
+        },
+        logLevel: 'silent',
+      })
+
+      expect(seen.length).toBeGreaterThan(0)
+
+      // The compiler's own `mode`, not a value derived from `command`.
+      expect(seen[0]?.mode).toBe('development')
+
+      // Neither host serves, so it builds — and this run is not a watch.
+      expect(seen[0]?.command).toBe('build')
+      expect(seen[0]?.watch).toBe(false)
+    }, 60000)
+  },
+)

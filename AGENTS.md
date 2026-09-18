@@ -973,6 +973,19 @@ whose watch behaviour is a documented absence. Not built. farm, unloader,
 rsbuild and bun stay out too, for the reason the issue gives: an optional peer
 and a `scripts/check-package.mjs` entry each, for no demonstrated demand.
 
+**rspack decorates a diagnostic before it reaches `stats`; webpack does not.**
+The plugin pushes a plain `new Error(message)` onto `compilation.warnings` on
+both. webpack hands that back byte for byte, while rspack reframes it with a `⚠`
+marker and a `│` gutter and colours the frame whenever it thinks colour is
+wanted — `CI=true` alone is enough, which is what a GitHub runner sets.
+
+So the escape-free assertion is `it.runIf(reportsVerbatim)` and runs on webpack
+only: on rspack it would be testing rspack's renderer. It passed locally and
+failed on the runner before that, which is the shape to watch for — **a test
+that reads a host's rendered output is environment-dependent, and this
+repository's own machines disagree with its runner about colour.** Run a
+colour-sensitive case under `CI=true` before trusting a local pass.
+
 **The peer is `@rspack/core`, not `rspack`.** `rspack` is an unrelated package
 sitting at 0.1.1 on npm; what a consumer installs, what unplugin declares, and
 what the compiler is imported from is `@rspack/core`. The subpath is still
