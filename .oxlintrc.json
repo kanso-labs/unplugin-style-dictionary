@@ -53,5 +53,5 @@
     "builtin": true,
     "node": true
   },
-  "ignorePatterns": ["dist"]
+  "ignorePatterns": [".claude/worktrees", "dist"]
 }

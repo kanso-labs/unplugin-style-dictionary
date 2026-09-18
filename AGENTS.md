@@ -33,6 +33,26 @@ formatted file fails `Lint` rather than being quietly rewritten.
 `eslint-plugin-prettier` is gone, so `npm run lint -- --fix` no longer reformats
 anything — reach for `npm run format`.
 
+**All four tools that walk this tree declare the `.claude/worktrees` exclusion
+themselves.** `eslint.config.js` has it in `globalIgnores`, `vite.config.ts` in
+Vitest's `exclude`, and `.oxlintrc.json` and `.oxfmtrc.json` in
+`ignorePatterns`. Before the last two, what kept oxlint and oxfmt out of a
+sibling worktree was one line of `.gitignore` inside a boilerplate template full
+of Storybook, Nuxt and Gatsby entries this repository will never produce —
+measured in a clean clone, removing that line alone makes `oxlint .` report
+`no-debugger` from another branch's checkout and `oxfmt --check` walk one more
+file. `npm run format` is the sharp edge rather than the check, because it would
+rewrite files in that checkout rather than merely report them.
+
+**It is `.claude/worktrees`, not `.claude`.** `.claude/settings.json` is
+tracked, and oxfmt formats it; excluding the whole directory drops it from the
+set — 42 files rather than 43. The narrower pattern was measured to block the
+same hazard.
+
+Do not try to reproduce any of this from inside `.claude/worktrees/<name>/`.
+That directory is itself under the outer checkout's ignore, so the effect is
+masked and the hazard reads as already handled. Use a clone somewhere else.
+
 **oxfmt covers Markdown, JSON and YAML as well as TypeScript**, which is new:
 nothing formatted those before. `CHANGELOG.md` is the one exemption, via
 `ignorePatterns` in `.oxfmtrc.json` — release-please rewrites it on every
