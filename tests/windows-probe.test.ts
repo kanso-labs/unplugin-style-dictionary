@@ -36,7 +36,12 @@ const waitFor = async (satisfied: () => boolean, timeoutMs: number) => {
 
 // One fixture per case, because a rebuild in one must not be read as a rebuild
 // in another.
-const buildFixture = (tempDir: string, name: string, insideNodeModules: boolean) => {
+const buildFixture = (
+  tempDir: string,
+  name: string,
+  insideNodeModules: boolean,
+  viaSymlink: boolean,
+) => {
   const base = path.join(tempDir, name)
   const app = path.join(base, 'app')
   const pkg = path.join(base, 'packages', 'tokens')
@@ -52,11 +57,29 @@ const buildFixture = (tempDir: string, name: string, insideNodeModules: boolean)
     JSON.stringify({ color: { brand: { value: '#123456' } } }),
   )
 
+  // Two independent axes. The original fixture moved both at once, so a
+  // failure could not say which of them caused it.
   let tokenSource = path.join(pkg, 'src', 'color.json')
-  if (insideNodeModules) {
-    fs.mkdirSync(path.join(app, 'node_modules', '@acme'), { recursive: true })
-    fs.symlinkSync(pkg, path.join(app, 'node_modules', '@acme', 'tokens'), 'dir')
-    tokenSource = path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json')
+  const host = insideNodeModules
+    ? path.join(app, 'node_modules', '@acme')
+    : path.join(app, 'linked')
+
+  if (insideNodeModules || viaSymlink) {
+    fs.mkdirSync(host, { recursive: true })
+
+    if (viaSymlink) {
+      fs.symlinkSync(pkg, path.join(host, 'tokens'), 'dir')
+    } else {
+      // A real directory in the same place, so the only difference from the
+      // symlinked case is the symlink.
+      fs.mkdirSync(path.join(host, 'tokens', 'src'), { recursive: true })
+      fs.writeFileSync(
+        path.join(host, 'tokens', 'src', 'color.json'),
+        JSON.stringify({ color: { brand: { value: '#123456' } } }),
+      )
+    }
+
+    tokenSource = path.join(host, 'tokens', 'src', 'color.json')
   }
 
   const configFile = path.join(app, 'sd.config.json')
@@ -81,12 +104,13 @@ const buildFixture = (tempDir: string, name: string, insideNodeModules: boolean)
 const measure = async (
   tempDir: string,
   label: string,
-  { extraIgnored = [], insideNodeModules = true } = {},
+  { extraIgnored = [], insideNodeModules = true, viaSymlink = true } = {},
 ) => {
   const { app, configFile, generated, tokenSource } = buildFixture(
     tempDir,
     label.replace(/[^a-z0-9]+/gi, '-'),
     insideNodeModules,
+    viaSymlink,
   )
 
   const server = await createServer({
@@ -127,44 +151,30 @@ it('reports which negation shape rebuilds a node_modules token', async () => {
   report('platform', process.platform)
 
   try {
-    // The control. If this does not rebuild, watching is broken generally and
-    // `node_modules` is not the subject at all.
-    await measure(tempDir, 'control outside node_modules', {
+    // Round 4. Rounds 1–3 established that the control rebuilds on Windows and
+    // that no negation shape reaches a token inside `node_modules` there. But
+    // every `node_modules` fixture also went through a symlink, so the two
+    // variables moved together and neither was isolated. This is the 2x2.
+    await measure(tempDir, 'A plain dir, outside node_modules', {
       insideNodeModules: false,
+      viaSymlink: false,
     })
 
-    // What ships today: the plugin's own file-only negation, nothing added.
-    await measure(tempDir, 'file negation only (today)')
-
-    // Every directory on the path un-ignored as well as the file, in case the
-    // walk is pruned at a directory before it can reach the leaf.
-    const ancestors = (root: string) => [
-      `!${posix(path.join(root, 'node_modules'))}`,
-      `!${posix(path.join(root, 'node_modules', '@acme'))}`,
-      `!${posix(path.join(root, 'node_modules', '@acme', 'tokens'))}`,
-      `!${posix(path.join(root, 'node_modules', '@acme', 'tokens', 'src'))}`,
-    ]
-    const ancestorRoot = path.join(
-      tempDir,
-      'plus-ancestor-negations'.replace(/[^a-z0-9]+/gi, '-'),
-      'app',
-    )
-    await measure(tempDir, 'plus ancestor negations', {
-      extraIgnored: ancestors(ancestorRoot),
+    await measure(tempDir, 'B symlink, outside node_modules', {
+      insideNodeModules: false,
+      viaSymlink: true,
     })
 
-    // The package subtree, which is broader than a leaf and narrower than the
-    // whole dependency tree.
-    const subtreeRoot = path.join(
-      tempDir,
-      'plus-package-subtree'.replace(/[^a-z0-9]+/gi, '-'),
-      'app',
-    )
-    await measure(tempDir, 'plus package subtree', {
-      extraIgnored: [
-        `!${posix(path.join(subtreeRoot, 'node_modules', '@acme', 'tokens'))}/**`,
-      ],
+    await measure(tempDir, 'C plain dir, inside node_modules', {
+      insideNodeModules: true,
+      viaSymlink: false,
     })
+
+    await measure(tempDir, 'D symlink, inside node_modules (today)', {
+      insideNodeModules: true,
+      viaSymlink: true,
+    })
+
   } finally {
     fs.rmSync(tempDir, { force: true, recursive: true })
   }
