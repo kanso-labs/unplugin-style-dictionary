@@ -12,7 +12,7 @@
 // require() reach this ESM-only package at all: under `import` instead, the
 // same call fails with ERR_PACKAGE_PATH_NOT_EXPORTED and every CommonJS
 // consumer is dropped — a webpack.config.js being the case the README
-// documents. Rewriting `default` to `import` on all five entries still gives
+// documents. Rewriting `default` to `import` on all six entries still gives
 // publint "All good!".
 //
 // The second is what a require() of a target entry hands back. Node serves it
@@ -59,8 +59,8 @@ function readManifest(relativePath) {
 const packageName = '@kanso-labs/unplugin-style-dictionary'
 
 // Each target entry is `export default unplugin.<target>` over the same
-// factory, so all four are checked identically.
-const targets = ['rolldown', 'rollup', 'vite', 'webpack']
+// factory, so all five are checked identically.
+const targets = ['rolldown', 'rollup', 'rspack', 'vite', 'webpack']
 
 /** @type {string[]} */
 const failures = []

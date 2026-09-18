@@ -10,14 +10,15 @@ compile **Style Dictionary** design tokens ahead of your bundler, with automatic
 watching, rebuilding, and hot reloading (HMR) under Vite's dev server.
 
 Built on unplugin, the same core plugin targets **Vite**, **Rolldown**,
-**Rollup**, and **Webpack** from a single implementation — useful when a project
-has more than one build surface (e.g. Storybook/Vitest on Vite, and a package
-build on Rolldown/tsdown) that both need tokens compiled ahead of them.
+**Rollup**, **Rspack**, and **Webpack** from a single implementation — useful
+when a project has more than one build surface (e.g. Storybook/Vitest on Vite,
+and a package build on Rolldown/tsdown) that both need tokens compiled ahead of
+them.
 
 ## Features
 
-- **Multi-bundler**: One implementation, four entry points — Vite, Rolldown,
-  Rollup, and Webpack.
+- **Multi-bundler**: One implementation, five entry points — Vite, Rolldown,
+  Rollup, Rspack, and Webpack.
 - **Asynchronous builds**: Native support for Style Dictionary v4/v5 async
   compilation API.
 - **Automatic watching**: Reads the `source` and `include` patterns from your
@@ -48,9 +49,9 @@ build on Rolldown/tsdown) that both need tokens compiled ahead of them.
 npm install @kanso-labs/unplugin-style-dictionary style-dictionary --save-dev
 ```
 
-_Note: `style-dictionary` and your bundler (`vite`, `rolldown`, `rollup`, or
-`webpack`) are peer dependencies, so you can manage their versions
-independently._
+_Note: `style-dictionary` and your bundler (`vite`, `rolldown`, `rollup`,
+`@rspack/core`, or `webpack`) are peer dependencies, so you can manage their
+versions independently._
 
 **This package needs Node 22.12 or newer.** The floor is Style Dictionary v5's,
 not this plugin's: every 5.x release declares `engines.node >= 22.0.0`, and it
@@ -99,11 +100,12 @@ generated token files exist before the rest of the build consumes them.
 Under a real `rolldown.watch()`, do not rely on a token edit triggering a
 rebuild — see [Watching, per target](#watching-per-target).
 
-### Rollup / Webpack
+### Rollup / Webpack / Rspack
 
 ```typescript
 import StyleDictionary from '@kanso-labs/unplugin-style-dictionary/rollup'
 // or: import StyleDictionary from '@kanso-labs/unplugin-style-dictionary/webpack'
+// or: import StyleDictionary from '@kanso-labs/unplugin-style-dictionary/rspack'
 ```
 
 A `webpack.config.js` is often CommonJS rather than ESM. This package ships ESM
@@ -119,6 +121,14 @@ module.exports = {
   plugins: [StyleDictionary({ config: 'sd.config.json' })],
 }
 ```
+
+**Rspack is webpack's plugin API, and this package treats it as one.** Swap the
+import for `…/rspack` and an `rspack.config.js` reads the same, `.default` hop
+included. Everything below that mentions webpack — where a relative `config` is
+resolved from, where a failed compile is reported, what a `config` function is
+told about the build — holds there too, and `tests/webpack-api.test.ts` runs the
+same cases against both. It installs as `@rspack/core`, which is the peer this
+package declares.
 
 _Note: that path needs Node 20.19+ or 22.12+, the versions that can `require` an
 ES module. Every Node release still in support clears it. Importing from ESM has
@@ -328,6 +338,7 @@ on what the host bundler does with the watch list the plugin registers.
 | **Vite**     | yes                       | yes, under the dev server      | yes                     |
 | **Rollup**   | yes                       | yes, under `rollup --watch`    | yes                     |
 | **Webpack**  | yes                       | yes, under `webpack --watch`   | yes                     |
+| **Rspack**   | yes                       | yes, under `rspack --watch`    | yes                     |
 | **Rolldown** | yes                       | platform-dependent — see below | yes                     |
 
 Patterns and literal paths behave the same way wherever rebuilds happen at all.
@@ -461,8 +472,8 @@ and does not cache anything for later.
 Two bases, and which one applies depends on whose path it is.
 
 **The `config` option is the plugin's**, so a relative path is looked up under
-the host's root: Vite's `root`, webpack's `context`, and the working directory
-for rollup and rolldown, which report none. `root` overrides that.
+the host's root: Vite's `root`, webpack's or rspack's `context`, and the working
+directory for rollup and rolldown, which report none. `root` overrides that.
 
 **Everything inside a Style Dictionary configuration is Style Dictionary's**, so
 `source`, `include` and `buildPath` are resolved against the working directory.
@@ -520,12 +531,19 @@ own way:
 | ------------------ | ------------------------ | ---------------------------------- |
 | Vite               | `config.logger.info`     | `config.logger.error`              |
 | Rollup, Rolldown   | the plugin context's log | the context's warning channel      |
-| Webpack            | the console              | `compilation.warnings`, so `stats` |
+| Webpack, Rspack    | the console              | `compilation.warnings`, so `stats` |
 | No host (one-shot) | the console              | the console                        |
 
 That is what makes a `customLogger` and `clearScreen` work under Vite, and what
 puts a failed compile into `stats.toJson()` under webpack — where it reaches CI
 annotations and anything else reading the build's own output.
+
+**Rspack reformats what it is given, and webpack does not.** The plugin hands
+both the same plain text; rspack wraps every diagnostic in its own frame — a `⚠`
+marker and a `│` gutter — and colours that frame whenever it thinks colour is
+wanted, which setting `CI` is enough to do. So a warning read out of rspack's
+`stats` can carry ANSI escapes that came from rspack rather than from here.
+Strip them before feeding that text to anything that expects plain output.
 
 **A failure is reported as a warning, never on the host's error channel.**
 Rollup's `this.error` aborts the bundle, so reporting a failure through it would
@@ -631,14 +649,14 @@ the host stops, the other is that a build went wrong.
 
 ## Public API
 
-Small on purpose. Four bundler entry points, one root entry, and two types.
+Small on purpose. Five bundler entry points, one root entry, and two types.
 
-| Import                                          | What it is                                                                                                             |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `…/vite`, `…/rolldown`, `…/rollup`, `…/webpack` | Default export: the plugin for that bundler. Call it with the options below.                                           |
-| `…` (the root)                                  | Default export, also named `unplugin`: the unplugin instance, carrying `.vite`, `.rolldown`, `.rollup` and `.webpack`. |
-| `UnpluginStyleDictionaryOptions`                | The options type, exported from every entry above.                                                                     |
-| `StyleDictionaryConfigContext`                  | What the function form of `config` is handed, exported from every entry above.                                         |
+| Import                                                      | What it is                                                                                                                        |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `…/vite`, `…/rolldown`, `…/rollup`, `…/rspack`, `…/webpack` | Default export: the plugin for that bundler. Call it with the options below.                                                      |
+| `…` (the root)                                              | Default export, also named `unplugin`: the unplugin instance, carrying `.vite`, `.rolldown`, `.rollup`, `.rspack` and `.webpack`. |
+| `UnpluginStyleDictionaryOptions`                            | The options type, exported from every entry above.                                                                                |
+| `StyleDictionaryConfigContext`                              | What the function form of `config` is handed, exported from every entry above.                                                    |
 
 Anything not in that table is internal, whatever a build output happens to
 contain. In particular the watch filter and the raw unplugin factory are not

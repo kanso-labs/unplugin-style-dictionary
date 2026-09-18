@@ -3041,6 +3041,11 @@ describe('the exports map', () => {
       subpath: './rollup',
     },
     {
+      conditions: packageJson.exports['./rspack'],
+      file: 'rspack',
+      subpath: './rspack',
+    },
+    {
       conditions: packageJson.exports['./vite'],
       file: 'vite',
       subpath: './vite',

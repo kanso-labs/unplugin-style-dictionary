@@ -12,7 +12,7 @@ to make sure your issue hasn't already been reported.
 
 A bug report needs three things this plugin cannot work without: **which bundler
 and which version**, **which version of `style-dictionary`**, and **which
-version of Node**. This package targets four bundlers from one implementation
+version of Node**. This package targets five bundlers from one implementation
 and declares peer ranges for each, so a report that names none of them cannot be
 placed against them. The bug report form asks for all three.
 
@@ -59,9 +59,10 @@ anything — reach for `npm run format`.
 
 `tests/` drives real bundlers against real files in temporary directories rather
 than mocking Style Dictionary: a real Vite dev server, a real `rollup.watch()`,
-a real `webpack()` compile, and all four targets through their own entry points.
-A new hook needs a matching caller in `tests/index.test.ts` — calling one bare
-leaves `this` undefined and the failure reads as a plugin bug.
+a real `webpack()` compile, a real `rspack()` compile, and all five targets
+through their own entry points. A new hook needs a matching caller in
+`tests/index.test.ts` — calling one bare leaves `this` undefined and the failure
+reads as a plugin bug.
 
 The suite prints nothing. If you add a test that provokes the plugin's failure
 report, spy on `console.error`, **assert the message is there**, and restore in

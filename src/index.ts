@@ -461,6 +461,33 @@ const compiledFingerprints = new Set<string>()
 // configurations, so one script building two packages shares nothing.
 const compilesInFlight = new Map<string, Promise<void>>()
 
+// The slice of a webpack-shaped compiler this plugin touches, named rather
+// than imported. webpack and rspack each ship their own `Compiler` type, and
+// neither is assignable to the other, so a hook written against one cannot be
+// handed to the other's key. Both satisfy this structurally, which is what
+// makes `adoptCompiler` one function instead of two copies drifting apart.
+interface BundlerCompiler {
+  hooks: {
+    beforeCompile: {
+      tapPromise: (name: string, handler: () => Promise<void>) => void
+    }
+    compilation: {
+      tap: (name: string, handler: (compilation: Compilation) => void) => void
+    }
+    done: { tap: (name: string, handler: () => void) => void }
+    failed: { tap: (name: string, handler: () => void) => void }
+  }
+  options: { context?: string | undefined; mode?: string | undefined }
+  watchMode: boolean
+}
+
+// Only the one array a report is pushed onto. webpack types it `WebpackError[]`
+// and rspack `Error[]`; both are arrays of something extending `Error`, so a
+// plain one is what this pushes on either.
+interface Compilation {
+  warnings: Error[]
+}
+
 // A stable identity for a set of resolved configurations, or `null` for one
 // that cannot have a stable identity at all.
 //
@@ -528,12 +555,14 @@ const unpluginFactory: UnpluginFactory<
   undefined | UnpluginStyleDictionaryOptions,
   false
 > = (options = {}, meta) => {
-  // webpack is the one target whose `buildStart` does not run before the
-  // module graph is resolved: unplugin taps it on `make`, an
-  // `AsyncParallelHook` that `EntryPlugin` taps too. The `webpack` key below
-  // compiles on `beforeCompile` instead, which webpack awaits before the
-  // compilation exists.
-  const isWebpack = meta.framework === 'webpack'
+  // webpack and rspack are the targets whose `buildStart` does not run before
+  // the module graph is resolved: unplugin taps it on `make`, an
+  // `AsyncParallelHook` that `EntryPlugin` taps too. The `webpack` and
+  // `rspack` keys below compile on `beforeCompile` instead, which both await
+  // before the compilation exists. rspack reimplements webpack's plugin API,
+  // so everything this plugin does with a compiler is the same on either —
+  // but unplugin dispatches them by separate keys, so the flag names both.
+  const isWebpack = meta.framework === 'webpack' || meta.framework === 'rspack'
   const {
     cache = true,
     errorOverlay = true,
@@ -1848,6 +1877,88 @@ const unpluginFactory: UnpluginFactory<
     hostClosed = true
   }
 
+  // What both webpack-shaped hosts do with a compiler, written once.
+  // rspack reimplements webpack's plugin API hook for hook, but ships its
+  // own `Compiler` type and unplugin dispatches the two through separate
+  // keys — so a function typed against either one rejects the other. Naming
+  // the surface actually used is what lets one implementation serve both.
+  //
+  // unplugin calls this inside `apply(compiler)`, one line before it taps
+  // `make`, so the root is in place before the first compile. Without it a
+  // webpack build whose `context` is not the working directory looked for
+  // the configuration in the wrong place and reported ENOENT.
+  const adoptCompiler = (compiler: BundlerCompiler): void => {
+    if (rootOption === undefined) {
+      root = compiler.options.context ?? process.cwd()
+    }
+
+    // webpack's `buildStart` context carries no `meta`, so neither half of
+    // the build context can come from there. `mode` is a webpack option, and
+    // `watchMode` is only true once `watch()` has been called — which is
+    // after this runs, so it is read per compile below rather than here.
+    hostMode = compiler.options.mode
+
+    // The compile happens in `beforeCompile`, which webpack awaits *before*
+    // the compilation exists — so a message from it has nothing to attach to
+    // yet and is held until one appears.
+    //
+    // Only failures are routed. `stats` carries warnings and errors and
+    // nothing else, so the progress lines stay on the console rather than
+    // being reported as warnings they are not.
+    //
+    // A warning rather than an error, for the same reason as on rollup: this
+    // is the report, and `failOnError` decides separately whether the build
+    // stops. Pushing to `compilation.errors` would fail a webpack build that
+    // asked not to be failed.
+    const pending: string[] = []
+    host = {
+      error: (message) => {
+        pending.push(message)
+      },
+    }
+
+    compiler.hooks.compilation.tap(
+      'unplugin-style-dictionary',
+      (compilation) => {
+        for (const message of pending.splice(0)) {
+          const reported = new Error(message)
+          reported.name = 'UnpluginStyleDictionaryWarning'
+          compilation.warnings.push(reported)
+        }
+      },
+    )
+
+    // A `beforeCompile` that throws ends the run without ever creating a
+    // compilation, and that is exactly the case that produced the message.
+    // Left to the buffer it would be reported nowhere at all, so whatever is
+    // still held when the run ends goes to the console after all.
+    const drainToConsole = () => {
+      for (const message of pending.splice(0)) {
+        console.error(paint('31', message, stderrColour))
+      }
+    }
+    compiler.hooks.failed.tap('unplugin-style-dictionary', drainToConsole)
+    compiler.hooks.done.tap('unplugin-style-dictionary', drainToConsole)
+
+    // `beforeCompile` is awaited before the compilation exists, so the
+    // tokens are on disk before webpack resolves the module that imports
+    // them. Tapped on every compilation rather than only the first: a watch
+    // rebuild needs the same guarantee, and a compile that renders what is
+    // already there skips its own write.
+    compiler.hooks.beforeCompile.tapPromise(
+      'unplugin-style-dictionary',
+      async () => {
+        isWatching = compiler.watchMode
+
+        const resolved = await resolveConfigs()
+        if (resolved.length === 0) return
+
+        await compileOnceAcrossInstances(resolved)
+        hasCompiled = true
+      },
+    )
+  }
+
   return {
     async buildStart() {
       adoptHost(this)
@@ -1917,6 +2028,11 @@ const unpluginFactory: UnpluginFactory<
     rolldown: { closeWatcher },
 
     rollup: { closeWatcher },
+
+    // unplugin calls the matching key from inside `apply(compiler)` and
+    // never both, so the two share one implementation rather than one
+    // delegating to the other.
+    rspack: adoptCompiler,
 
     vite: {
       closeWatcher,
@@ -2137,81 +2253,7 @@ const unpluginFactory: UnpluginFactory<
       }
     },
 
-    // unplugin calls this inside `apply(compiler)`, one line before it taps
-    // `make`, so the root is in place before the first compile. Without it a
-    // webpack build whose `context` is not the working directory looked for
-    // the configuration in the wrong place and reported ENOENT.
-    webpack(compiler) {
-      if (rootOption === undefined) {
-        root = compiler.options.context ?? process.cwd()
-      }
-
-      // webpack's `buildStart` context carries no `meta`, so neither half of
-      // the build context can come from there. `mode` is a webpack option, and
-      // `watchMode` is only true once `watch()` has been called — which is
-      // after this runs, so it is read per compile below rather than here.
-      hostMode = compiler.options.mode
-
-      // The compile happens in `beforeCompile`, which webpack awaits *before*
-      // the compilation exists — so a message from it has nothing to attach to
-      // yet and is held until one appears.
-      //
-      // Only failures are routed. `stats` carries warnings and errors and
-      // nothing else, so the progress lines stay on the console rather than
-      // being reported as warnings they are not.
-      //
-      // A warning rather than an error, for the same reason as on rollup: this
-      // is the report, and `failOnError` decides separately whether the build
-      // stops. Pushing to `compilation.errors` would fail a webpack build that
-      // asked not to be failed.
-      const pending: string[] = []
-      host = {
-        error: (message) => {
-          pending.push(message)
-        },
-      }
-
-      compiler.hooks.compilation.tap(
-        'unplugin-style-dictionary',
-        (compilation) => {
-          for (const message of pending.splice(0)) {
-            const reported = new Error(message)
-            reported.name = 'UnpluginStyleDictionaryWarning'
-            compilation.warnings.push(reported)
-          }
-        },
-      )
-
-      // A `beforeCompile` that throws ends the run without ever creating a
-      // compilation, and that is exactly the case that produced the message.
-      // Left to the buffer it would be reported nowhere at all, so whatever is
-      // still held when the run ends goes to the console after all.
-      const drainToConsole = () => {
-        for (const message of pending.splice(0)) {
-          console.error(paint('31', message, stderrColour))
-        }
-      }
-      compiler.hooks.failed.tap('unplugin-style-dictionary', drainToConsole)
-      compiler.hooks.done.tap('unplugin-style-dictionary', drainToConsole)
-
-      // `beforeCompile` is awaited before the compilation exists, so the
-      // tokens are on disk before webpack resolves the module that imports
-      // them. Tapped on every compilation rather than only the first: a watch
-      // rebuild needs the same guarantee, and a compile that renders what is
-      // already there skips its own write.
-      compiler.hooks.beforeCompile.tapPromise(
-        'unplugin-style-dictionary',
-        async () => {
-          isWatching = compiler.watchMode
-
-          const resolved = await resolveConfigs()
-          if (resolved.length === 0) return
-
-          await compileOnceAcrossInstances(resolved)
-          hasCompiled = true
-        },
-      )
-    },
+    webpack: adoptCompiler,
   }
 }
 
