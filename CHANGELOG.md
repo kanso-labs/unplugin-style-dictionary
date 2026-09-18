@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.0...unplugin-style-dictionary-v0.10.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **build:** make the Windows rename retry survive continuous contention ([#334](https://github.com/kanso-labs/unplugin-style-dictionary/issues/334)) ([14ec9cc](https://github.com/kanso-labs/unplugin-style-dictionary/commit/14ec9cc9e241f0713b1754c3f2b03311fb61f605))
+
 ## [0.10.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.9.0...unplugin-style-dictionary-v0.10.0) (2026-09-18)
 
 
