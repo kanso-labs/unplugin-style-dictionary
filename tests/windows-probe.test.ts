@@ -104,7 +104,13 @@ const buildFixture = (
 const measure = async (
   tempDir: string,
   label: string,
-  { extraIgnored = [], insideNodeModules = true, viaSymlink = true } = {},
+  {
+    extraIgnored = [],
+    insideNodeModules = true,
+    viaSymlink = true,
+    watcherAdd = false,
+    ownWatcher = false,
+  } = {},
 ) => {
   const { app, configFile, generated, tokenSource } = buildFixture(
     tempDir,
@@ -121,6 +127,20 @@ const measure = async (
     server: { host: '127.0.0.1', watch: { ignored: extraIgnored } },
   })
   await server.listen()
+
+  // Candidate fixes, applied after the server is up — which is where a plugin
+  // would reach them from `configureServer`.
+  let own: fs.FSWatcher | undefined
+  if (watcherAdd) server.watcher.add(tokenSource)
+  if (ownWatcher) {
+    // A watcher of the plugin's own, on the file's directory, bypassing Vite's
+    // ignore list entirely. `fs.watch` rather than chokidar because chokidar is
+    // not a direct dependency here; what is under test is whether the OS
+    // reports the change at all inside `node_modules`.
+    own = fs.watch(path.dirname(tokenSource), () => {
+      server.watcher.emit('change', tokenSource)
+    })
+  }
 
   try {
     await waitFor(() => fs.existsSync(generated), 10000)
@@ -142,6 +162,7 @@ const measure = async (
 
     report(label, { firstBuildCorrect: first, rebuiltOnEdit: rebuilt })
   } finally {
+    own?.close()
     await server.close()
   }
 }
@@ -151,28 +172,21 @@ it('reports which negation shape rebuilds a node_modules token', async () => {
   report('platform', process.platform)
 
   try {
-    // Round 4. Rounds 1–3 established that the control rebuilds on Windows and
-    // that no negation shape reaches a token inside `node_modules` there. But
-    // every `node_modules` fixture also went through a symlink, so the two
-    // variables moved together and neither was isolated. This is the 2x2.
-    await measure(tempDir, 'A plain dir, outside node_modules', {
-      insideNodeModules: false,
-      viaSymlink: false,
-    })
+    // Round 5. The 2x2 in round 4 was decisive: inside `node_modules` fails
+    // and outside succeeds, with or without a symlink — so `node_modules` is
+    // the variable and the symlink is not. Round 3 had already shown that no
+    // negation shape helps. So the question is no longer how to spell the
+    // negation but what to do instead of one.
+    await measure(tempDir, 'D today (negation only)', {})
 
-    await measure(tempDir, 'B symlink, outside node_modules', {
-      insideNodeModules: false,
-      viaSymlink: true,
-    })
+    // Does asking the watcher directly, once it is running, reach the file?
+    await measure(tempDir, 'E negation plus watcher.add', { watcherAdd: true })
 
-    await measure(tempDir, 'C plain dir, inside node_modules', {
-      insideNodeModules: true,
-      viaSymlink: false,
-    })
-
-    await measure(tempDir, 'D symlink, inside node_modules (today)', {
-      insideNodeModules: true,
-      viaSymlink: true,
+    // Does the OS report the change at all inside `node_modules`? If a plain
+    // `fs.watch` sees it, a watcher of the plugin's own is a viable fix and
+    // Vite's ignore list is simply not reachable on this platform.
+    await measure(tempDir, 'F own fs.watch, no negation reliance', {
+      ownWatcher: true,
     })
 
   } finally {
