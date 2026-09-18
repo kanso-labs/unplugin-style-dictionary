@@ -1,2 +1,5 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Auto detect text files and perform LF normalization, and check them out with
+# LF on every platform. Without `eol=lf` a `windows-latest` checkout yields a
+# CRLF working tree, and `oxfmt --check` rejects CRLF — so a Windows job would
+# fail on every file's formatting before reaching anything real.
+* text=auto eol=lf
