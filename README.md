@@ -19,8 +19,10 @@ them.
 
 - **Multi-bundler**: One implementation, five entry points — Vite, Rolldown,
   Rollup, Rspack, and Webpack.
-- **Asynchronous builds**: Native support for Style Dictionary v4/v5 async
-  compilation API.
+- **Asynchronous builds**: Native support for Style Dictionary v5's async
+  compilation API. The `style-dictionary` range in
+  [`package.json`](package.json)'s `peerDependencies` is the contract — this
+  bullet follows it rather than standing beside it.
 - **Automatic watching**: Reads the `source` and `include` patterns from your
   Style Dictionary configurations and watches the files they match, including a
   token package resolved through `node_modules` in a workspace. What a change
@@ -52,6 +54,16 @@ npm install @kanso-labs/unplugin-style-dictionary style-dictionary --save-dev
 _Note: `style-dictionary` and your bundler (`vite`, `rolldown`, `rollup`,
 `@rspack/core`, or `webpack`) are peer dependencies, so you can manage their
 versions independently._
+
+**`style-dictionary` is the one peer that is not optional**, and its range is
+`^5.0.0`. An older major is refused at the install rather than failing later:
+
+```
+npm error code ERESOLVE
+npm error Found: style-dictionary@4.4.0
+npm error Could not resolve dependency:
+npm error peer style-dictionary@"^5.0.0" from @kanso-labs/unplugin-style-dictionary@0.9.0
+```
 
 **This package needs Node 22.12 or newer.** The floor is Style Dictionary v5's,
 not this plugin's: every 5.x release declares `engines.node >= 22.0.0`, and it
