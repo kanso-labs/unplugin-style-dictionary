@@ -362,6 +362,36 @@ a local `npm run build` neither writes the stats file nor uploads anything —
 which is also what a fork's pull request gets, rather than a failure for want of
 a secret it was never going to be given.
 
+**The bundle it measures includes the declarations, and that is why its status
+is informational.** `codecovRollupPlugin` reads the rolldown bundle in
+`generateBundle` and takes every chunk and asset except source maps — and tsdown
+runs `rolldown-plugin-dts` as a plugin _inside that same build_
+(`format === 'es'` pushes it beside `userPlugins`), so the `.d.ts` files are
+chunks in the bundle the plugin sees. Confirmed by logging `Object.keys(bundle)`
+from a probe plugin: `types.d.ts (chunk, 16653B)` sits there beside `index.js`.
+
+That one file is a third of what is measured and is almost entirely JSDoc, and
+`src/types.ts` is the options contract the README's Options Reference is
+generated from — so its documentation is meant to grow. Against the default 5%
+threshold, a couple of kilobytes of new JSDoc trips a size alert while changing
+the shipped JavaScript by nothing.
+
+**The plugin has no option to exclude an asset**, so the measurement cannot be
+narrowed to runtime weight — the options are `bundleName`,
+`enableBundleAnalysis`, `dryRun`, `debug` and the upload credentials, and
+nothing that filters. What `.github/codecov.yml` sets instead is
+`bundle_analysis.status: informational`, which keeps the number reported and
+stops it reading as a failure for a documentation change. Do not make it a
+required check: ruleset 19123565 names `Build`, `Lint` and `Test`, and a size
+figure is a prompt to look.
+
+**Codecov validates a config on request, and that is worth using before guessing
+a key.**
+`curl -X POST --data-binary @.github/codecov.yml https://api.codecov.io/validate`
+answers `Valid!` and echoes how it parsed the file — `warning_threshold: "10%"`
+comes back as `["percentage", 10.0]`. An unrecognised key here fails the same
+silent way the filename does.
+
 **A failed upload does not fail the build**, which is worth knowing before
 trusting the absence of an error. An invalid token spends three retries and some
 seconds, logs `Failed to get pre-signed URL`, and lets `Run build` pass — so a
