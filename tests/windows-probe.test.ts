@@ -92,19 +92,54 @@ it('reports what the watcher matches a node_modules path against', async () => {
       dirs.slice(0, 3).map((d) => `${d} -> ${(watched[d] ?? []).join(',')}`),
     )
 
-    // The matcher anymatch uses, asked directly about the pair.
+    // Round 2. The matcher agrees and the negation is in the list, yet the
+    // directory is not watched at all — so the question is what stops chokidar
+    // descending, and which negation shape makes it.
+    report('all watched dirs (first 12)', Object.keys(watched).slice(0, 12))
+    report('watched dir count', Object.keys(watched).length)
+
+    // Does the watcher take the file if asked directly, once it is running?
+    server.watcher.add(viaNodeModules)
+    await new Promise((settle) => setTimeout(settle, 500))
+    const afterAdd = server.watcher.getWatched()
+    report(
+      'after watcher.add — dirs mentioning node_modules',
+      Object.keys(afterAdd).filter((d) => d.includes('node_modules')),
+    )
+
+    // Candidate negation shapes, each tested against the paths chokidar would
+    // walk: the file, and every directory above it up to the root.
     const pm = (await import('picomatch')).default
-    const negation = viaNodeModules
-    for (const candidate of [
-      viaNodeModules,
-      posix(fs.realpathSync(viaNodeModules)),
-      path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json'),
-    ]) {
-      report(
-        `picomatch("${negation.slice(-40)}") vs "${candidate.slice(-40)}"`,
-        pm(negation)(posix(candidate)),
-      )
+    const nmDir = posix(path.join(app, 'node_modules'))
+    const scopeDir = posix(path.join(app, 'node_modules', '@acme'))
+    const pkgDir = posix(path.join(app, 'node_modules', '@acme', 'tokens'))
+    const srcDir = posix(path.join(app, 'node_modules', '@acme', 'tokens', 'src'))
+
+    const candidates: Record<string, string> = {
+      'file only (today)': viaNodeModules,
+      'file with native separators': path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json'),
+      'package dir globstar': `${pkgDir}/**`,
+      'node_modules globstar': `${nmDir}/**`,
     }
+
+    for (const [label, pattern] of Object.entries(candidates)) {
+      const match = pm(pattern)
+      report(`"${label}" matches`, {
+        file: match(viaNodeModules),
+        nmDir: match(nmDir),
+        pkgDir: match(pkgDir),
+        scopeDir: match(scopeDir),
+        srcDir: match(srcDir),
+      })
+    }
+
+    // Vite's own ignore entries, to see what the negation has to overcome.
+    report(
+      'all ignored entries',
+      (Array.isArray(ignored) ? ignored : [ignored]).map((entry) =>
+        typeof entry === 'string' ? entry : String(entry),
+      ),
+    )
   } finally {
     await server.close()
     fs.rmSync(tempDir, { force: true, recursive: true })
