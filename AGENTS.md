@@ -82,8 +82,9 @@ mise exec node@"$(awk '/^nodejs/{print $2}' .tool-versions)" -- npm install
 **The number is deliberately not written here.** Renovate enables `mise` and
 automerges minor and patch, so `.tool-versions` moves on its own schedule while
 a version copied into prose sits still — which is how this paragraph came to
-name a version the repository had stopped pinning three bumps earlier.
-`CONTRIBUTING.md` uses the same self-reading form for the same reason.
+name a version the repository had stopped pinning three bumps earlier. The
+README's Development section uses the same self-reading form for the same
+reason.
 
 ## Conventions
 
@@ -657,6 +658,34 @@ and nothing else — so the Roadmap board's column field and the By area table's
 grouping were set by hand once and stay wherever the last person left them.
 
 ## Traps
+
+**Config discovery reads a module, and reading a module runs it.** With no
+`config`, the root is searched for `sd.config.json`, `config.json`,
+`sd.config.js` and `sd.config.mjs`. A candidate is validated before it is
+adopted, but the two module names are `import`ed to be validated at all — so
+anything at the top level of that file has already run by the time the check
+looks at what came back. Freshly, on every watch event.
+
+That is the plugin's security surface, and it is why this repository's threat
+model is a build-time one: it runs code the host project supplies, writes
+generated files, and ships nothing to a browser. `config: false` turns discovery
+off for a project that names its configuration explicitly or has none. Weigh a
+report against that shape rather than against a runtime library's.
+
+The organization's security policy lives in
+[`kanso-labs/.github`](https://github.com/kanso-labs/.github/blob/main/SECURITY.md)
+and is served to this repository. It cannot carry per-repository scope, which is
+why that paragraph is here. Two supporting facts belong with it: every `npm ci`
+in CI passes `--ignore-scripts`, and automerged dependency upgrades wait out a
+release-age grace period before they can land.
+
+**This repository keeps its own bug report form, and that is deliberate.**
+`.github/ISSUE_TEMPLATE/bug-report.yaml` asks for the three things a report here
+cannot be placed without — which bundler and version, which `style-dictionary`,
+which Node. A repository carrying its own `ISSUE_TEMPLATE/` opts out of the
+organization default entirely rather than merging with it, so this one takes no
+generic form. Do not delete it for consistency with the siblings; the opt-out is
+the point.
 
 **Releases used to tag but never reach npm, and what fixed it was not in this
 repository.** `Publish to npm` failed with `npm error code E404` on the `PUT` to
