@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.9.0...unplugin-style-dictionary-v0.10.0) (2026-09-18)
+
+
+### Features
+
+* **rspack:** expose rspack as a fifth entry point ([#308](https://github.com/kanso-labs/unplugin-style-dictionary/issues/308)) ([59f5ec0](https://github.com/kanso-labs/unplugin-style-dictionary/commit/59f5ec0865a4f33f3f702ad35c2e8097445aa1ba))
+
+
+### Bug Fixes
+
+* **build:** retry the atomic rename when Windows refuses it ([#320](https://github.com/kanso-labs/unplugin-style-dictionary/issues/320)) ([b12605a](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b12605a974049f51ed41293d425ac8d809f75e66))
+* **package:** stop the prepare script failing a consumer's install ([#316](https://github.com/kanso-labs/unplugin-style-dictionary/issues/316)) ([b15eb88](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b15eb88c5c24b180b1d8f2e41ca053806d2ffb5c))
+* **watch:** make the node_modules negation reach the watcher on Windows ([#322](https://github.com/kanso-labs/unplugin-style-dictionary/issues/322)) ([b8d9bd1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b8d9bd129b541e7543b1d6807026ee80ffca3623))
+
 ## [0.9.0](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.8.0...unplugin-style-dictionary-v0.9.0) (2026-09-17)
 
 
