@@ -1004,13 +1004,37 @@ What fails is the plugin, not the harness:
   holds the destination open — the exact case
   `never exposes a partially written file to a concurrent reader` models. This
   **refutes** the reasoning that put the case in doubt: libuv's
-  `FILE_SHARE_DELETE` does not save the rename here.
+  `FILE_SHARE_DELETE` does not save the rename here. **Fixed** in #306: both
+  rename primitives now back off on `EPERM` and `EBUSY`, eight attempts doubling
+  from 1ms. Measured on a `windows-latest` runner both ways — with the retry the
+  case passes, and with it removed the same runner reproduces the original error
+  verbatim.
 - **`node_modules` watching.** The negation added in #291 is built from
   forward-slashed absolute paths, and on Windows the edit reaches no rebuild.
   That was flagged as unverified in that pull request and is now measured.
 
 164 of 166 cases pass, including all four bundlers and the real dev server, so
 this is two defects rather than a dead platform.
+
+**A rename retry can only be proved on Windows, and a spy is not that proof.**
+No rename on Linux or macOS refuses over an open file, so the retry is
+unreachable there and the suite drives it through a spy that throws a hand-made
+`EPERM`. That pins the plumbing and nothing about the platform: it would keep
+passing if Windows raised a code the retry does not catch. What closes the gap
+is a temporary `windows-latest` job, run twice — once with the fix and once with
+the retry removed, so a real refusal is seen failing. Both runs are in #306. The
+job is removed before merge, because a check ruleset 19123565 does not require
+is free to go red without stopping anything.
+
+**The sync half of the atomic write is reached through Style Dictionary custom
+actions, not through an ordinary build.** A plain build calls
+`fs.promises.rename` alone — measured, `async=1 sync=0`. So a test meaning to
+cover `writeFileSyncAtomic` has to register an action that writes through
+`vol.writeFileSync`, and one that does not silently covers the async half twice.
+The cases in `the atomic writer` block do this, which also makes them
+order-dependent: the action is registered by an earlier case in the same block,
+so running one of them alone with `-t` fails with
+`Cannot read properties of undefined`.
 
 **Vite's dev-server watcher cannot be reached after `configResolved`, and its
 ignore list only grows.** It is built from the resolved config with
