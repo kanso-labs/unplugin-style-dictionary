@@ -66,6 +66,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
+  "author": "Kanso Labs <kanso.labs.org@gmail.com>",
   "dependencies": {
     "json5": "2.2.3",
     "picomatch": "4.0.7",
