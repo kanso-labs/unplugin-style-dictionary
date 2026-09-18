@@ -1046,6 +1046,26 @@ change and a separate decision.
 that reason — a Windows checkout otherwise yields CRLF and `oxfmt --check`
 rejects it.
 
+**The rename retry's budget is sized by what a dev server can wait, not by how
+long a handle lasts, and getting that backwards is what made the job flaky.**
+#306 retried for about 255ms, which clears a transient hold — the wrong case. A
+consumer polling the generated file holds it for a large fraction of wall time,
+and then no budget wins every race. 255ms failed a rename under one time in a
+hundred, which the concurrent-reader case turns into a failing run about one
+time in seven because it performs twenty of them. **Two green Windows runs were
+taken as verification of a timing-dependent fix; a wider sample showed it
+intermittent, on pull requests touching no runtime code at all.** Prefer a
+sample over a pass when what is being verified is a race.
+
+**The synchronous path keeps the shorter budget on purpose.** It waits on
+`Atomics.wait`, which blocks the event loop, so a dev server would hold its main
+thread for the whole of it — worse than the rebuild it is trying to save. The
+async path waits on a timer and keeps serving, so it can afford the two seconds.
+
+**The job is not in the ruleset, and should not join it until this has been
+quiet for a while.** A required check that fails on a documentation pull request
+blocks every merge, which is worse than not having the check.
+
 **The negation that un-ignores a `node_modules` token cannot be made to work on
 Windows, and that is measured rather than assumed.** Five rounds on a
 `windows-latest` runner:
