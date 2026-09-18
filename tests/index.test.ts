@@ -4805,7 +4805,7 @@ describe('the contributor documentation', () => {
     // A malformed pin would make every assertion below vacuous.
     expect(pinned).toMatch(/^\d+\.\d+\.\d+$/)
 
-    const documents = ['AGENTS.md', 'CONTRIBUTING.md']
+    const documents = ['AGENTS.md', 'README.md']
     let found = 0
 
     for (const document of documents) {
@@ -4826,7 +4826,10 @@ describe('the contributor documentation', () => {
     }
 
     // Both documents carry one, so a rewrite that drops the instruction fails
-    // here rather than passing an empty loop.
+    // here rather than passing an empty loop. It was `CONTRIBUTING.md` until
+    // that file was deleted in favour of the organization-wide one in
+    // `kanso-labs/.github`; a shared guide cannot carry this repository's build
+    // instructions, so they moved to the README and this followed them.
     expect(found).toBe(documents.length)
   })
 
