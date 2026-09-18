@@ -16,17 +16,29 @@ export default defineConfig({
       // the same reason `Build` ends in `npm run package:check` rather than
       // leaving the packed output merely visible.
       //
-      // Measured over six consecutive runs after the phase 4 tests landed:
-      // statements, functions and lines were identical every time at 94.51,
-      // 95.55 and 96.19, and branches moved between 82.32 and 82.87 — the
-      // watcher cases take different paths depending on what the filesystem
-      // reports and when. The margin below absorbs that swing and a slower
-      // runner's, and is still far above where deleting a test file lands.
+      // Re-based after the two rebuild error paths were covered. Measured over
+      // three consecutive runs, all four identical every time:
+      //
+      //   Statements  96.13% (572/595)
+      //   Branches    86.91% (332/382)
+      //   Functions   97.67% (84/86)
+      //   Lines       97.39% (523/537)
+      //
+      // Branches used to swing — the comment these numbers replace recorded
+      // 82.32 to 82.87, because the watcher cases take different paths
+      // depending on what the filesystem reports and when. It did not swing at
+      // all across these runs, but three runs is not a proof of zero variance,
+      // so the margin still absorbs one: a single branch is 0.26 points here.
+      //
+      // The floors sit about two points under each measurement, which is
+      // several units of whatever the metric counts and still far above where
+      // deleting a test file lands. They are floors rather than targets — the
+      // uploaded report is what tells a reader the actual number.
       thresholds: {
-        branches: 78,
-        functions: 92,
-        lines: 92,
-        statements: 90,
+        branches: 85,
+        functions: 95,
+        lines: 95,
+        statements: 94,
       },
     },
     // Claude Code puts its git worktrees under `.claude/worktrees/`, and each

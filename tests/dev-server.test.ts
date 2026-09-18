@@ -326,8 +326,12 @@ describe('under a real vite dev server', () => {
     // would discard the report before anything could read it. A recording
     // logger replaces both: it keeps the suite quiet and is where the failure
     // report actually arrives.
-    const logged: string[] = []
-    const record = (message: string) => {
+    // `unknown[]`, not `string[]`, because Vite's logger is typed for strings
+    // and does not only pass them: a rejected rebuild arrives as its own
+    // `Error` object. Every read below coerces, which is why the type is
+    // honest rather than convenient.
+    const logged: unknown[] = []
+    const record = (message: unknown) => {
       logged.push(message)
     }
 
@@ -386,9 +390,9 @@ describe('under a real vite dev server', () => {
       breakReferences(tokenSource, 1)
       await waitUntil(() => frames.some((f) => f.type === 'error'), 10000)
 
-      expect(logged.some((line) => line.includes('Compilation failed'))).toBe(
-        true,
-      )
+      expect(
+        logged.some((line) => String(line).includes('Compilation failed')),
+      ).toBe(true)
 
       const failure = frames.find((f) => f.type === 'error')
       expect(failure?.err?.plugin).toBe('unplugin-style-dictionary')
@@ -411,6 +415,80 @@ describe('under a real vite dev server', () => {
       expect(frames.some((f) => f.type === 'update')).toBe(true)
       expect(fs.readFileSync(generated, 'utf-8')).toContain('#00ff00')
     } finally {
+      socket.close()
+    }
+  }, 30000)
+
+  it('reports and shows a rebuild that fails outside the compile', async () => {
+    // `drain` wraps two different things: resolving the configurations, and
+    // building them. `runBuilds` reports its own failure, so the catch only
+    // has to speak for the other half — a `config` function of the consumer's
+    // that throws, or a watch list that cannot be rebuilt. Nothing drove a
+    // throwing `config` function under a live scheduler, so neither the
+    // `Rebuild failed:` report nor the overlay it raises had ever run.
+    const { directory, generated, tokenSource } = writeFixture('rebuild-throw')
+
+    // Armed after the first build lands. The first call has to succeed for a
+    // watcher to exist at all, and the dev server resolves configurations more
+    // than once on the way up, so the test says when rather than counting.
+    let armed = false
+
+    const { logged, server: running } = await bootServing(
+      directory,
+      path.join(directory, 'sd.config.json'),
+      {
+        config: () => {
+          if (armed) throw new Error('the config function refused')
+
+          return {
+            platforms: {
+              js: {
+                buildPath: posix(path.join(directory, 'generated')) + '/',
+                files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+                transformGroup: 'js',
+              },
+            },
+            source: [posix(path.join(directory, 'tokens')) + '/**/*.json'],
+          }
+        },
+      },
+    )
+
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    const { frames, socket } = await connectHmrClient(running)
+    await settle(300)
+    frames.length = 0
+
+    try {
+      armed = true
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#123456' } } }),
+      )
+
+      await waitUntil(() => frames.some((f) => f.type === 'error'), 10000)
+
+      // Both halves of the catch, which are the two lines that had never run.
+      // `String(...)` because this is the one case where the recording logger
+      // catches something that is not a string: Vite logs the rejected
+      // rebuild's own `Error` object beside the plugin's line, and
+      // `line.includes` throws on it.
+      expect(
+        logged.some((line) => String(line).includes('Rebuild failed:')),
+        'the failure was never reported',
+      ).toBe(true)
+
+      const failure = frames.find((f) => f.type === 'error')
+      expect(failure?.err?.plugin).toBe('unplugin-style-dictionary')
+      expect(failure?.err?.message).toContain('the config function refused')
+
+      // A failure here is not a failure of the compile, so the last good file
+      // is still on disk and the page is still rendering it — which is why the
+      // frame above has to exist.
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#0070f3')
+    } finally {
+      armed = false
       socket.close()
     }
   }, 30000)
@@ -443,9 +521,9 @@ describe('under a real vite dev server', () => {
         10000,
       )
 
-      expect(logged.some((line) => line.includes('Compilation failed'))).toBe(
-        true,
-      )
+      expect(
+        logged.some((line) => String(line).includes('Compilation failed')),
+      ).toBe(true)
       expect(frames.at(-1)?.type).toBe('error')
       expect(frames.at(-1)?.err?.message).toContain('(2)')
     } finally {
@@ -475,16 +553,17 @@ describe('under a real vite dev server', () => {
       // nothing arrives: the terminal report is what says the rebuild has been
       // and gone, and the frames are read after it.
       await waitUntil(
-        () => logged.some((line) => line.includes('Compilation failed')),
+        () =>
+          logged.some((line) => String(line).includes('Compilation failed')),
         10000,
       )
       await settle(1000)
 
       // The terminal line is unchanged — the option governs the page, not the
       // report.
-      expect(logged.some((line) => line.includes('Compilation failed'))).toBe(
-        true,
-      )
+      expect(
+        logged.some((line) => String(line).includes('Compilation failed')),
+      ).toBe(true)
       expect(frames.filter((f) => f.type === 'error')).toEqual([])
 
       frames.length = 0
