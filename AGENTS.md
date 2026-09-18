@@ -86,14 +86,38 @@ have two builds writing the same destinations at once. The rule's advice to
 collect the promises and `Promise.all` them is a bug here, not an optimisation.
 
 **Install with the Node version in `.tool-versions`.** CI resolves it from that
-file, and an older npm silently drops the platform entries the lockfile carries
-for Linux builds — a rewrite with no visible symptom until a Linux runner
-installs the wrong native binary. If `node --version` disagrees, prefix the
-command so it reads the pin rather than restating it:
+file, and an older npm rewrites `package-lock.json` in a way nothing here can
+see. If `node --version` disagrees, prefix the command so it reads the pin
+rather than restating it:
 
 ```bash
 mise exec node@"$(awk '/^nodejs/{print $2}' .tool-versions)" -- npm install
 ```
+
+**What the rewrite actually does, because the description used to overstate
+it.** This paragraph said an older npm "silently drops the platform entries" and
+that a "Linux runner installs the wrong native binary". Neither is true.
+Measured on `7f32dc0` — `npm install --package-lock-only --ignore-scripts` under
+npm 10.9.3, against the committed lock:
+
+```
+entry count: UNCHANGED (634)
+lines changed: 261
+markers moved:  75 "dev"   60 "libc"   1 "optional"
+```
+
+Nothing is dropped. The entries survive and the `libc` discriminator _inside_ 60
+of them goes, across `@napi-rs`, `@oxfmt`, `@oxlint`, `@rolldown`, `@rollup`,
+`@rspack`, `@yuku-codegen`, `@yuku-parser` and `lightningcss`. Without that
+field npm cannot tell the `-gnu` build from the `-musl` one, so it installs both
+— `npm ci --dry-run --os=linux --cpu=x64 --libc=glibc` goes from 503 packages
+to 511.
+
+So it is install bloat rather than a wrong binary, and nothing breaks. A weaker
+failure than the old wording claimed, and still worth pinning for: it has no
+visible symptom, and `npm ci` only compares the lock against `package.json`, so
+no check here can see it. **A check that could was proposed in #218 and
+rejected** — this is the description on its own.
 
 **The number is deliberately not written here.** Renovate enables `mise` and
 automerges minor and patch, so `.tool-versions` moves on its own schedule while
