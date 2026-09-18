@@ -130,3 +130,32 @@ jobs:
           files: .vitest/test-results.junit.xml
           report_type: test_results
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # TEMPORARY — probe for #306, removed before this pull request merges.
+  # Ruleset 19123565 requires `Build`, `Lint` and `Test` by exact string, so
+  # this name is not required and is free to go red without blocking a merge.
+  # It is here to run the atomic-write case on Windows, which is the only
+  # platform the rename retry is reachable on.
+  test-windows:
+    name: Test on Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: kanso-labs/github-actions/actions/setup-node@v3.3.1
+        with:
+          ignore-scripts: true
+
+      - name: Run the atomic write cases
+        run:
+          npx vitest run tests/index.test.ts -t "atomic writer"
+          --reporter=verbose
+
+      - name: Run the concurrent reader case
+        if: ${{ !cancelled() }}
+        run:
+          npx vitest run tests/index.test.ts -t "partially written file"
+          --reporter=verbose

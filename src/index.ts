@@ -283,6 +283,81 @@ function temporaryPathFor(destination: string): string {
   )
 }
 
+// Windows refuses a rename over a destination another process holds open, and
+// that is exactly the case the atomic write exists to serve: measured on a
+// `windows-latest` runner, the suite's own concurrent-reader case fails with
+// `EPERM: operation not permitted, rename`. So the feature inverts — the
+// compile fails rather than the read being protected.
+//
+// This **refutes** the reasoning that put the case in doubt. It was argued that
+// libuv opens files with `FILE_SHARE_DELETE`, so a concurrent reader would most
+// likely not block the rename. It blocks it.
+//
+// The blocking handle is transient — a reader, an indexer, a virus scanner —
+// so a short bounded backoff clears it. The bound matters as much as the retry:
+// a rename that genuinely cannot succeed has to fail rather than hang a dev
+// server, and the existing failure path already reports and lets `failOnError`
+// decide.
+//
+// Unreachable on Linux and macOS, where a rename over an open file succeeds.
+const RENAME_RETRY_CODES = new Set(['EBUSY', 'EPERM'])
+
+// Seven attempts over about 250ms in total. Doubling rather than a fixed
+// interval, so the common case — a handle already gone by the first retry —
+// costs a millisecond rather than the whole budget.
+const RENAME_RETRY_DELAYS_MS = [1, 2, 4, 8, 16, 32, 64, 128]
+
+function isRetryableRenameError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    RENAME_RETRY_CODES.has(error.code)
+  )
+}
+
+// `Atomics.wait` rather than a spin on `Date.now()`, because the sync path has
+// no event loop to yield to and a busy loop would hold the CPU for the whole
+// backoff — on the one platform where the handle it is waiting for belongs to
+// another process.
+const sleepSync = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+async function renameWithRetry(
+  temporary: string,
+  destination: string,
+): Promise<void> {
+  for (const delay of RENAME_RETRY_DELAYS_MS) {
+    try {
+      await fs.promises.rename(temporary, destination)
+      return
+    } catch (err) {
+      if (!isRetryableRenameError(err)) throw err
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+
+  // The last attempt is deliberately outside the loop and unguarded: the bound
+  // is a bound, so whatever it throws here is what the caller sees.
+  await fs.promises.rename(temporary, destination)
+}
+
+function renameWithRetrySync(temporary: string, destination: string): void {
+  for (const delay of RENAME_RETRY_DELAYS_MS) {
+    try {
+      fs.renameSync(temporary, destination)
+      return
+    } catch (err) {
+      if (!isRetryableRenameError(err)) throw err
+      sleepSync(delay)
+    }
+  }
+
+  fs.renameSync(temporary, destination)
+}
+
 const writeFileAtomic: typeof fs.promises.writeFile = async (
   file,
   data,
@@ -308,7 +383,7 @@ const writeFileAtomic: typeof fs.promises.writeFile = async (
       return
     }
 
-    await fs.promises.rename(temporary, file)
+    await renameWithRetry(temporary, file)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
@@ -331,7 +406,7 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
       return
     }
 
-    fs.renameSync(temporary, file)
+    renameWithRetrySync(temporary, file)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
