@@ -4723,6 +4723,56 @@ describe('the README options reference', () => {
     )
   })
 
+  it('states the style-dictionary peer range package.json actually declares', () => {
+    // The bullet used to advertise "Style Dictionary v4/v5" against a peer of
+    // `^5.0.0`, so a reader who followed it got an install npm refuses
+    // outright. Nothing caught it: the range lives in `package.json` and the
+    // claim in prose, and no check read both.
+    //
+    // Pinned against the declared range rather than against the string
+    // `^5.0.0`, so widening the peer fails here until the README follows.
+    const readme = fs.readFileSync(
+      new URL('../README.md', import.meta.url),
+      'utf-8',
+    )
+    const declared = packageJson.peerDependencies['style-dictionary']
+
+    const stated = /its range is\s+`(?<range>[^`]+)`/.exec(
+      normaliseWhitespace(readme),
+    )
+    expect(stated?.groups?.range).toBe(declared)
+
+    // The quoted ERESOLVE is measured output, so the range inside it has to be
+    // the same one — a stale paste would otherwise show a reader a refusal that
+    // no longer happens for the reason given.
+    expect(normaliseWhitespace(readme)).toContain(
+      `peer style-dictionary@"${declared}"`,
+    )
+  })
+
+  it('calls style-dictionary the one peer that is not optional, and it is', () => {
+    // Every other peer carries `optional: true`; this one deliberately does
+    // not, because the plugin cannot compile anything without it. The README
+    // says so in the same breath as the range, so the two are asserted
+    // together.
+    // Compared as a set rather than peer by peer: what is asserted is that
+    // `style-dictionary` is the *only* exception, so a new peer that forgets
+    // `optional: true` fails here too rather than joining it unnoticed.
+    expect(new Set(Object.keys(packageJson.peerDependenciesMeta))).toEqual(
+      new Set(
+        Object.keys(packageJson.peerDependencies).filter(
+          (peer) => peer !== 'style-dictionary',
+        ),
+      ),
+    )
+
+    for (const [peer, meta] of Object.entries(
+      packageJson.peerDependenciesMeta,
+    )) {
+      expect(meta.optional, `${peer} should be an optional peer`).toBe(true)
+    }
+  })
+
   it('documents every default-discovery filename the code tries', () => {
     // Wrong since the initial commit in both copies: they named two of the
     // four. Pinned against the array rather than against a transcription, so a
