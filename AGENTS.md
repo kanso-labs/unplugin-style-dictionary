@@ -295,14 +295,31 @@ label, and `codecov/codecov-action` uploads the same Cobertura file to Codecov,
 which is what keeps the history the trend lines are drawn from. Both read the
 report the first leg wrote, so neither re-measures.
 
-Neither adds a way for `Test` to fail. `fail_ci_if_error` is left at its default
-of `false`, and `.github/codecov.yml` marks both of Codecov's statuses
-informational — its default project status fails a pull request that lowers
-coverage against its base by any amount, which the run-to-run branch swing the
-thresholds in `vite.config.ts` are sized for would trip on its own. The floor
-there stays the one thing a drop has to clear. That file is `.yml` rather than
-the `.yaml` everything else here uses because Codecov recognises `codecov.yml`
-and `.codecov.yml` alone.
+Neither adds a way for `Test` to fail. **`Upload coverage report` passes
+`fail-on-error: false`**, because that action defaults it to `true` and waits up
+to 160 seconds for a service GitHub ships as public preview — so an incident
+there blocked every merge with the test result already known and green. Its own
+early exits cover `merge_group` and fork pull requests, which left same-repo
+pull requests and pushes to `main` exposed.
+
+The flag covers the outage class and nothing else, which is why it is safe.
+Measured by running the pinned v1.4.2 uploader directly against a rejected
+upload: `FAIL_ON_ERROR=true` exits 1 and `false` exits 0, with a byte-identical
+`::error` annotation. A missing report and an invalid input return 1 _before_
+`fail_on_error` is read, so a workflow broken by an edit still fails.
+
+**Do not test this by pointing `file:` at a report that is not produced.** That
+is the file-not-found path, which ignores the flag — it exits 1 either way, and
+reads as the change not working. Drive the uploader with a real report and
+credentials the API rejects.
+
+`fail_ci_if_error` is left at its default of `false`, and `.github/codecov.yml`
+marks both of Codecov's statuses informational — its default project status
+fails a pull request that lowers coverage against its base by any amount, which
+the run-to-run branch swing the thresholds in `vite.config.ts` are sized for
+would trip on its own. The floor there stays the one thing a drop has to clear.
+That file is `.yml` rather than the `.yaml` everything else here uses because
+Codecov recognises `codecov.yml` and `.codecov.yml` alone.
 
 **A third report goes up beside them, and it is not coverage.** A second
 `codecov/codecov-action` step, this one with `report_type: test_results`,

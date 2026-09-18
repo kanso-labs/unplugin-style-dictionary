@@ -57,9 +57,32 @@ jobs:
       - name: Run tests on the supported floor
         run: npm test
 
+      # fail-on-error is false for the same reason fail_ci_if_error is below.
+      # The action defaults it to true and waits up to 160 seconds for a
+      # service GitHub ships as public preview to process the report, then
+      # fails the step if the upload errored, if processing came back failed,
+      # or if it never reached a terminal status. `Test` is one of the three
+      # checks ruleset 19123565 requires by exact string, so that default puts
+      # every merge behind an upload — with the test result already known and
+      # green.
+      #
+      # The failure is still reported: the action emits its `::error`
+      # annotation either way, and only the step's exit code changes. Measured
+      # against the pinned v1.4.2 with a rejected upload — exit 1 becomes exit
+      # 0 and the annotation is byte-identical.
+      #
+      # It covers the outage class and nothing else. A missing report and an
+      # invalid input return 1 before `fail_on_error` is read at all, so a
+      # workflow broken by an edit here still fails loudly.
+      #
+      # The wait itself is left at its default. It costs time on a bad day and
+      # buys confirmation that the report processed on every other one, and
+      # with the step no longer able to fail the job there is nothing left for
+      # it to take down.
       - name: Upload coverage report
         uses: actions/upload-code-coverage@v1.4.2
         with:
+          fail-on-error: false
           file: coverage/cobertura-coverage.xml
           label: code-coverage/vitest
           language: TypeScript
