@@ -36,6 +36,10 @@
       "types": "./dist/rollup.d.ts",
       "default": "./dist/rollup.js"
     },
+    "./rspack": {
+      "types": "./dist/rspack.d.ts",
+      "default": "./dist/rspack.js"
+    },
     "./webpack": {
       "types": "./dist/webpack.d.ts",
       "default": "./dist/webpack.js"
@@ -79,6 +83,7 @@
     "@commitlint/cli": "21.2.2",
     "@commitlint/config-conventional": "21.2.2",
     "@eslint/js": "10.0.1",
+    "@rspack/core": "2.2.6",
     "@types/node": "26.6.1",
     "@types/picomatch": "4.0.3",
     "@types/semver": "7.8.0",
@@ -106,6 +111,7 @@
     "webpack": "5.111.0"
   },
   "peerDependencies": {
+    "@rspack/core": "*",
     "rolldown": "*",
     "rollup": "*",
     "style-dictionary": "^5.0.0",
@@ -113,6 +119,9 @@
     "webpack": "*"
   },
   "peerDependenciesMeta": {
+    "@rspack/core": {
+      "optional": true
+    },
     "rolldown": {
       "optional": true
     },

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Drives the ends of every declared peer range against the packed tarball.
 //
-// `package.json` makes five compatibility claims — `vite ^6 || ^7 || ^8`,
-// `style-dictionary ^5`, and `*` for rollup, rolldown and webpack — and until
-// this existed nothing stood behind any of them. `tests/targets.test.ts` drives
-// all four bundlers, which covers the adapters, but only against the single
-// version `devDependencies` pins: it cannot see a range end going stale.
+// `package.json` makes six compatibility claims — `vite ^6 || ^7 || ^8`,
+// `style-dictionary ^5`, and `*` for rolldown, rollup, rspack and webpack —
+// and until this existed nothing stood behind any of them.
+// `tests/targets.test.ts` drives all five bundlers, which covers the adapters,
+// but only against the single version `devDependencies` pins: it cannot see a
+// range end going stale.
 //
 // It installs the tarball rather than the working tree on purpose. A consumer
 // gets the packed file list resolved through the exports map, which is the
@@ -29,12 +30,12 @@ const root = new URL('..', import.meta.url).pathname
 // A JavaScript format rather than CSS: rollup and rolldown cannot resolve a
 // `.css` import without a loader plugin, and what is under test is this
 // package's entry points, not anyone's css handling. A JS module is the one
-// shape all four bundlers take unaided.
+// shape all five bundlers take unaided.
 const TOKEN = '#0070f3'
 const EXPECTED = '#0070f3'
 
 // One driver per bundler, named rather than looked up by key: a computed
-// lookup is untypeable here and the guard it needs is noise beside six
+// lookup is untypeable here and the guard it needs is noise beside seven
 // constants.
 const ROLLDOWN_DRIVER = `
     import { rolldown } from 'rolldown'
@@ -50,6 +51,32 @@ const ROLLUP_DRIVER = `
     const bundle = await rollup({ input: 'entry.js', plugins: [plugin({ config: 'sd.config.json' })] })
     await bundle.generate({ format: 'es' })
     await bundle.close()
+  `
+
+// rspack's Node API is webpack's, so this is that driver with one name
+// changed — including the CommonJS `require` form, since the `.default` hop is
+// the same hop on both.
+const RSPACK_DRIVER = `
+    import { rspack } from '@rspack/core'
+    import { createRequire } from 'node:module'
+    const require = createRequire(import.meta.url)
+    const { default: plugin } = require('@kanso-labs/unplugin-style-dictionary/rspack')
+    await new Promise((resolve, reject) => {
+      rspack(
+        {
+          entry: './entry.js',
+          mode: 'development',
+          output: { path: process.cwd() + '/dist' },
+          plugins: [plugin({ config: 'sd.config.json' })],
+        },
+        (error, stats) => {
+          if (error) return reject(error)
+          const errors = stats?.toJson().errors ?? []
+          if (errors.length > 0) return reject(new Error(errors[0]?.message ?? 'unknown'))
+          resolve()
+        },
+      )
+    })
   `
 
 const VITE_DRIVER = `
@@ -126,6 +153,12 @@ const FIXTURES = [
     driver: ROLLDOWN_DRIVER,
     end: 'only',
     versions: { rolldown: '*' },
+  },
+  {
+    bundler: '@rspack/core',
+    driver: RSPACK_DRIVER,
+    end: 'only',
+    versions: { '@rspack/core': '*' },
   },
   {
     bundler: 'webpack',

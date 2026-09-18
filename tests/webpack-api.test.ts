@@ -1,65 +1,127 @@
+import type { Stats as RspackStats } from '@rspack/core'
+
+import { rspack } from '@rspack/core'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import webpack from 'webpack'
 
+import type { UnpluginStyleDictionaryOptions } from '../src/types.ts'
+
+import rspackPlugin from '../src/rspack.ts'
 import webpackPlugin from '../src/webpack.ts'
 
-// webpack is the one host that reports a root of its own and does not run in
-// the directory it names. `context` is where it resolves everything from, and
-// the plugin used to ignore it — so a build whose context was not the working
-// directory looked for the configuration in the wrong place and reported
-// ENOENT before failing on the module it could not resolve.
+// webpack and rspack are the hosts that report a root of their own and do not
+// run in the directory it names. `context` is where each resolves everything
+// from, and the plugin used to ignore it — so a build whose context was not
+// the working directory looked for the configuration in the wrong place and
+// reported ENOENT before failing on the module it could not resolve.
+//
+// Every case below runs against both. rspack reimplements webpack's plugin API
+// rather than wrapping it, so the guarantees are the same ones — but unplugin
+// dispatches the two through separate plugin keys, and a plugin that taps only
+// `webpack` leaves rspack with none of this. Running the table is what says
+// which of these hold there.
+//
+// All five are what that key buys. With `rspack: adoptCompiler` removed and
+// the `isWebpack` flag narrowed back to webpack alone, every one of them fails
+// against rspack while every webpack case still passes — the race, the stale
+// bundle, the compiler context, the `stats` channel and the build context.
+// Seven consecutive runs, macOS, rspack 2.2.6.
+
+type Compile = (
+  context: string,
+  outputPath: string,
+  options: UnpluginStyleDictionaryOptions,
+) => Promise<StatsLike | undefined>
+
+// What both `Stats` objects offer that these assertions read. webpack and
+// rspack each export their own, and neither is assignable to the other.
+interface StatsLike {
+  hasErrors: () => boolean
+  toJson: (options?: { all: boolean }) => {
+    errors?: Array<{ message: string }> | undefined
+    warnings?: Array<{ message: string }> | undefined
+  }
+}
+
+// Each host builds its own plugin instance and its own compiler, because the
+// two type the plugin differently — `WebpackPluginInstance` against
+// `RspackPluginInstance` — even though the call shapes are identical.
+const COMPILERS: Array<{ compile: Compile; name: string }> = [
+  {
+    compile: async (context, outputPath, options) =>
+      new Promise<undefined | webpack.Stats>((resolve, reject) => {
+        webpack(
+          {
+            context,
+            entry: './entry.js',
+            mode: 'development',
+            output: { path: outputPath },
+            plugins: [webpackPlugin(options)],
+          },
+          (error, result) => {
+            if (error) reject(error)
+            else resolve(result)
+          },
+        )
+      }),
+    name: 'webpack',
+  },
+  {
+    compile: async (context, outputPath, options) =>
+      new Promise<RspackStats | undefined>((resolve, reject) => {
+        rspack(
+          {
+            context,
+            entry: './entry.js',
+            mode: 'development',
+            output: { path: outputPath },
+            plugins: [rspackPlugin(options)],
+          },
+          (error, result) => {
+            if (error) reject(error)
+            else resolve(result)
+          },
+        )
+      }),
+    name: 'rspack',
+  },
+]
+
 // Builds the fixture with an async `config` function that yields for a known
 // time. That latency is the whole experiment: a real one has it — a remote
 // fetch, a transpiled TypeScript config, a child process — while Style
 // Dictionary's own work is CPU-bound and blocks the loop, which is what masked
 // the race on ordinary configurations.
-const buildWithSlowConfig = async (context: string, delayMs: number) => {
-  return new Promise<undefined | webpack.Stats>((resolve, reject) => {
-    webpack(
-      {
-        context,
-        entry: './entry.js',
-        mode: 'development',
-        output: { path: path.join(context, 'dist') },
-        plugins: [
-          webpackPlugin({
-            config: async () => {
-              await new Promise((yieldTo) => setTimeout(yieldTo, delayMs))
+const buildWithSlowConfig = async (
+  compile: Compile,
+  context: string,
+  delayMs: number,
+) =>
+  compile(context, path.join(context, 'dist'), {
+    config: async () => {
+      await new Promise((yieldTo) => setTimeout(yieldTo, delayMs))
 
-              return {
-                platforms: {
-                  js: {
-                    buildPath:
-                      path.join(context, 'generated').replace(/\\/g, '/') + '/',
-                    files: [
-                      { destination: 'tokens.js', format: 'javascript/es6' },
-                    ],
-                    transformGroup: 'js',
-                  },
-                },
-                source: [
-                  path.join(context, 'tokens', '*.json').replace(/\\/g, '/'),
-                ],
-              }
-            },
-            silent: true,
-          }),
-        ],
-      },
-      (error, result) => {
-        if (error) reject(error)
-        else resolve(result)
-      },
-    )
+      return {
+        platforms: {
+          js: {
+            buildPath:
+              path.join(context, 'generated').replace(/\\/g, '/') + '/',
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [path.join(context, 'tokens', '*.json').replace(/\\/g, '/')],
+      }
+    },
+    silent: true,
   })
-}
 
-describe('under a real webpack compiler', () => {
+describe.each(COMPILERS)('under a real $name compiler', ({ compile, name }) => {
   const tempDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'unplugin-style-dictionary-webpack-'),
+    path.join(os.tmpdir(), `unplugin-style-dictionary-${name}-`),
   )
 
   afterEach(() => {
@@ -67,11 +129,11 @@ describe('under a real webpack compiler', () => {
       fs.rmSync(tempDir, { force: true, recursive: true })
   })
 
-  // A fixture whose entry imports the generated file, so webpack has to
+  // A fixture whose entry imports the generated file, so the host has to
   // resolve it — which is the thing that used to happen while the compile was
   // still running.
-  const writeRaceFixture = (name: string, stale?: string) => {
-    const context = path.join(tempDir, name)
+  const writeRaceFixture = (fixture: string, stale?: string) => {
+    const context = path.join(tempDir, fixture)
     fs.mkdirSync(path.join(context, 'tokens'), { recursive: true })
     fs.mkdirSync(path.join(context, 'generated'), { recursive: true })
 
@@ -101,10 +163,10 @@ describe('under a real webpack compiler', () => {
     return context
   }
 
-  it('compiles before webpack resolves the generated module', async () => {
+  it(`compiles before ${name} resolves the generated module`, async () => {
     const context = writeRaceFixture('race')
 
-    const stats = await buildWithSlowConfig(context, 400)
+    const stats = await buildWithSlowConfig(compile, context, 400)
 
     // Unpatched this is `Module not found: Error: Can't resolve
     // './generated/tokens.js'` from about 10ms of real latency upward.
@@ -120,7 +182,7 @@ describe('under a real webpack compiler', () => {
     // the same run the plugin logs as a success.
     const context = writeRaceFixture('stale', '#STALE00')
 
-    const stats = await buildWithSlowConfig(context, 50)
+    const stats = await buildWithSlowConfig(compile, context, 50)
 
     expect(stats?.toJson().errors ?? []).toEqual([])
 
@@ -132,7 +194,7 @@ describe('under a real webpack compiler', () => {
     expect(bundle).not.toContain('#STALE00')
 
     // And the fresh value really was written, so the assertion above is about
-    // what webpack read rather than about what the plugin produced.
+    // what the host read rather than about what the plugin produced.
     expect(
       fs.readFileSync(path.join(context, 'generated', 'tokens.js'), 'utf-8'),
     ).toContain('#00ff00')
@@ -168,26 +230,11 @@ describe('under a real webpack compiler', () => {
 
     fs.writeFileSync(path.join(context, 'entry.js'), 'export const entry = 1\n')
 
-    const stats = await new Promise<undefined | webpack.Stats>(
-      (resolve, reject) => {
-        webpack(
-          {
-            context,
-            entry: './entry.js',
-            mode: 'development',
-            output: { path: path.join(tempDir, 'dist') },
-            // `config` is relative, so only the compiler's context can find it.
-            plugins: [
-              webpackPlugin({ config: 'sd.config.json', silent: true }),
-            ],
-          },
-          (error, result) => {
-            if (error) reject(error)
-            else resolve(result)
-          },
-        )
-      },
-    )
+    // `config` is relative, so only the compiler's context can find it.
+    const stats = await compile(context, path.join(tempDir, 'dist'), {
+      config: 'sd.config.json',
+      silent: true,
+    })
 
     expect(stats?.hasErrors()).toBe(false)
 
@@ -197,7 +244,7 @@ describe('under a real webpack compiler', () => {
   }, 60000)
 
   it('reports a failed compile through stats rather than only the console', async () => {
-    // webpack has no `this.warn` — its `buildStart` context is exactly
+    // Neither host offers `this.warn` — the `buildStart` context is exactly
     // `parse`, `addWatchFile`, `emitFile`, `getWatchFiles` and
     // `getNativeBuildContext`, measured — so the plugin's messages went to the
     // console and nowhere else. Absent from `stats.toJson()`, they were absent
@@ -205,7 +252,7 @@ describe('under a real webpack compiler', () => {
     //
     // `failOnError: false` so the build completes: a failure that stops the
     // run ends it before a compilation exists to carry the report, and this is
-    // the case where webpack has somewhere to put it.
+    // the case where the host has somewhere to put it.
     const context = path.join(tempDir, 'stats-report')
     const tokensDirectory = path.join(context, 'tokens')
     fs.mkdirSync(tokensDirectory, { recursive: true })
@@ -234,29 +281,11 @@ describe('under a real webpack compiler', () => {
       }),
     )
 
-    const stats = await new Promise<undefined | webpack.Stats>(
-      (resolve, reject) => {
-        webpack(
-          {
-            context,
-            entry: './entry.js',
-            mode: 'development',
-            output: { path: path.join(context, 'dist') },
-            plugins: [
-              webpackPlugin({
-                config: configFile,
-                failOnError: false,
-                logLevel: 'silent',
-              }),
-            ],
-          },
-          (error, result) => {
-            if (error) reject(error)
-            else resolve(result)
-          },
-        )
-      },
-    )
+    const stats = await compile(context, path.join(context, 'dist'), {
+      config: configFile,
+      failOnError: false,
+      logLevel: 'silent',
+    })
 
     const warnings = (stats?.toJson({ all: true }).warnings ?? []).map(
       (warning) => warning.message,
@@ -277,11 +306,11 @@ describe('under a real webpack compiler', () => {
     expect(warnings.some((message) => message.includes('['))).toBe(false)
   }, 60000)
 
-  it('tells a config function webpack its mode and whether it watches', async () => {
-    // The issue expected this to be unreachable — webpack's `buildStart`
-    // context carries no `meta`, so it proposed `getNativeBuildContext()` or a
-    // hardcoded `false`. Neither is needed: the `webpack` hook is handed the
-    // compiler, which knows both. `mode` is a webpack option, and `watchMode`
+  it(`tells a config function ${name} its mode and whether it watches`, async () => {
+    // The issue expected this to be unreachable — the `buildStart` context
+    // carries no `meta`, so it proposed `getNativeBuildContext()` or a
+    // hardcoded `false`. Neither is needed: the host's own hook is handed the
+    // compiler, which knows both. `mode` is a compiler option, and `watchMode`
     // is only set once `watch()` has been called, so it is read per compile
     // rather than when the plugin is installed.
     const context = path.join(tempDir, 'config-context')
@@ -295,52 +324,31 @@ describe('under a real webpack compiler', () => {
 
     const seen: Array<{ command: string; mode: string; watch: boolean }> = []
 
-    await new Promise<undefined | webpack.Stats>((resolve, reject) => {
-      webpack(
-        {
-          context,
-          entry: './entry.js',
-          mode: 'development',
-          output: { path: path.join(context, 'dist') },
-          plugins: [
-            webpackPlugin({
-              config: (buildContext) => {
-                seen.push({ ...buildContext })
+    await compile(context, path.join(context, 'dist'), {
+      config: (buildContext) => {
+        seen.push({ ...buildContext })
 
-                return {
-                  platforms: {
-                    js: {
-                      buildPath:
-                        path.join(context, 'generated').replace(/\\/g, '/') +
-                        '/',
-                      files: [
-                        { destination: 'tokens.js', format: 'javascript/es6' },
-                      ],
-                      transformGroup: 'js',
-                    },
-                  },
-                  source: [
-                    path.join(tokensDirectory, '*.json').replace(/\\/g, '/'),
-                  ],
-                }
-              },
-              logLevel: 'silent',
-            }),
-          ],
-        },
-        (error, result) => {
-          if (error) reject(error)
-          else resolve(result)
-        },
-      )
+        return {
+          platforms: {
+            js: {
+              buildPath:
+                path.join(context, 'generated').replace(/\\/g, '/') + '/',
+              files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+              transformGroup: 'js',
+            },
+          },
+          source: [path.join(tokensDirectory, '*.json').replace(/\\/g, '/')],
+        }
+      },
+      logLevel: 'silent',
     })
 
     expect(seen.length).toBeGreaterThan(0)
 
-    // webpack's own `mode`, not a value derived from `command`.
+    // The compiler's own `mode`, not a value derived from `command`.
     expect(seen[0]?.mode).toBe('development')
 
-    // webpack does not serve, so it builds — and this run is not a watch.
+    // Neither host serves, so it builds — and this run is not a watch.
     expect(seen[0]?.command).toBe('build')
     expect(seen[0]?.watch).toBe(false)
   }, 60000)

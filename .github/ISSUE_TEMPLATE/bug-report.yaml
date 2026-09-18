@@ -32,7 +32,7 @@ body:
       required: true
 
   # The three below are what a report cannot be placed without. This package
-  # targets four bundlers from one implementation and declares a peer range for
+  # targets five bundlers from one implementation and declares a peer range for
   # each, so which bundler, which Style Dictionary and which Node is the
   # difference between a reproducible report and a guess.
   - type: dropdown
@@ -43,6 +43,7 @@ body:
         - Vite
         - Rollup
         - Rolldown
+        - Rspack
         - Webpack
         - More than one
     validations:

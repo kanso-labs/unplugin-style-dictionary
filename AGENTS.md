@@ -7,12 +7,12 @@ Guidance for coding agents working in this repository.
 `@kanso-labs/unplugin-style-dictionary` compiles Style Dictionary design tokens
 ahead of a bundler, and watches and recompiles them while a dev server runs. It
 is built on [unplugin](https://unplugin.unjs.io), so one implementation in
-`src/index.ts` targets Vite, Rolldown, Rollup and Webpack.
+`src/index.ts` targets Vite, Rolldown, Rollup, Rspack and Webpack.
 
-`src/{vite,rolldown,rollup,webpack}.ts` are three lines each — they re-export
-the matching `unplugin.<target>` and exist to give every bundler its own package
-entry point. **The behaviour lives in `src/index.ts` alone**, so a fix belongs
-there and reaches all four targets at once.
+`src/{vite,rolldown,rollup,rspack,webpack}.ts` are three lines each — they
+re-export the matching `unplugin.<target>` and exist to give every bundler its
+own package entry point. **The behaviour lives in `src/index.ts` alone**, so a
+fix belongs there and reaches all five targets at once.
 
 [`README.md`](README.md) is the consumer-facing documentation: options, per
 bundler usage, examples. Keep it correct when you change the public surface.
@@ -87,9 +87,12 @@ Specific to this repository:
 
 - Every public option is declared and documented in `src/types.ts`. That file is
   the contract the README describes — change them together.
-- The build emits ESM for all five entry points, wired through `exports` in
+- The build emits ESM for all six entry points, wired through `exports` in
   `package.json`. Adding a bundler target means a new `src/<target>.ts`, a new
-  entry in `tsdown.config.ts`, and a new `exports` key.
+  entry in `tsdown.config.ts`, and a new `exports` key — **and, where unplugin
+  dispatches that host through a plugin key of its own, a matching key in
+  `src/index.ts`.** The entry point alone gives a target a published import and
+  none of the wiring; see the rspack trap below.
 
 ## Testing
 
@@ -188,11 +191,11 @@ the ruleset does not require.
 **`Build` also smoke-tests both ends of every declared peer range**, through
 `npm run peers:check`. `package.json` claims `vite ^6 || ^7 || ^8`,
 `style-dictionary ^5`, and `*` for rollup, rolldown and webpack, and nothing
-stood behind any of them: `tests/targets.test.ts` drives all four bundlers, so
+stood behind any of them: `tests/targets.test.ts` drives all five bundlers, so
 the adapters are covered, but only against the single version `devDependencies`
 pins — it cannot see a range end going stale.
 
-`scripts/check-peers.mjs` packs the tarball and installs it into six throwaway
+`scripts/check-peers.mjs` packs the tarball and installs it into seven throwaway
 fixtures, so what it exercises is the published file list resolved through the
 exports map rather than the working tree. style-dictionary rides on rollup at
 each end of `^5` while the bundler stays constant, which is what isolates it.
@@ -206,19 +209,19 @@ webpack fixture goes through the README's CommonJS `require` form, because the
 A version outside a declared range fails at the install rather than the
 assertion — npm refuses it with ERESOLVE, which is the peer declaration doing
 its job. To prove the fixtures themselves bite, break the built package: with
-`resolveConfigs` stubbed to return nothing, all six fail.
+`resolveConfigs` stubbed to return nothing, every one of them fails.
 
 **That command is three tools, and the split is what each half can see.**
 publint reads `package.json` and the packed file list, so it catches an exports
 target aimed at a file the tarball does not carry — which is exactly what losing
 `fixedExtension: false` produces. `scripts/check-package.mjs` asks Node to
-resolve and then evaluate all five entries, which is the only way to reach the
+resolve and then evaluate all six entries, which is the only way to reach the
 failures publint calls "All good!": `default` rewritten to `import`, a target
 entry that stops handing back a callable `.default`, and a subpath deleted from
 the map outright, since publint has no opinion on which subpaths ought to exist.
 attw is the third, and it sees exactly one thing the other two do not: a
 **transitive** declaration file that is not itself an exports target.
-`dist/types.d.ts` is imported by `dist/index.d.ts` and by all four target
+`dist/types.d.ts` is imported by `dist/index.d.ts` and by all five target
 declarations, and no condition names it — so publint never looks at it. Delete
 it after a build and publint reports "All good!" and `check-package.mjs` passes
 every one of its checks, while attw exits 1 with _Import found in a type
@@ -652,10 +655,10 @@ itself.
 **A `require()` of a target entry returns the namespace, so callers need
 `.default`.** Node hands a `require(esm)` caller the module namespace object,
 not the default export. That was briefly untrue: while the package shipped a
-CommonJS build, tsdown's `cjsDefault` rewrote the four single-default target
+CommonJS build, tsdown's `cjsDefault` rewrote the five single-default target
 entries to `module.exports = fn`, and `require()` gave the function directly.
 Dropping that build put the `.default` hop back. The README documents the
-current form, and `scripts/check-package.mjs` requires all four target entries
+current form, and `scripts/check-package.mjs` requires all five target entries
 and asserts the hop, so the two cannot drift apart quietly.
 
 **`sideEffects: false` is a claim about module scope, not about what the plugin
@@ -936,6 +939,33 @@ every build that reports one, which is `failOnError`'s decision and not the
 logger's. The report goes on the warning channel on every host, and webpack's
 lands in `compilation.warnings` rather than `compilation.errors` for the same
 reason: `failOnError: false` has to leave the build passing.
+
+**An entry point is not a target, and rspack is where that showed.** Adding
+`src/rspack.ts`, a `tsdown` entry and an `exports` key publishes the import and
+buys nothing else: unplugin dispatches rspack through `plugin.rspack(compiler)`
+and webpack through `plugin.webpack(compiler)`, never both, so a plugin that
+taps only `webpack` leaves rspack with no compiler at all. Three of the five
+cases in `tests/webpack-api.test.ts` fail that way, and so do the other two —
+all five go red against rspack while all five stay green against webpack, while
+the package still builds, still resolves and still publishes the subpath.
+
+`isWebpack` therefore names both frameworks, and one `adoptCompiler` serves both
+keys. It is typed against `BundlerCompiler`, a structural slice of the compiler
+rather than either host's own `Compiler`: webpack and rspack each export their
+own and neither is assignable to the other, so a function written against one
+cannot be handed to the other's key.
+
+rspack loses the `make` race exactly as webpack does, which is worth knowing
+before assuming a faster bundler is a safer one: with the compile left in
+`buildStart`, `Module not found` on the generated file is the first thing the
+revert produces. Being ordered ahead of module resolution is the guarantee;
+being fast is not one.
+
+**The peer is `@rspack/core`, not `rspack`.** `rspack` is an unrelated package
+sitting at 0.1.1 on npm; what a consumer installs, what unplugin declares, and
+what the compiler is imported from is `@rspack/core`. The subpath is still
+`…/rspack`, matching `unplugin.rspack` and every other entry being named for its
+bundler rather than its package.
 
 **webpack's compile runs before its compilation exists.** unplugin gives webpack
 no `this.warn` at all — its `buildStart` context is exactly `parse`,

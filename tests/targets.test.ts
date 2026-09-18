@@ -1,3 +1,6 @@
+import type { Stats as RspackStats } from '@rspack/core'
+
+import { rspack } from '@rspack/core'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,6 +12,7 @@ import webpack from 'webpack'
 
 import rolldownPlugin from '../src/rolldown.ts'
 import rollupPlugin from '../src/rollup.ts'
+import rspackPlugin from '../src/rspack.ts'
 import vitePlugin from '../src/vite.ts'
 import webpackPlugin from '../src/webpack.ts'
 
@@ -164,6 +168,48 @@ const TARGETS = [
       return output.map((chunk) => ('code' in chunk ? chunk.code : '')).join('')
     },
     name: 'rolldown',
+  },
+  {
+    // rspack's Node API is webpack's, so this is the webpack case with one
+    // import changed — which is the claim worth pinning. unplugin dispatches
+    // the two through separate plugin keys, so the entry point being new is
+    // not the only thing that could be missing: without an `rspack` key the
+    // compiler is never adopted, and the compile falls back to `buildStart`
+    // inside `make`, where the module graph is already being resolved.
+    build: async (
+      directory: string,
+      configFile: string,
+      onMessage?: MessageSink,
+    ) => {
+      const stats = await new Promise<RspackStats | undefined>(
+        (resolve, reject) => {
+          rspack(
+            {
+              context: directory,
+              entry: './entry.js',
+              mode: 'development',
+              output: { path: path.join(directory, 'dist') },
+              plugins: [rspackPlugin({ config: configFile, silent: true })],
+            },
+            (error, result) => {
+              if (error) reject(error)
+              else resolve(result)
+            },
+          )
+        },
+      )
+
+      const json = stats?.toJson({ all: true })
+      for (const warning of json?.warnings ?? []) {
+        onMessage?.(warning.message)
+      }
+
+      const errors = json?.errors ?? []
+      if (errors.length > 0) throw new Error(errors[0]?.message ?? 'unknown')
+
+      return fs.readFileSync(path.join(directory, 'dist', 'main.js'), 'utf-8')
+    },
+    name: 'rspack',
   },
   {
     build: async (

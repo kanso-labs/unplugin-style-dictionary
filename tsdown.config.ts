@@ -7,6 +7,7 @@ export default defineConfig({
     'src/index.ts',
     'src/rolldown.ts',
     'src/rollup.ts',
+    'src/rspack.ts',
     'src/vite.ts',
     'src/webpack.ts',
   ],
