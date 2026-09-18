@@ -167,6 +167,42 @@ function nodeModulesNegations(paths: string[]): string[] {
   return Array.from(negations)
 }
 
+// The directories holding token files that resolve through `node_modules`.
+//
+// Vite's ignore list cannot be argued with on Windows. The negation below is
+// honoured on Linux and macOS, and there a token inside `node_modules` rebuilds
+// through the dev-server watcher like any other. On Windows it is not, and no
+// spelling of the negation changes that — measured on a `windows-latest`
+// runner: the file path, every ancestor directory, and the package subtree as
+// a globstar all leave the edit reaching no rebuild, while the same fixture
+// outside `node_modules` rebuilds. `server.watcher.add()` does not reach it
+// either, which is the same limit AGENTS.md already records for a path an
+// earlier ignore entry covers.
+//
+// A symlink is *not* what distinguishes them, which is worth stating because it
+// is the obvious suspect: a real directory inside `node_modules` fails exactly
+// as the symlinked one does, and a symlink outside it succeeds.
+//
+// So these directories get a watcher of the plugin's own, which Vite's ignore
+// list has no say over. It runs on every platform rather than behind a
+// `process.platform` check: one path that is exercised everywhere beats a
+// Windows-only branch that nothing else executes, and the scheduler already
+// collapses the duplicate trigger this produces where the negation also works.
+function nodeModulesWatchDirectories(paths: string[]): string[] {
+  const directories = new Set<string>()
+
+  for (const file of paths) {
+    const normalised = file.replace(/\\/g, '/')
+    if (!normalised.includes('/node_modules/')) continue
+
+    // The directory rather than the file: `fs.watch` on a file stops reporting
+    // once an editor replaces it by rename, which is what an atomic save does.
+    directories.add(path.dirname(normalised))
+  }
+
+  return Array.from(directories)
+}
+
 function paint(code: string, value: string, allowed: boolean): string {
   return allowed ? `\u001B[${code}m${value}\u001B[0m` : value
 }
@@ -2215,11 +2251,58 @@ const unpluginFactory: UnpluginFactory<
         // Watch configuration files and token files
         server.watcher.add(targets.paths)
 
+        // The `node_modules` half, which Vite's watcher cannot be made to
+        // deliver on Windows — see `nodeModulesWatchDirectories`. Keyed by
+        // directory so a configuration that changes can close the ones it no
+        // longer needs rather than accumulating watchers for the session.
+        const ownWatchers = new Map<string, fs.FSWatcher>()
+
+        const watchNodeModules = (forPaths: string[]) => {
+          const wanted = new Set(nodeModulesWatchDirectories(forPaths))
+
+          for (const [directory, watcher] of ownWatchers) {
+            if (wanted.has(directory)) continue
+            watcher.close()
+            ownWatchers.delete(directory)
+          }
+
+          for (const directory of wanted) {
+            if (ownWatchers.has(directory)) continue
+
+            try {
+              const watcher = fs.watch(directory, (_event, filename) => {
+                if (filename === null) return
+
+                const changed = path.posix.join(directory, filename)
+                if (!isWatchedSource(changed, targets.patterns)) return
+
+                void schedule(path.basename(changed)).catch(() => {})
+              })
+
+              // A watcher of ours must not be what keeps a process alive; the
+              // dev server already is.
+              watcher.unref()
+              ownWatchers.set(directory, watcher)
+            } catch {
+              // A directory that cannot be watched is not a reason to fail a
+              // dev server. Where the negation works — Linux, macOS — Vite's
+              // own watcher is still delivering these events.
+            }
+          }
+        }
+
+        watchNodeModules(targets.paths)
+        server.httpServer?.once('close', () => {
+          for (const watcher of ownWatchers.values()) watcher.close()
+          ownWatchers.clear()
+        })
+
         // Runs once per rebuild rather than once per event, which is why it
         // is handed to the scheduler rather than done in the listener.
         refreshServerWatchList = async (rebuilt) => {
           targets = await getWatchTargets(rebuilt)
           server.watcher.add(targets.paths)
+          watchNodeModules(targets.paths)
         }
 
         if (errorOverlay) {

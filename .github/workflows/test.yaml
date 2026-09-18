@@ -160,8 +160,3 @@ jobs:
 
       - name: Run tests
         run: npm test
-
-      # TEMPORARY — the #307 diagnostic, removed once it has answered.
-      - name: Report what the watcher matches on Windows
-        if: ${{ !cancelled() }}
-        run: npx vitest run tests/windows-probe.test.ts --reporter=verbose
