@@ -1,10 +1,14 @@
 // TEMPORARY — a diagnostic for #307, removed once it has answered.
 //
-// The node_modules negation does not reach the watcher on Windows, and #307 is
-// explicit that what chokidar matches a path against there has to be
-// established before anything is changed. This prints the three things that
-// could differ: what the plugin generates, what the watcher holds, and what
-// the matcher makes of the pair.
+// Round 3. Rounds 1 and 2 asked the watcher what it was watching, and on
+// Windows `getWatched()` returns an empty object — no root, no generated
+// directory, nothing — while other dev-server cases pass there. So it reports
+// nothing useful on that platform and cannot be used to tell a working watch
+// from a broken one.
+//
+// This round measures behaviour instead: boot a server per candidate negation
+// shape, edit the token file, and report whether the rebuild happened. A
+// control outside `node_modules` says whether watching works at all.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,14 +19,29 @@ import vitePlugin from '../src/vite.ts'
 
 const posix = (value: string) => value.replace(/\\/g, '/')
 
-it('reports what the watcher matches a node_modules path against', async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'usd-win-probe-'))
-  const base = path.join(tempDir, 'node-modules-source')
+const report = (label: string, value: unknown) => {
+  // eslint-disable-next-line no-console
+  console.log(`PROBE ${label}: ${JSON.stringify(value)}`)
+}
+
+const waitFor = async (satisfied: () => boolean, timeoutMs: number) => {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (satisfied()) return true
+    await new Promise((settle) => setTimeout(settle, 100))
+  }
+
+  return satisfied()
+}
+
+// One fixture per case, because a rebuild in one must not be read as a rebuild
+// in another.
+const buildFixture = (tempDir: string, name: string, insideNodeModules: boolean) => {
+  const base = path.join(tempDir, name)
   const app = path.join(base, 'app')
   const pkg = path.join(base, 'packages', 'tokens')
 
   fs.mkdirSync(path.join(pkg, 'src'), { recursive: true })
-  fs.mkdirSync(path.join(app, 'node_modules', '@acme'), { recursive: true })
   fs.mkdirSync(path.join(app, 'generated'), { recursive: true })
   fs.writeFileSync(
     path.join(pkg, 'package.json'),
@@ -32,13 +51,16 @@ it('reports what the watcher matches a node_modules path against', async () => {
     path.join(pkg, 'src', 'color.json'),
     JSON.stringify({ color: { brand: { value: '#123456' } } }),
   )
-  fs.symlinkSync(pkg, path.join(app, 'node_modules', '@acme', 'tokens'), 'dir')
 
-  const viaNodeModules = posix(
-    path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json'),
-  )
+  let tokenSource = path.join(pkg, 'src', 'color.json')
+  if (insideNodeModules) {
+    fs.mkdirSync(path.join(app, 'node_modules', '@acme'), { recursive: true })
+    fs.symlinkSync(pkg, path.join(app, 'node_modules', '@acme', 'tokens'), 'dir')
+    tokenSource = path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json')
+  }
 
   const configFile = path.join(app, 'sd.config.json')
+  const generated = path.join(app, 'generated', 'vars.css')
   fs.writeFileSync(
     configFile,
     JSON.stringify({
@@ -49,8 +71,22 @@ it('reports what the watcher matches a node_modules path against', async () => {
           transformGroup: 'css',
         },
       },
-      source: [viaNodeModules],
+      source: [posix(tokenSource)],
     }),
+  )
+
+  return { app, configFile, generated, tokenSource: posix(tokenSource) }
+}
+
+const measure = async (
+  tempDir: string,
+  label: string,
+  { extraIgnored = [], insideNodeModules = true } = {},
+) => {
+  const { app, configFile, generated, tokenSource } = buildFixture(
+    tempDir,
+    label.replace(/[^a-z0-9]+/gi, '-'),
+    insideNodeModules,
   )
 
   const server = await createServer({
@@ -58,92 +94,80 @@ it('reports what the watcher matches a node_modules path against', async () => {
     logLevel: 'silent',
     plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
     root: app,
-    server: { host: '127.0.0.1' },
+    server: { host: '127.0.0.1', watch: { ignored: extraIgnored } },
   })
   await server.listen()
 
-  const report = (label: string, value: unknown) => {
-    // eslint-disable-next-line no-console
-    console.log(`PROBE ${label}: ${JSON.stringify(value)}`)
-  }
-
   try {
-    report('platform', process.platform)
-    report('os.tmpdir', os.tmpdir())
-    report('token path as built', viaNodeModules)
-    report('token path realpath', posix(fs.realpathSync(viaNodeModules)))
-    report('token path native', path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json'))
+    await waitFor(() => fs.existsSync(generated), 10000)
+    const first = fs.existsSync(generated)
+      ? fs.readFileSync(generated, 'utf-8').includes('#123456')
+      : false
 
-    const ignored = server.config.server.watch?.ignored
-    report(
-      'ignored entries mentioning node_modules',
-      (Array.isArray(ignored) ? ignored : [ignored])
-        .filter((entry) => typeof entry === 'string' && entry.includes('node_modules'))
-        .slice(0, 6),
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
     )
 
-    // What the watcher actually holds, which is the set the negation had to
-    // reach. Only the node_modules half, so the output stays readable.
-    const watched = server.watcher.getWatched()
-    const dirs = Object.keys(watched).filter((d) => d.includes('node_modules'))
-    report('watched dirs mentioning node_modules', dirs.slice(0, 6))
-    report(
-      'watched entries under those dirs',
-      dirs.slice(0, 3).map((d) => `${d} -> ${(watched[d] ?? []).join(',')}`),
+    const rebuilt = await waitFor(
+      () =>
+        fs.existsSync(generated) &&
+        fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
+      8000,
     )
 
-    // Round 2. The matcher agrees and the negation is in the list, yet the
-    // directory is not watched at all — so the question is what stops chokidar
-    // descending, and which negation shape makes it.
-    report('all watched dirs (first 12)', Object.keys(watched).slice(0, 12))
-    report('watched dir count', Object.keys(watched).length)
-
-    // Does the watcher take the file if asked directly, once it is running?
-    server.watcher.add(viaNodeModules)
-    await new Promise((settle) => setTimeout(settle, 500))
-    const afterAdd = server.watcher.getWatched()
-    report(
-      'after watcher.add — dirs mentioning node_modules',
-      Object.keys(afterAdd).filter((d) => d.includes('node_modules')),
-    )
-
-    // Candidate negation shapes, each tested against the paths chokidar would
-    // walk: the file, and every directory above it up to the root.
-    const pm = (await import('picomatch')).default
-    const nmDir = posix(path.join(app, 'node_modules'))
-    const scopeDir = posix(path.join(app, 'node_modules', '@acme'))
-    const pkgDir = posix(path.join(app, 'node_modules', '@acme', 'tokens'))
-    const srcDir = posix(path.join(app, 'node_modules', '@acme', 'tokens', 'src'))
-
-    const candidates: Record<string, string> = {
-      'file only (today)': viaNodeModules,
-      'file with native separators': path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json'),
-      'package dir globstar': `${pkgDir}/**`,
-      'node_modules globstar': `${nmDir}/**`,
-    }
-
-    for (const [label, pattern] of Object.entries(candidates)) {
-      const match = pm(pattern)
-      report(`"${label}" matches`, {
-        file: match(viaNodeModules),
-        nmDir: match(nmDir),
-        pkgDir: match(pkgDir),
-        scopeDir: match(scopeDir),
-        srcDir: match(srcDir),
-      })
-    }
-
-    // Vite's own ignore entries, to see what the negation has to overcome.
-    report(
-      'all ignored entries',
-      (Array.isArray(ignored) ? ignored : [ignored]).map((entry) =>
-        typeof entry === 'string' ? entry : String(entry),
-      ),
-    )
+    report(label, { firstBuildCorrect: first, rebuiltOnEdit: rebuilt })
   } finally {
     await server.close()
+  }
+}
+
+it('reports which negation shape rebuilds a node_modules token', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'usd-win-probe-'))
+  report('platform', process.platform)
+
+  try {
+    // The control. If this does not rebuild, watching is broken generally and
+    // `node_modules` is not the subject at all.
+    await measure(tempDir, 'control outside node_modules', {
+      insideNodeModules: false,
+    })
+
+    // What ships today: the plugin's own file-only negation, nothing added.
+    await measure(tempDir, 'file negation only (today)')
+
+    // Every directory on the path un-ignored as well as the file, in case the
+    // walk is pruned at a directory before it can reach the leaf.
+    const ancestors = (root: string) => [
+      `!${posix(path.join(root, 'node_modules'))}`,
+      `!${posix(path.join(root, 'node_modules', '@acme'))}`,
+      `!${posix(path.join(root, 'node_modules', '@acme', 'tokens'))}`,
+      `!${posix(path.join(root, 'node_modules', '@acme', 'tokens', 'src'))}`,
+    ]
+    const ancestorRoot = path.join(
+      tempDir,
+      'plus-ancestor-negations'.replace(/[^a-z0-9]+/gi, '-'),
+      'app',
+    )
+    await measure(tempDir, 'plus ancestor negations', {
+      extraIgnored: ancestors(ancestorRoot),
+    })
+
+    // The package subtree, which is broader than a leaf and narrower than the
+    // whole dependency tree.
+    const subtreeRoot = path.join(
+      tempDir,
+      'plus-package-subtree'.replace(/[^a-z0-9]+/gi, '-'),
+      'app',
+    )
+    await measure(tempDir, 'plus package subtree', {
+      extraIgnored: [
+        `!${posix(path.join(subtreeRoot, 'node_modules', '@acme', 'tokens'))}/**`,
+      ],
+    })
+  } finally {
     fs.rmSync(tempDir, { force: true, recursive: true })
   }
 
   expect(true).toBe(true)
-}, 60000)
+}, 120000)
