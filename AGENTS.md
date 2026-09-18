@@ -107,7 +107,7 @@ Shared with the other `kanso-labs` repositories:
   exception: they state what the consumer's own installed copy must satisfy, so
   ranges are correct there and stay.
 - **`.tool-versions` pins a fully-specified version on every line**,
-  `nodejs 24.19.0`, never `nodejs 24` or `nodejs lts`.
+  `nodejs 24.21.0`, never `nodejs 24` or `nodejs lts`.
 
 In TypeScript that ordering rule is enforced rather than trusted:
 `eslint-plugin-perfectionist` runs at `recommended-natural`, so object keys,
@@ -429,10 +429,11 @@ production dependencies released at all.
 
 `deps` is not one of the Conventional Commits types, so `.commitlintrc.json`
 extends the `type-enum` rule from `@commitlint/config-conventional` to admit it
-alongside the standard eleven — which nothing enforces today, since commitlint
-never runs here, but is what `npx commitlint` accepts and what the `commit-msg`
-hook would accept the day one exists. A plain `chore:` still publishes nothing,
-which is the point: housekeeping should not cut a release.
+alongside the standard eleven. `Lint` pipes the pull request title through
+`npx commitlint`, so a title carrying a type outside that list fails the build
+rather than reaching `main` — see Traps for what that check does and does not
+cover. A plain `chore:` still publishes nothing, which is the point:
+housekeeping should not cut a release.
 
 ## Working the improvement plan
 
