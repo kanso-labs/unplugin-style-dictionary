@@ -19,13 +19,15 @@ bundler usage, examples. Keep it correct when you change the public surface.
 
 ## Commands
 
-| Task   | Command                 | Notes                                                                               |
-| ------ | ----------------------- | ----------------------------------------------------------------------------------- |
-| Test   | `npm test`              | Vitest, one run, no watch                                                           |
-| Lint   | `npm run lint`          | oxlint, then ESLint, then oxfmt formatting check                                    |
-| Format | `npm run format`        | oxfmt; `npm run format:check` is the check                                          |
-| Build  | `npm run build`         | Type-checks (`tsc -b`) then builds ESM into `dist/`                                 |
-| Verify | `npm run package:check` | publint, then `scripts/check-package.mjs`; reads `dist/`, so it needs a build first |
+| Task     | Command                 | Notes                                                                                  |
+| -------- | ----------------------- | -------------------------------------------------------------------------------------- |
+| Test     | `npm test`              | Vitest, one run, no watch                                                              |
+| Lint     | `npm run lint`          | oxlint, then ESLint, then oxfmt formatting check                                       |
+| Format   | `npm run format`        | oxfmt; `npm run format:check` is the check                                             |
+| Build    | `npm run build`         | Type-checks (`tsc -b`) then builds ESM into `dist/`                                    |
+| Verify   | `npm run package:check` | publint, then `scripts/check-package.mjs`; reads `dist/`, so it needs a build first    |
+| Coverage | `npm run test:coverage` | The same suite with coverage, written to `coverage/`                                   |
+| Peers    | `npm run peers:check`   | Packs the tarball and builds it against both ends of every peer range; `Build` runs it |
 
 **oxfmt formats this repository, not Prettier.** The formatter runs as its own
 `npm run format`, and `npm run lint` ends in `oxfmt --check` so a badly
@@ -88,7 +90,9 @@ reason.
 
 ## Conventions
 
-Shared with the other `kanso-labs` repositories:
+Shared with the other `kanso-labs` repositories. The canonical text is
+[`CONVENTIONS.md`](https://github.com/kanso-labs/.github/blob/main/CONVENTIONS.md)
+in `kanso-labs/.github`; this is a copy, and `Lint` checks it against that file.
 
 - **Keys in JSON and YAML are ordered by name.** Files whose order carries
   meaning are exempt: workflows, where step order is execution order;
@@ -100,7 +104,11 @@ Shared with the other `kanso-labs` repositories:
 - **Job names and step names are imperative verb phrases.** Job ids, step ids,
   and matrix keys are exempt.
 - **Actions are pinned to exact release tags**, `actions/checkout@v7.0.1`, never
-  a moving major or `@main`. Renovate opens the bump pull requests.
+  `@main` and never a tag the publisher moves — `@v7` and `@v7.0` both move.
+  Renovate opens the bump pull requests, and it has nothing to open when the pin
+  never changes: `frenck/action-app-linter@v2.21` sat still through a repository
+  rename and a release that fixed something a consumer was working around,
+  because the tag it named was moved onto both.
 - **Dependency versions are pinned exactly.** Every `dependencies`,
   `devDependencies`, and `optionalDependencies` entry is a bare version,
   `1.2.3`, never `^1.2.3`, `~1.2.3`, `>=1.2.3`, `*`, `1.x`, or an `||` union.
@@ -108,11 +116,16 @@ Shared with the other `kanso-labs` repositories:
   exception: they state what the consumer's own installed copy must satisfy, so
   ranges are correct there and stay.
 - **`.tool-versions` pins a fully-specified version on every line**,
-  `nodejs 24.21.0`, never `nodejs 24` or `nodejs lts`.
+  `nodejs <major>.<minor>.<patch>`, never `nodejs 24` or `nodejs lts`.
 
 In TypeScript that ordering rule is enforced rather than trusted:
 `eslint-plugin-perfectionist` runs at `recommended-natural`, so object keys,
 imports and union members are sorted by the linter.
+
+The formatter is not shared: **oxfmt formats this repository**, not Prettier, so
+the command is `npm run format` and the check runs inside `npm run lint`.
+`LICENSE.md` is exempt in `.oxfmtrc.json`, beside `CHANGELOG.md` — both are
+owned elsewhere. The mechanics are under "Commands" above.
 
 Specific to this repository:
 
