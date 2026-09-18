@@ -55,6 +55,18 @@ function isPluginHook<A extends unknown[]>(
 const unserialisable = (config: Config, marker: bigint): Config =>
   Object.assign(config, { unserialisable: marker })
 
+// The refusal Windows produces when another process holds the destination open.
+// Thrown by hand because no rename on Linux or macOS refuses this way: there, a
+// rename over an open file succeeds, so the retry it provokes is unreachable
+// without a spy.
+const refuseWithEperm = (): never => {
+  const error: NodeJS.ErrnoException = new Error(
+    'EPERM: operation not permitted, rename',
+  )
+  error.code = 'EPERM'
+  throw error
+}
+
 const callBuildStart = async (plugin: Plugin) => {
   const watched: string[] = []
   const context: BuildContext = {
@@ -4658,6 +4670,138 @@ describe('the atomic writer', () => {
     )
     expect(temporaries(directory)).toEqual([])
   }, 30000)
+
+  it.each([
+    { half: 'async', method: 'rename' as const },
+    { half: 'sync', method: 'renameSync' as const },
+  ])(
+    'retries a $half rename Windows refuses, rather than failing the compile',
+    async ({ method }) => {
+      // Measured on a `windows-latest` runner: with a reader holding the
+      // destination open, the rename fails with `EPERM: operation not
+      // permitted`, so the atomic write inverts — the compile fails instead of
+      // the read being protected. This is that case, against a rename that
+      // refuses twice and then succeeds.
+      //
+      // Driven through a spy rather than a real EPERM, because no rename on
+      // Linux or macOS refuses this way — a rename over an open file succeeds
+      // there. The spy is the only way the retry is reachable off Windows,
+      // which is also the only way this can fail here when it is removed.
+      const directory = writeFixture(`rename-retries-${method}`)
+      fs.mkdirSync(path.join(directory, 'out'), { recursive: true })
+
+      const actions =
+        method === 'renameSync' ? ['test/write-through-volume'] : undefined
+
+      const configFile = path.join(directory, 'sd.config.json')
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
+          platforms: {
+            css: {
+              ...(actions ? { actions } : {}),
+              buildPath: posix(path.join(directory, 'out')) + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+        }),
+      )
+
+      const refusals = 2
+      let attempts = 0
+      const refuse = () => {
+        attempts += 1
+        if (attempts > refusals) return
+
+        refuseWithEperm()
+      }
+
+      const realAsync = fs.promises.rename.bind(fs.promises)
+      const realSync = fs.renameSync.bind(fs)
+      const renameSpy =
+        method === 'rename'
+          ? vi
+              .spyOn(fs.promises, 'rename')
+              .mockImplementation(async (from, to) => {
+                refuse()
+
+                return realAsync(from, to)
+              })
+          : vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+              refuse()
+              realSync(from, to)
+            })
+
+      try {
+        await callBuildStart(vitePlugin({ config: configFile, silent: true }))
+
+        // The build completed, and it took more than one attempt to get there.
+        // Without the retry the first refusal is what the consumer sees.
+        expect(attempts).toBeGreaterThan(refusals)
+        expect(
+          fs.readFileSync(path.join(directory, 'out', 'vars.css'), 'utf-8'),
+        ).toContain('--color-brand: #0070f3;')
+        expect(temporaries(directory)).toEqual([])
+      } finally {
+        renameSpy.mockRestore()
+      }
+    },
+    30000,
+  )
+
+  it.each([
+    { half: 'async', method: 'rename' as const },
+    { half: 'sync', method: 'renameSync' as const },
+  ])(
+    'gives up on a $half rename that never succeeds, rather than hanging',
+    async ({ method }) => {
+      // The bound is as load-bearing as the retry. A rename that genuinely
+      // cannot succeed has to fail and let `failOnError` decide, rather than
+      // holding a dev server open while it keeps trying.
+      const directory = writeFixture(`rename-bounded-${method}`)
+      fs.mkdirSync(path.join(directory, 'out'), { recursive: true })
+
+      const actions =
+        method === 'renameSync' ? ['test/write-through-volume'] : undefined
+
+      const configFile = path.join(directory, 'sd.config.json')
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
+          platforms: {
+            css: {
+              ...(actions ? { actions } : {}),
+              buildPath: posix(path.join(directory, 'out')) + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+        }),
+      )
+
+      const renameSpy =
+        method === 'rename'
+          ? vi.spyOn(fs.promises, 'rename').mockImplementation(refuseWithEperm)
+          : vi.spyOn(fs, 'renameSync').mockImplementation(refuseWithEperm)
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(
+          callBuildStart(vitePlugin({ config: configFile, silent: true })),
+        ).rejects.toThrow(/EPERM/)
+
+        // Bounded, so it also leaves nothing behind on the way out.
+        expect(temporaries(directory)).toEqual([])
+      } finally {
+        errorSpy.mockRestore()
+        renameSpy.mockRestore()
+      }
+    },
+    30000,
+  )
 
   it.each([
     { half: 'async', method: 'rename' as const },
