@@ -1156,7 +1156,7 @@ MIT
 [codecov]: https://codecov.io/gh/kanso-labs/unplugin-style-dictionary
 [coverage-shield]:
   https://img.shields.io/codecov/c/github/kanso-labs/unplugin-style-dictionary?label=Coverage
-[license]: ./LICENSE
+[license]: ./LICENSE.md
 [license-shield]:
   https://img.shields.io/github/license/kanso-labs/unplugin-style-dictionary
 [npm]: https://www.npmjs.com/package/@kanso-labs/unplugin-style-dictionary
