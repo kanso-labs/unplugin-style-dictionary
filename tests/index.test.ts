@@ -1,3 +1,4 @@
+import type { Config } from 'style-dictionary'
 import type { Plugin } from 'vite'
 import type { MockInstance } from 'vitest'
 
@@ -48,6 +49,12 @@ function isPluginHook<A extends unknown[]>(
 // and that is why nothing here could see the plugin handing a watcher an
 // unexpanded glob — which every watcher in play treats as a filename that does
 // not exist.
+// Style Dictionary ignores keys it does not know, and `Config` does not
+// declare this one — it exists only to make `JSON.stringify` throw, which is
+// what sends `buildKey` down its `null` path.
+const unserialisable = (config: Config, marker: bigint): Config =>
+  Object.assign(config, { unserialisable: marker })
+
 const callBuildStart = async (plugin: Plugin) => {
   const watched: string[] = []
   const context: BuildContext = {
@@ -214,6 +221,70 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.existsSync(outputFile)).toBe(true)
     const content = fs.readFileSync(outputFile, 'utf-8')
     expect(content).toContain('--color-primary: #0070f3;')
+  })
+
+  it('compiles a configuration that cannot be given a shared identity', async () => {
+    // `compileOnceAcrossInstances` keys its in-flight map on `buildKey`, which
+    // returns `null` for a configuration `JSON.stringify` refuses. That
+    // configuration opts out of sharing rather than taking a wrong identity —
+    // and then has to compile anyway, which is the branch nothing reached.
+    //
+    // A BigInt is what makes the key unserialisable. Style Dictionary ignores
+    // the property, so the only thing it changes is whether the configuration
+    // can have an identity.
+    const plugin = vitePlugin({
+      config: unserialisable(
+        {
+          platforms: {
+            css: {
+              buildPath: tempDir.replace(/\\/g, '/') + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [tokenFile.replace(/\\/g, '/')],
+        },
+        1n,
+      ),
+      silent: true,
+    })
+
+    // A second configuration, also unserialisable, also distinct. Started
+    // together on purpose: that is the only moment `compilesInFlight` can
+    // coalesce two compiles, and so the only moment the opt-out matters.
+    const second = vitePlugin({
+      config: unserialisable(
+        {
+          platforms: {
+            css: {
+              buildPath: tempDir.replace(/\\/g, '/') + '/',
+              files: [{ destination: 'other.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [tokenFile.replace(/\\/g, '/')],
+        },
+        2n,
+      ),
+      silent: true,
+    })
+
+    await Promise.all([callBuildStart(plugin), callBuildStart(second)])
+
+    // Both built. Drop the `key === null` branch and both take `null` as their
+    // shared identity, so the second awaits the first's compile and never
+    // writes its own destination — the file below is missing, and the build
+    // still reports success.
+    expect(fs.existsSync(outputFile)).toBe(true)
+    expect(fs.readFileSync(outputFile, 'utf-8')).toContain(
+      '--color-primary: #0070f3;',
+    )
+
+    const otherFile = path.join(tempDir, 'other.css')
+    expect(fs.existsSync(otherFile)).toBe(true)
+    expect(fs.readFileSync(otherFile, 'utf-8')).toContain(
+      '--color-primary: #0070f3;',
+    )
   })
 
   it('supports a custom format registered inside a config function', async () => {
