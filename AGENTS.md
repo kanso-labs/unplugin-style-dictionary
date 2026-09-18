@@ -49,11 +49,21 @@ compiles each Style Dictionary config in turn, and letting those overlap would
 have two builds writing the same destinations at once. The rule's advice to
 collect the promises and `Promise.all` them is a bug here, not an optimisation.
 
-**Install with the Node version in `.tool-versions` (24.19.0).** CI resolves it
-from that file, and an older npm silently drops the platform entries the
-lockfile carries for Linux builds — a rewrite with no visible symptom until a
-Linux runner installs the wrong native binary. If `node --version` disagrees,
-prefix the command: `mise exec node@24.19.0 -- npm install`.
+**Install with the Node version in `.tool-versions`.** CI resolves it from that
+file, and an older npm silently drops the platform entries the lockfile carries
+for Linux builds — a rewrite with no visible symptom until a Linux runner
+installs the wrong native binary. If `node --version` disagrees, prefix the
+command so it reads the pin rather than restating it:
+
+```bash
+mise exec node@"$(awk '/^nodejs/{print $2}' .tool-versions)" -- npm install
+```
+
+**The number is deliberately not written here.** Renovate enables `mise` and
+automerges minor and patch, so `.tool-versions` moves on its own schedule while
+a version copied into prose sits still — which is how this paragraph came to
+name a version the repository had stopped pinning three bumps earlier.
+`CONTRIBUTING.md` uses the same self-reading form for the same reason.
 
 ## Conventions
 

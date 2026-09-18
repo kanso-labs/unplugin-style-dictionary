@@ -4708,7 +4708,7 @@ const normaliseWhitespace = (value: string) => value.replace(/\s+/g, ' ').trim()
 // ever opening README.md. The copy drifted for months — by the time this was
 // written it had lost `cache` and `report` entirely, two options that exist and
 // were therefore absent from the reference a reader is pointed at.
-describe('the README options reference', () => {
+describe('the contributor documentation', () => {
   it('reproduces the options interface, including its own JSDoc', () => {
     // The interface-level JSDoc is the part the hand copy dropped, and it is
     // where the per-target watch caveat lives — the most misread thing about
@@ -4771,6 +4771,48 @@ describe('the README options reference', () => {
     )) {
       expect(meta.optional, `${peer} should be an optional peer`).toBe(true)
     }
+  })
+
+  it('tells a contributor to install the Node version .tool-versions pins', () => {
+    // `AGENTS.md` said 24.19.0 against a pin of 24.21.0 — three Renovate bumps
+    // of drift, in the one paragraph warning that the wrong Node rewrites the
+    // lockfile. Nothing read both files, so nothing noticed.
+    //
+    // What is asserted is the *form*, not the value: a `mise exec node@…` in
+    // either contributor document has to read `.tool-versions` rather than name
+    // a version. Accepting a literal that happens to match today would pass the
+    // exact commit that starts the next drift, which is the failure this is
+    // here for.
+    const pinned = /^nodejs (?<version>\S+)$/m.exec(
+      fs.readFileSync(new URL('../.tool-versions', import.meta.url), 'utf-8'),
+    )?.groups?.version
+
+    // A malformed pin would make every assertion below vacuous.
+    expect(pinned).toMatch(/^\d+\.\d+\.\d+$/)
+
+    const documents = ['AGENTS.md', 'CONTRIBUTING.md']
+    let found = 0
+
+    for (const document of documents) {
+      const text = fs.readFileSync(
+        new URL(`../${document}`, import.meta.url),
+        'utf-8',
+      )
+
+      for (const match of text.matchAll(/mise exec node@(?<pin>.+?) -- /g)) {
+        found += 1
+        const pin = match.groups?.pin ?? ''
+
+        expect(
+          pin.includes('.tool-versions'),
+          `${document} pins ${pin} rather than reading .tool-versions`,
+        ).toBe(true)
+      }
+    }
+
+    // Both documents carry one, so a rewrite that drops the instruction fails
+    // here rather than passing an empty loop.
+    expect(found).toBe(documents.length)
   })
 
   it('documents every default-discovery filename the code tries', () => {
