@@ -743,6 +743,34 @@ Dropping that build put the `.default` hop back. The README documents the
 current form, and `scripts/check-package.mjs` requires all five target entries
 and asserts the hop, so the two cannot drift apart quietly.
 
+**`prepare` is guarded because npm runs it on a consumer's install.** npm
+publishes `scripts` verbatim and runs `prepare` when a package is installed
+_from a directory_, and husky is a devDependency — so a bare
+`"prepare": "husky"` made `npm install file:<dir>` of this package fail
+outright:
+
+```
+npm error code 127
+npm error command sh -c husky
+npm error sh: husky: command not found
+```
+
+`husky || true` is the whole fix, and it keeps a contributor's `npm install`
+installing hooks exactly as before. The cost is that it also swallows a real
+husky failure, which is the trade: hooks are a convenience, and a consumer's
+install is not.
+
+**Only the directory route was ever broken, which is worth knowing before
+widening the fix.** A tarball install does not run the script — npm 11 prints
+`install scripts not yet covered by allowScripts` and blocks it — and a git
+install succeeds, because npm installs a git dependency's `devDependencies`,
+husky among them, before running `prepare`. Both measured.
+
+So **do not try to strip `scripts` or `devDependencies` from the published
+manifest**. `publishConfig` cannot do it, a `prepack` rewrite would be skipped
+by the publish job's `--ignore-scripts`, and neither block is what caused the
+failure.
+
 **`sideEffects: false` is a claim about module scope, not about what the plugin
 does.** The plugin writes files constantly, but only once a bundler calls a
 hook, and that is not what the field is about: it says a consumer who imports

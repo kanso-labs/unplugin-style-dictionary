@@ -3093,6 +3093,21 @@ describe('the exports map', () => {
     },
   )
 
+  it('guards the prepare script, which npm runs on a consumer install', () => {
+    // npm publishes `scripts` verbatim and runs `prepare` when a package is
+    // installed from a directory. husky is a devDependency, so a bare
+    // `"prepare": "husky"` made `npm install file:<dir>` of this package fail
+    // outright with `npm error code 127` / `sh: husky: command not found`.
+    //
+    // The guard is what makes it a no-op where husky is absent. Asserted as
+    // "husky plus a guard" rather than as a literal string, so swapping
+    // `|| true` for `|| exit 0` stays green while dropping it does not.
+    const prepare = packageJson.scripts.prepare
+
+    expect(prepare).toContain('husky')
+    expect(prepare).toMatch(/\|\|/)
+  })
+
   it('agrees with the top-level fields that predate it', () => {
     expect(packageJson.main).toBe(packageJson.exports['.'].default)
     expect(packageJson.module).toBe(packageJson.exports['.'].default)
