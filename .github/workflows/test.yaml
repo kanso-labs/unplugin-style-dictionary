@@ -22,7 +22,7 @@ jobs:
       # Nothing these tests need comes from a lifecycle script — they drive the
       # Vite target against real files in a temporary directory.
       - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v3.3.1
+        uses: kanso-labs/actions/setup-node@v4.0.0
         with:
           ignore-scripts: true
 
@@ -44,7 +44,7 @@ jobs:
       # fails the other way: a name nothing requires is free to go red without
       # stopping a merge.
       - name: Set up Node on the supported floor
-        uses: kanso-labs/github-actions/actions/setup-node@v3.3.1
+        uses: kanso-labs/actions/setup-node@v4.0.0
         with:
           ignore-scripts: true
           node-version-file: .github/node-version-floor
@@ -154,7 +154,7 @@ jobs:
         uses: actions/checkout@v7.0.1
 
       - name: Set up Node
-        uses: kanso-labs/github-actions/actions/setup-node@v3.3.1
+        uses: kanso-labs/actions/setup-node@v4.0.0
         with:
           ignore-scripts: true
 

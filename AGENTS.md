@@ -399,8 +399,8 @@ seconds, logs `Failed to get pre-signed URL`, and lets `Run build` pass — so a
 bundle that stopped being reported looks exactly like one that is fine. Check
 the job log rather than the check mark.
 
-Everything shared comes from `kanso-labs/github-actions` at an exact release
-tag, never a moving major — `actions/setup-node`, `actions/lint-workflows`,
+Everything shared comes from `kanso-labs/actions` at an exact release tag, never
+a moving major — `actions/setup-node`, `actions/lint-workflows`,
 `_release-please.yaml`, `_publish-npm.yaml` and `_renovate-command.yaml`. A
 change over there reaches this repository only when Renovate bumps the pin,
 which is deliberate — see that repository's `AGENTS.md`.
