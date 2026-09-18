@@ -314,30 +314,20 @@ export default defineConfig({
 
 ## Platforms
 
-Linux and macOS. **Windows is not supported**, and that is a measured statement
-rather than an omission: a `windows-latest` run of this suite fails two cases,
-and both are real.
+Linux, macOS and Windows. All three run the suite in CI, and Windows is a
+`Test on Windows` job rather than a claim — it was added after two defects
+reached `main` because nothing ran there.
 
-The atomic write fails under the condition it exists for. `runBuilds` writes
-each generated file to a sibling temporary and renames it over the destination,
-so a reader mid-rebuild never sees a partial file. On Windows, with a reader
-holding the destination open, that rename is refused:
+Both are fixed. The atomic write used to fail under the condition it exists for:
+with a reader holding the destination open, Windows refuses the rename, so the
+compile failed rather than the read being protected. The rename now backs off on
+`EPERM` and `EBUSY` and retries, bounded, so a rename that genuinely cannot
+succeed still fails rather than hanging a dev server.
 
-```
-Compilation failed after 170ms: EPERM: operation not permitted, rename
-'...\.concurrent.flat.6200.7.tmp' -> '...\concurrent.flat.json'
-```
-
-So the compile fails rather than the read being protected.
-
-And a token package resolved through `node_modules` is not watched. The negation
-that un-ignores it is built from forward-slashed absolute paths, which is what
-the rest of the plugin normalises to; on Windows the edit reaches no rebuild and
-the generated file keeps its previous contents.
-
-Everything else passes there — 164 of 166 cases, including all four bundlers and
-the real dev server — so this is two specific defects rather than a platform
-that does not work at all. Neither is hard to fix; neither is fixed.
+And a token package resolved through `node_modules` used to build once and never
+rebuild. Vite's watcher cannot be made to deliver those events on Windows — no
+spelling of the ignore-list negation reaches them, and `watcher.add()` does not
+either — so the plugin watches those directories itself, on every platform.
 
 ## Watching, per target
 

@@ -130,3 +130,33 @@ jobs:
           files: .vitest/test-results.junit.xml
           report_type: test_results
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Windows is a supported platform for contributors even though nothing here
+  # deploys to it, and two defects reached `main` unnoticed because no job ran
+  # there — an atomic write that inverted (#306) and a watch negation that
+  # never matched (#307). Both were found by a one-off experiment rather than
+  # by CI, which is the gap this closes.
+  #
+  # Ruleset 19123565 requires `Build`, `Lint` and `Test` by exact string, so
+  # this name is not required and cannot block a merge on its own. Adding it to
+  # the ruleset is a repository-settings change and is deliberately separate
+  # from adding the job.
+  #
+  # The suite only, not coverage: the thresholds are measured against one
+  # platform and a second set of numbers would fail on run-to-run difference
+  # rather than on a regression.
+  test-windows:
+    name: Test on Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: kanso-labs/github-actions/actions/setup-node@v3.3.1
+        with:
+          ignore-scripts: true
+
+      - name: Run tests
+        run: npm test
