@@ -62,6 +62,20 @@ release in a style oxfmt disagrees with, so formatting it only holds until the
 next release pull request, at which point `Lint` fails on a branch nobody
 hand-edits.
 
+**A `.js` file needs `allowJs` before type-aware linting means anything, and it
+fails quietly without it.** `eslint.config.js` is this repository's only `.js`
+file, and `oxlint --type-aware` on it used to exit 0 — which reads as "nothing
+wrong" and was really "no types to check against". The signature is what a
+deliberate violation reports: `no-unsafe-call: Unsafe call of a(n) \`error\`
+type typed
+value`where the same code in`src/`reports`no-floating-promises`. An `error` type
+means TypeScript could not resolve the import at all.
+
+Listing the file in a `tsconfig`'s `include` is _not_ enough on its own —
+measured, it changes nothing, because TypeScript will not take a `.js` file
+without `allowJs`. `tsconfig.node.json` therefore carries both, which
+`tsconfig.test.json` already did.
+
 **oxlint runs type-aware, and its ruleset is stricter than the code was written
 against.** `.oxlintrc.json` runs the `correctness`, `suspicious` and `perf`
 categories with `typeAware` turned on, over the typescript, unicorn, oxc,
