@@ -961,6 +961,18 @@ before assuming a faster bundler is a safer one: with the compile left in
 revert produces. Being ordered ahead of module resolution is the guarantee;
 being fast is not one.
 
+**esbuild is deferred, and not for the reason #224 gave.** That issue said the
+factory discarded `meta`, so a `meta.framework` branch was unavailable — the
+factory takes `meta` today and has since #287, so that half is stale. What still
+holds is the measured one: unplugin's esbuild build context defines
+`addWatchFile()` as an unconditional throw
+(`node_modules/unplugin/dist/index.mjs:303-304`), and a `typeof` feature-detect
+does not help because it answers `function` and then throws. So esbuild can only
+ever be a one-shot target here, and shipping it means publishing an entry point
+whose watch behaviour is a documented absence. Not built. farm, unloader,
+rsbuild and bun stay out too, for the reason the issue gives: an optional peer
+and a `scripts/check-package.mjs` entry each, for no demonstrated demand.
+
 **The peer is `@rspack/core`, not `rspack`.** `rspack` is an unrelated package
 sitting at 0.1.1 on npm; what a consumer installs, what unplugin declares, and
 what the compiler is imported from is `@rspack/core`. The subpath is still
