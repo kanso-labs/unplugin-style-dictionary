@@ -360,6 +360,30 @@ tag, never a moving major — `actions/setup-node`, `actions/lint-workflows`,
 change over there reaches this repository only when Renovate bumps the pin,
 which is deliberate — see that repository's `AGENTS.md`.
 
+**`typescript` is held below 7, and the hold is not this repository's choice.**
+`typescript-eslint` peers `typescript >=4.8.4 <6.1.0`, and no published version
+admits 7 — across all of 8.x the ceiling has moved 5.8, 5.9, 6.0, 6.1 and
+stopped. So a TypeScript 7 branch fails Renovate's own lockfile update with
+`ERESOLVE`, leaves the lock stale, and every required check then dies at
+`npm ci`:
+
+```
+npm error Invalid: lock file's typescript@6.0.3 does not satisfy typescript@7.0.2
+```
+
+`recreateWhen` is `always`, so closing that pull request only brings it back —
+which is how a repository learns to stop reading red. The `allowedVersions` rule
+in `.github/renovate.json` is what stops it being raised at all.
+
+**Grouping `typescript` with `eslint` is not a substitute.** A grouped branch
+still resolves `typescript@7` against a `typescript-eslint` that peers `<6.1.0`
+and hits the identical `ERESOLVE`; no combination of published versions
+resolves. Lift the rule when `typescript-eslint` ships a peer range admitting 7,
+not before. Dropping `typescript-eslint` altogether would remove the constraint
+at its root — `eslint.config.js` pulls only
+`typescriptEslint.configs.recommended` and `eslint-plugin-oxlint` already
+switches off what oxlint covers — but that is a change to cost on its own.
+
 `renovate-command.yaml` is what makes `@renovate rebase` work on a dependency
 pull request here. Only the copy on `main` ever runs: `issue_comment` is a
 repository-level event, so a change to that file cannot be tested from a branch.
