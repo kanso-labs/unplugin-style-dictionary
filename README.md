@@ -1083,6 +1083,68 @@ plugin. As of this unplugin-based rewrite:
 - Behavior under Vite is unchanged: the same `buildStart`-time compilation and
   dev-server watch/rebuild logic as before.
 
+## Development
+
+Fork, then clone the repository:
+
+```shell
+git clone https://github.com/your-username/unplugin-style-dictionary.git
+```
+
+Install with the Node version in [`.tool-versions`](.tool-versions). CI resolves
+it from that file, and an older npm rewrites `package-lock.json` as it installs.
+If `node --version` disagrees:
+
+```shell
+mise exec node@"$(awk '/^nodejs/{print $2}' .tool-versions)" -- npm install
+```
+
+### The four commands
+
+These are what CI runs, and between them they are the whole gate:
+
+```shell
+npm run lint           # oxlint, then ESLint, then oxfmt --check
+npm run build          # tsc -b, then tsdown into dist/
+npm test               # vitest, one run, no watch
+npm run package:check  # publint, attw, then scripts/check-package.mjs
+```
+
+`npm run package:check` reads `dist/`, so it needs a build first.
+`npm run peers:check` is the slower one that packs the tarball and builds it
+against both ends of every declared peer range; `Build` runs it, and it is worth
+running locally when you touch the exports map or the peer declarations.
+
+**oxfmt formats this repository, not Prettier**, and it covers Markdown, JSON
+and YAML as well as TypeScript. `npm run lint -- --fix` will not reformat
+anything — reach for `npm run format`.
+
+### Tests
+
+`tests/` drives real bundlers against real files in temporary directories rather
+than mocking Style Dictionary: a real Vite dev server, a real `rollup.watch()`,
+a real `webpack()` compile, a real `rspack()` compile, and all five targets
+through their own entry points. A new hook needs a matching caller in
+`tests/index.test.ts` — calling one bare leaves `this` undefined and the failure
+reads as a plugin bug.
+
+The suite prints nothing. If you add a test that provokes the plugin's failure
+report, spy on `console.error`, **assert the message is there**, and restore in
+a `finally`. You can check the whole suite is quiet with:
+
+```shell
+npx vitest run --reporter=verbose 2>&1 | grep -E '^std(out|err) \|'
+```
+
+That should print nothing.
+
+[`AGENTS.md`](AGENTS.md) carries the conventions, the traps, and the reasoning
+behind both. It is written for coding agents and is equally the fullest thing a
+human contributor can read.
+
+Contribution guidelines for the organization are in
+[`kanso-labs/.github`](https://github.com/kanso-labs/.github).
+
 ## License
 
 MIT
