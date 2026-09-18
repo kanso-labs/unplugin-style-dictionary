@@ -989,52 +989,50 @@ than its output, so `isUpToDate` skips the compile and the destination survives
 without the check running at all. That is why the test for it passes
 `cache: false` — otherwise it passes with the check removed.
 
-**Windows fails two cases, and CI does not run there.** A `windows-latest` job
-was added, run once and removed: a job ruleset 19123565 does not require is free
-to go red without stopping a merge, and these two go red.
+**Windows runs in CI now, and the two defects that hid there are fixed.** A
+`Test on Windows` job runs the suite on every pull request. It was added because
+both defects reached `main` unnoticed — nothing ran there, and a one-off
+experiment found them rather than a check.
 
-`npm run format:check` passes there — `.gitattributes` carries `eol=lf` for that
-reason, because a Windows checkout otherwise yields CRLF and `oxfmt --check`
-rejects it. Keep that line even though nothing runs on Windows; it is what a
-Windows contributor's formatting depends on.
+Ruleset 19123565 requires `Build`, `Lint` and `Test` by exact string, so that
+job reports without gating. Adding it to the ruleset is a repository-settings
+change and a separate decision.
 
-What fails is the plugin, not the harness:
+`npm run format:check` passes there, and `.gitattributes` carries `eol=lf` for
+that reason — a Windows checkout otherwise yields CRLF and `oxfmt --check`
+rejects it.
 
-- **The atomic write.** `EPERM: operation not permitted, rename` when a reader
-  holds the destination open — the exact case
-  `never exposes a partially written file to a concurrent reader` models. This
-  **refutes** the reasoning that put the case in doubt: libuv's
-  `FILE_SHARE_DELETE` does not save the rename here. **Fixed** in #306: both
-  rename primitives now back off on `EPERM` and `EBUSY`, eight attempts doubling
-  from 1ms. Measured on a `windows-latest` runner both ways — with the retry the
-  case passes, and with it removed the same runner reproduces the original error
-  verbatim.
-- **`node_modules` watching.** The negation added in #291 is built from
-  forward-slashed absolute paths, and on Windows the edit reaches no rebuild.
-  That was flagged as unverified in that pull request and is now measured.
+**The negation that un-ignores a `node_modules` token cannot be made to work on
+Windows, and that is measured rather than assumed.** Five rounds on a
+`windows-latest` runner:
 
-164 of 166 cases pass, including all four bundlers and the real dev server, so
-this is two defects rather than a dead platform.
+- picomatch matches the forward-slashed negation against the real Windows path,
+  and the negation is present in `config.server.watch.ignored`. The matcher was
+  never the problem, and a native-separator negation is actively wrong —
+  backslashes are escape characters in a glob, and picomatch returns `false`.
+- **`getWatched()` returns an empty object on Windows, even for the root.** Any
+  round that asks the watcher what it is watching proves nothing there. Measure
+  the rebuild instead.
+- No shape works: the file, every ancestor directory, and the package subtree as
+  a globstar all leave the edit reaching no rebuild.
+- **A symlink is not the variable**, which is the obvious suspect and the wrong
+  one. A real directory inside `node_modules` fails exactly as a symlinked one
+  does, and a symlink outside it succeeds.
+- `server.watcher.add()` does not reach it either — the same limit this file
+  already records for a path an earlier ignore entry covers, now measured on a
+  second platform.
 
-**A rename retry can only be proved on Windows, and a spy is not that proof.**
-No rename on Linux or macOS refuses over an open file, so the retry is
-unreachable there and the suite drives it through a spy that throws a hand-made
-`EPERM`. That pins the plumbing and nothing about the platform: it would keep
-passing if Windows raised a code the retry does not catch. What closes the gap
-is a temporary `windows-latest` job, run twice — once with the fix and once with
-the retry removed, so a real refusal is seen failing. Both runs are in #306. The
-job is removed before merge, because a check ruleset 19123565 does not require
-is free to go red without stopping anything.
+So `nodeModulesWatchDirectories` gives those directories a watcher of the
+plugin's own, which Vite's ignore list has no say over. The directory rather
+than the file, because `fs.watch` on a file stops reporting once an editor
+replaces it by rename — which is what an atomic save does. On every platform
+rather than behind a `process.platform` check: one path exercised everywhere
+beats a Windows-only branch nothing else executes, and `schedule` already
+collapses the duplicate trigger it produces where the negation also works.
 
-**The sync half of the atomic write is reached through Style Dictionary custom
-actions, not through an ordinary build.** A plain build calls
-`fs.promises.rename` alone — measured, `async=1 sync=0`. So a test meaning to
-cover `writeFileSyncAtomic` has to register an action that writes through
-`vol.writeFileSync`, and one that does not silently covers the async half twice.
-The cases in `the atomic writer` block do this, which also makes them
-order-dependent: the action is registered by an earlier case in the same block,
-so running one of them alone with `-t` fails with
-`Cannot read properties of undefined`.
+**The negation stays.** It is what makes Vite's own watcher deliver these events
+on Linux and macOS, and dropping it would leave one mechanism where there are
+two.
 
 **Vite's dev-server watcher cannot be reached after `configResolved`, and its
 ignore list only grows.** It is built from the resolved config with
