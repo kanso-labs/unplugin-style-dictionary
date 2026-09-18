@@ -22,3 +22,29 @@ coverage:
     project:
       default:
         informational: true
+
+# The bundle status is informational for a different reason than the two above,
+# and the reason is that the number cannot be made to mean what a bundle alert
+# is for. `codecovRollupPlugin` reads the rolldown bundle in `generateBundle`
+# and measures every chunk and asset in it except source maps — and tsdown runs
+# `rolldown-plugin-dts` inside that same build, so the declarations are chunks
+# in it. Measured at 7f32dc0: `dist/types.d.ts` is 16,725 bytes, of which 93.8%
+# is JSDoc, and it is 33.3% of the 50,234 bytes the plugin sees.
+#
+# `src/types.ts` is the options contract, and the README's Options Reference is
+# generated from it — so that documentation is meant to grow. Against the
+# default 5% threshold, roughly 2.5KB of new JSDoc trips a size alert while
+# changing the shipped JavaScript by nothing.
+#
+# The plugin has no option to exclude an asset, so the measurement cannot be
+# narrowed to runtime weight; the choice is what the alert does about it.
+# Informational keeps the number reported on every pull request and stops it
+# reading as a failure for a documentation change. It is deliberately not a
+# required check either — ruleset 19123565 names Build, Lint and Test, and a
+# size figure is a prompt to look rather than a gate.
+#
+# `warning_threshold` is deliberately not set. The default is 5%, and no other
+# number here would be measured — it would be a guess about how much growth is
+# acceptable in a bundle that is one third documentation.
+bundle_analysis:
+  status: informational
