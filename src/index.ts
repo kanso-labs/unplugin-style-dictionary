@@ -383,7 +383,7 @@ const writeFileAtomic: typeof fs.promises.writeFile = async (
       return
     }
 
-    await renameWithRetry(temporary, file)
+    await fs.promises.rename(temporary, file)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
@@ -406,7 +406,7 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
       return
     }
 
-    renameWithRetrySync(temporary, file)
+    fs.renameSync(temporary, file)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
