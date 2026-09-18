@@ -338,10 +338,38 @@ function temporaryPathFor(destination: string): string {
 // Unreachable on Linux and macOS, where a rename over an open file succeeds.
 const RENAME_RETRY_CODES = new Set(['EBUSY', 'EPERM'])
 
-// Seven attempts over about 250ms in total. Doubling rather than a fixed
-// interval, so the common case — a handle already gone by the first retry —
-// costs a millisecond rather than the whole budget.
-const RENAME_RETRY_DELAYS_MS = [1, 2, 4, 8, 16, 32, 64, 128]
+// Doubling rather than a fixed interval, so the common case — a handle already
+// gone by the first retry — costs a millisecond rather than the whole budget.
+//
+// **The total is sized by what a dev server can tolerate waiting, not by how
+// long a handle usually persists.** An earlier version stopped at about 255ms,
+// which clears a transient hold and is not the situation that matters: a
+// consumer polling the generated file holds it for a large fraction of wall
+// time, and then no budget wins every race. What that produced was a rebuild
+// that failed roughly once in a hundred renames — which the suite's own
+// concurrent-reader case turns into a failure about once a run, because it
+// performs twenty of them. Intermittent, and on a platform where the whole
+// point of the atomic write is that a reader never sees a partial file.
+//
+// About two seconds is therefore the bound. A rebuild that takes a second is
+// something a dev server absorbs; one that fails is not. `write-file-atomic`
+// and `graceful-fs` both take this approach, the latter retrying for up to a
+// minute, so this is still the conservative end.
+//
+// The bound stays a bound: a rename that genuinely cannot succeed has to fail
+// rather than hang, and the unguarded attempt after the loop is what makes it.
+const RENAME_RETRY_DELAYS_MS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+
+// **The synchronous path gets a shorter budget, and the asymmetry is the
+// point.** `renameWithRetry` waits on a timer, so the event loop keeps serving
+// while it does; `renameWithRetrySync` waits on `Atomics.wait`, which blocks
+// everything — a dev server holding its main thread for two seconds is worse
+// than the failed rebuild the wait is trying to avoid.
+//
+// It is reached only through a Style Dictionary custom action's own
+// `vol.writeFileSync`, which is rare, and it keeps roughly the budget the async
+// path had before this change.
+const RENAME_RETRY_DELAYS_SYNC_MS = [1, 2, 4, 8, 16, 32, 64, 128]
 
 function isRetryableRenameError(error: unknown): boolean {
   return (
@@ -381,7 +409,7 @@ async function renameWithRetry(
 }
 
 function renameWithRetrySync(temporary: string, destination: string): void {
-  for (const delay of RENAME_RETRY_DELAYS_MS) {
+  for (const delay of RENAME_RETRY_DELAYS_SYNC_MS) {
     try {
       fs.renameSync(temporary, destination)
       return
