@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.5](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.4...unplugin-style-dictionary-v0.10.5) (2026-09-22)
+
+
+### Dependencies
+
+* update commitlint to v21.2.3 ([#347](https://github.com/kanso-labs/unplugin-style-dictionary/issues/347)) ([315b716](https://github.com/kanso-labs/unplugin-style-dictionary/commit/315b7165080ab3611e0466c10d201b80d4d797c2))
+* update kanso-labs/actions action to v4.0.1 ([#348](https://github.com/kanso-labs/unplugin-style-dictionary/issues/348)) ([847c91b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/847c91b16bc32f0431bec3a236d9868604b283ec))
+
 ## [0.10.4](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.3...unplugin-style-dictionary-v0.10.4) (2026-09-22)
 
 
