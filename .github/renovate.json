@@ -1,7 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "security:minimumReleaseAgeNpm is extended directly rather than through config:best-practices, which also pulls in helpers:pinGitHubActionDigests, :configMigration, :pinDevDependencies, :maintainLockFilesWeekly, abandonments:recommended and docker:pinDigests. The first of those contradicts the convention that actions are pinned to exact release tags, which is shared across the kanso-labs repositories, and the rest are behaviours this repository has not opted into. Extending the security preset directly keeps its own null opt-outs for lockFileMaintenance, replacement, pin, bump, lockfileUpdate and rollback, which is what a hand-written top-level minimumReleaseAge would lose: those update types carry no release timestamp, so a global value raises pull requests that can never merge, and this repository automerges lockFileMaintenance.",
-  "extends": ["config:recommended", "security:minimumReleaseAgeNpm"],
+  "description": "security:minimumReleaseAgeNpm is extended directly rather than through config:best-practices, which also pulls in helpers:pinGitHubActionDigests, :configMigration, :pinDevDependencies, :maintainLockFilesWeekly, abandonments:recommended and docker:pinDigests. The first of those contradicts the convention that actions are pinned to exact release tags, which is shared across the kanso-labs repositories, and the rest are behaviours this repository has not opted into. Extending the security preset directly keeps its own null opt-outs for lockFileMaintenance, replacement, pin, bump, lockfileUpdate and rollback, which is what a hand-written top-level minimumReleaseAge would lose: those update types carry no release timestamp, so a global value raises pull requests that can never merge, and this repository automerges lockFileMaintenance. local>kanso-labs/.github:renovate-config is the organization's shared preset, holding the settings that have to hold in every kanso-labs repository, and it is listed last because a later preset wins a conflict with an earlier one. Ordering the array by precedence rather than by name is deliberate, and moving the shared preset ahead of the other two would let them override it.",
+  "extends": [
+    "config:recommended",
+    "security:minimumReleaseAgeNpm",
+    "local>kanso-labs/.github:renovate-config"
+  ],
   "labels": ["area:packaging", "kind:tooling"],
   "lockFileMaintenance": {
     "automerge": true,
