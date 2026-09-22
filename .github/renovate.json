@@ -11,19 +11,7 @@
     "automerge": true,
     "enabled": true
   },
-  "mise": {
-    "enabled": true
-  },
   "packageRules": [
-    {
-      "description": "Renovate's own config:recommended sets semanticCommitType through a packageRule, and packageRules beat top-level config. Setting it at the top level therefore does nothing at all: every upgrade stays chore and cuts no release.",
-      "matchPackageNames": ["*"],
-      "semanticCommitType": "deps"
-    },
-    {
-      "automerge": true,
-      "matchUpdateTypes": ["minor", "patch"]
-    },
     {
       "groupName": "commitlint",
       "matchPackageNames": ["@commitlint/**"]
@@ -46,18 +34,12 @@
     },
     {
       "allowedVersions": "<7",
-      "description": "typescript-eslint peers typescript >=4.8.4 <6.1.0, and no published version admits 7 — the ceiling has moved 5.8, 5.9, 6.0, 6.1 and stopped there. So a TypeScript 7 branch fails Renovate's own lockfile update with ERESOLVE, leaves the lock stale, and every required check then dies at npm ci on \"lock file's typescript@6.0.3 does not satisfy typescript@7.0.2\". recreateWhen is always, so that pull request cannot be closed away. Lift this once typescript-eslint ships a peer range that admits 7; grouping the two cannot substitute, because no version of the group resolves.",
+      "description": "typescript-eslint peers typescript >=4.8.4 <6.1.0, and no published version admits 7 \u2014 the ceiling has moved 5.8, 5.9, 6.0, 6.1 and stopped there. So a TypeScript 7 branch fails Renovate's own lockfile update with ERESOLVE, leaves the lock stale, and every required check then dies at npm ci on \"lock file's typescript@6.0.3 does not satisfy typescript@7.0.2\". recreateWhen is always, so that pull request cannot be closed away. Lift this once typescript-eslint ships a peer range that admits 7; grouping the two cannot substitute, because no version of the group resolves.",
       "matchPackageNames": ["typescript"]
     },
     {
       "groupName": "vitest",
       "matchPackageNames": ["@vitest/**", "vitest"]
     }
-  ],
-  "prConcurrentLimit": 0,
-  "prHourlyLimit": 0,
-  "rebaseWhen": "behind-base-branch",
-  "recreateWhen": "always",
-  "semanticCommitScope": null,
-  "semanticCommits": "enabled"
+  ]
 }
