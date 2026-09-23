@@ -190,21 +190,12 @@ export async function isUpToDate(
 // exist whenever the two differed (#362). Style Dictionary joins with
 // `path-unified/posix`; the platform's own `join` names the same file, and
 // resolving the result is what normalises the separators either way.
-// TEMPORARY, for #368: the base a compile reads `buildPath` against, set to
-// `root` by `runBuilds` — the reading #362 removed, put back so CI can show
-// which runners the relative-`buildPath` cases catch it on. Reverted before
-// this merges.
-let experimentBase: string | undefined
-export function setExperimentBase(base: string): void {
-  experimentBase = base
-}
-
 export function writtenDestination(
   buildPath: string | undefined,
   destination: string,
 ): string {
   return path.resolve(
-    experimentBase ?? process.cwd(),
+    process.cwd(),
     buildPath ? path.join(buildPath, destination) : destination,
   )
 }

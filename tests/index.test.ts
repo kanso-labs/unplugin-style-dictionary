@@ -4596,8 +4596,9 @@ describe("when the host's root is not the working directory", () => {
   // temporary root sits shallower than its checkout; and on Windows
   // `path.relative` cannot reach across drives at all, so the path came out
   // absolute. Measured on both runners with the fix for #362 reverted: all
-  // three passed, on Linux and on Windows alike. Inside `.vitest/`, which the suite already writes to and git
-  // ignores, the path has no `..` in it and never leaves the checkout's drive.
+  // three passed, on Linux and on Windows alike. Inside `.vitest/`, which the
+  // suite already writes to and git ignores, the path has no `..` in it and
+  // never leaves the checkout's drive.
   fs.mkdirSync(path.join(process.cwd(), '.vitest'), { recursive: true })
   const outputDir = fs.mkdtempSync(
     path.join(process.cwd(), '.vitest', 'base-output-'),
