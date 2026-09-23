@@ -1101,6 +1101,17 @@ table printed nothing. The cases under
 `when the host's root is not the working directory` pin all three. Every other
 case builds with the two the same, which is how it went unnoticed.
 
+**A destination is joined onto its `buildPath`, not resolved against it.** Style
+Dictionary uses `path-unified/posix`'s `join`, so even an absolute destination
+lands under the build path. The plugin read an absolute destination on its own
+until #367, and named a file that was never written. There is now one reading of
+where Style Dictionary writes a file, `writtenDestination` in
+`src/up-to-date.ts`, and both the up-to-date check and `runBuilds` ask it.
+Before that, each kept its own copy of the rule, and each copy was wrong the
+same way twice. The cases under `when a destination is absolute` pin each
+caller: undo it in `runBuilds` and the `onBuildEnd` case fails; undo it in
+`declaredDestinations` and the skip case does.
+
 **An empty token set has to be caught before `buildAllPlatforms`, and the window
 is one line wide.** Style Dictionary treats a `source` matching no files as
 success: it writes the destination with no tokens in it, prints its usual tick
