@@ -41,12 +41,9 @@ export function configFingerprint(
 // instance. Reading it here is the whole point: constructing the instance
 // is what the skip exists to avoid.
 //
-// Resolved the way Style Dictionary resolves it when it writes: a relative
-// `buildPath` against the working directory, and a `destination` against
-// that. `root` has no say here. It is where a relative `config` path is looked
-// up and nothing more, and reading `buildPath` against it named files that did
-// not exist whenever the two differed — so the up-to-date check never skipped.
-// `runBuilds` collects what it built on the same base, so the two agree.
+// Each one is named by `writtenDestination`, which `runBuilds` asks as well,
+// so the up-to-date check and the record of what was built name the same
+// files — the ones Style Dictionary actually wrote.
 //
 // `only` narrows this to named platforms, and exactly one caller wants that:
 // the up-to-date check, which asks whether the work *this* compile would do
@@ -65,17 +62,10 @@ export function declaredDestinations(
     : entries
 
   for (const [, platform] of selected) {
-    const buildPath = platform.buildPath ?? ''
-    const absoluteBuildPath = path.isAbsolute(buildPath)
-      ? buildPath
-      : path.resolve(process.cwd(), buildPath)
-
     for (const file of platform.files ?? []) {
       if (file.destination) {
         destinations.push(
-          path.isAbsolute(file.destination)
-            ? file.destination
-            : path.resolve(absoluteBuildPath, file.destination),
+          writtenDestination(platform.buildPath, file.destination),
         )
       }
     }
@@ -184,6 +174,30 @@ export async function isUpToDate(
   const fingerprint = configFingerprint(root, item)
 
   return fingerprint !== null && compiledFingerprints.has(fingerprint)
+}
+
+// Where Style Dictionary writes one file, as an absolute path.
+//
+// It joins the destination onto the platform's `buildPath` when there is one
+// and writes the result relative to the working directory. **Joins, not
+// resolves**: an absolute destination lands under the build path rather than
+// replacing it. Measured with `buildPath: 'gen/'` and an absolute destination,
+// Style Dictionary wrote `gen/<that path>`, while the plugin had named the
+// absolute path on its own — a file that was never written.
+//
+// `root` has no say. It is where a relative `config` path is looked up and
+// nothing more, and reading `buildPath` against it named files that did not
+// exist whenever the two differed (#362). Style Dictionary joins with
+// `path-unified/posix`; the platform's own `join` names the same file, and
+// resolving the result is what normalises the separators either way.
+export function writtenDestination(
+  buildPath: string | undefined,
+  destination: string,
+): string {
+  return path.resolve(
+    process.cwd(),
+    buildPath ? path.join(buildPath, destination) : destination,
+  )
 }
 
 // `fs.statSync` without the throw. A file that is missing, or that cannot be

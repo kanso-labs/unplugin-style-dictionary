@@ -9,7 +9,6 @@
 
 import type fs from 'node:fs'
 
-import path from 'node:path'
 import StyleDictionary from 'style-dictionary'
 
 import type { ResolvedConfig } from './config.js'
@@ -23,6 +22,7 @@ import {
   configFingerprint,
   declaredDestinations,
   isUpToDate,
+  writtenDestination,
 } from './up-to-date.js'
 
 // What `runBuilds` reads from the plugin instance it compiles for.
@@ -252,22 +252,17 @@ export async function runBuilds(
       // `context` — so gating the collection on `!context` left it empty on
       // exactly the builds a watcher is live for.
       //
-      // Against the working directory, which is what Style Dictionary joins a
-      // relative `buildPath` to when it writes. `root` is only where the
-      // configuration was found: resolving against it named files that did
-      // not exist whenever the two differed, and handed those to
-      // `onBuildEnd`, the size report and this very set.
+      // Named by `writtenDestination`, the one place that knows where Style
+      // Dictionary writes a file. Every copy of that rule this code has had
+      // named files that were never written — against `root` until #362, and
+      // an absolute destination until #367 — and handed them to `onBuildEnd`,
+      // the size report and this very set.
       for (const platform of Object.values(sd.platforms)) {
-        const buildPath = platform.buildPath ?? ''
         for (const file of platform.files ?? []) {
           if (file.destination) {
-            const absoluteBuildPath = path.isAbsolute(buildPath)
-              ? buildPath
-              : path.resolve(process.cwd(), buildPath)
-            const absoluteDestination = path.isAbsolute(file.destination)
-              ? file.destination
-              : path.resolve(absoluteBuildPath, file.destination)
-            generatedFiles.add(absoluteDestination)
+            generatedFiles.add(
+              writtenDestination(platform.buildPath, file.destination),
+            )
           }
         }
       }
