@@ -54,8 +54,8 @@ jobs:
       # the exports map rather than the working tree.
       #
       # A step of this job rather than a job of its own, for the same reason
-      # `package:check` is one: the ruleset requires `Build`, `Lint` and `Test`
-      # by exact string, and a new job would be a name nothing requires. It
-      # needs the build, so it comes after it.
+      # `package:check` is one: the ruleset requires its checks by exact job
+      # name, and a new job would be a name nothing requires. It needs the
+      # build, so it comes after it.
       - name: Smoke-test both ends of every peer range
         run: npm run peers:check
