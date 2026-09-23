@@ -1,5 +1,23 @@
 import picomatch from 'picomatch'
 
+// Whether a changed file is a token or config source rather than something
+// this plugin just wrote. Both watch entry points ask through here, so
+// neither can react to its own output.
+//
+// `generatedDestinations` is the plugin instance's own record of what it
+// wrote, so it is handed in rather than held: one module serves every
+// instance in the process, and each one's output is its own.
+export function isWatchedSource(
+  file: string,
+  patterns: string[],
+  generatedDestinations: ReadonlySet<string>,
+): boolean {
+  return (
+    !generatedDestinations.has(file.replace(/\\/g, '/')) &&
+    matchesWatchedFile(file, patterns)
+  )
+}
+
 // Whether `file` matches one of the resolved config/token watch patterns.
 // Shared by the Vite-specific `configureServer` watcher and the universal
 // `watchChange` hook — both need it, and both must skip files that don't
@@ -12,7 +30,7 @@ import picomatch from 'picomatch'
 // it can answer. A `buildPath` inside a `source` directory is a supported
 // layout, and under any correct matcher its output matches the very glob that
 // produced it — so the caller also subtracts what the last build wrote. See
-// `generatedDestinations` and `isWatchedSource` in the factory below.
+// `isWatchedSource` above, and `generatedDestinations` in the factory.
 //
 // The patterns are Style Dictionary's own `source` and `include` globs, so the
 // filter has to admit exactly what the build reads — which is why the matching

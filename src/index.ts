@@ -1,32 +1,41 @@
-import type { Config } from 'style-dictionary'
 import type { UnpluginFactory } from 'unplugin'
 import type { ViteDevServer } from 'vite'
 
-import JSON5 from 'json5'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
-import zlib from 'node:zlib'
 import StyleDictionary from 'style-dictionary'
-import { glob } from 'tinyglobby'
 import { createUnplugin } from 'unplugin'
 
+import type { ResolvedConfig } from './config.js'
 import type {
   StyleDictionaryConfigContext,
   UnpluginStyleDictionaryOptions,
 } from './types.js'
 
-import { matchesWatchedFile } from './watch-filter.js'
+import { colourAllowed, paint } from './colour.js'
+import { failsTheBuild, platformsFor } from './compile.js'
+import {
+  configForBuild,
+  readConfigObject,
+  resolveConfigOption,
+} from './config.js'
+import { asError, errorMessage } from './errors.js'
+import {
+  expandPatterns,
+  patternsMatchingNothing,
+  sourcePatternsOf,
+  watchPatternsOf,
+} from './patterns.js'
+import { reportSizes } from './size-report.js'
+import {
+  configFingerprint,
+  declaredDestinations,
+  isUpToDate,
+} from './up-to-date.js'
+import { isWatchedSource } from './watch-filter.js'
 
 export type * from './types.js'
 
-// `catch` binds `unknown`, and a thrown non-Error — a string, a rejected
-// value out of a config module — carries no `.message`. The `as Error` casts
-// this replaces claimed otherwise and printed `undefined` for exactly those
-// cases, which is the least useful thing a failure log can say.
-// A rejected promise must carry an Error, and `catch` binds `unknown`. What
-// Style Dictionary throws is already one; anything else is wrapped rather than
-// handed on raw.
 // Where the plugin's own lines go when a host offers somewhere better than the
 // console: Vite's `config.logger`, rollup's and rolldown's plugin context, or
 // webpack's `compilation`.
@@ -48,35 +57,6 @@ interface HostMessenger {
   info?: (message: string) => void
 }
 
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(errorMessage(error))
-}
-
-// Whether escapes may be written to this stream.
-//
-// **The three signals are ordered rather than combined into one conjunction**,
-// and that ordering is the whole of it. `FORCE_COLOR=1` on a non-TTY — a CI job
-// that wants colour in a log it will render itself — is the single job that
-// variable has, and
-// `!process.env.NO_COLOR && process.env.FORCE_COLOR !== '0' && stream.isTTY`
-// never honours it: the TTY check has the last word and answers `false`.
-//
-// `NO_COLOR` wins over `FORCE_COLOR` because the convention says so: any
-// non-empty value turns colour off, and nothing may turn it back on.
-function colourAllowed(stream: { isTTY?: boolean }): boolean {
-  if (process.env.NO_COLOR) return false
-
-  const forced = process.env.FORCE_COLOR
-  if (forced === '0') return false
-  if (forced !== undefined && forced !== '') return true
-
-  // A terminal that has told us it cannot render escapes. Not one of the three
-  // the issue named, but it is what `TERM=dumb` means and it costs a line.
-  if (process.env.TERM === 'dumb') return false
-
-  return stream.isTTY === true
-}
-
 // Best-effort cleanup of a temporary file whose write or rename failed. The
 // original failure is what the caller reports, so nothing here may throw.
 function discardTemporaryFile(temporary: string): void {
@@ -85,19 +65,6 @@ function discardTemporaryFile(temporary: string): void {
   } catch {
     // Ignore: a leftover temporary file is not worth masking the real error.
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-// A config file is an untyped boundary: `JSON.parse` and a dynamic `import`
-// both hand back `any`, and an `any` assigned to `configObj` spreads through
-// every read of it downstream. These two narrow that boundary once, here.
-// They are type predicates rather than assertions on purpose — a predicate is
-// a check the compiler verifies, where a cast is only a claim.
-function isConfig(value: unknown): value is Config {
-  return typeof value === 'object' && value !== null
 }
 
 // A host's message channel, narrowed by a predicate rather than asserted: what
@@ -117,26 +84,6 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     value !== null &&
     'then' in value &&
     typeof value.then === 'function'
-  )
-}
-
-// Whether a discovered file looks like a Style Dictionary configuration at all.
-//
-// Only applied to a file the plugin went looking for, never to one a consumer
-// named: an explicit `config` is their choice and second-guessing it would
-// reject shapes Style Dictionary accepts and this does not know about.
-//
-// `config.json` is an extremely common name for something else entirely, and
-// the plugin used to adopt whatever it found under that name, add it to the
-// watch set, and report a successful compile over it.
-function looksLikeConfig(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null) return false
-
-  // The four keys any usable configuration has at least one of. `platforms`
-  // alone is enough because a configuration can declare its tokens inline
-  // under `tokens`, or read them through `source`/`include`.
-  return ['include', 'platforms', 'source', 'tokens'].some(
-    (key) => key in value,
   )
 }
 
@@ -201,49 +148,6 @@ function nodeModulesWatchDirectories(paths: string[]): string[] {
   }
 
   return Array.from(directories)
-}
-
-function paint(code: string, value: string, allowed: boolean): string {
-  return allowed ? `\u001B[${code}m${value}\u001B[0m` : value
-}
-
-// Which of a configuration's own `source`/`include` patterns match no file on
-// disk. Only for diagnosis: it is the emptiness of the resolved token set that
-// decides whether a build fails, because only that catches every route to an
-// empty set. This names the pattern at fault, which the token count cannot, and
-// it reports a mistyped pattern in a configuration whose others still match —
-// where nothing fails at all and one platform quietly loses its tokens.
-async function patternsMatchingNothing(patterns: string[]): Promise<string[]> {
-  const barren: string[] = []
-
-  for (const pattern of patterns) {
-    // A literal path is a `stat`, not a glob: `tinyglobby` treats a path with
-    // no magic characters as a literal anyway, and this keeps the common case
-    // off the filesystem walk.
-    if (!GLOB_CHARACTERS.test(pattern)) {
-      if (!fs.existsSync(pattern)) barren.push(pattern)
-      continue
-    }
-
-    try {
-      const matched = await glob([pattern], { absolute: true })
-      if (matched.length === 0) barren.push(pattern)
-    } catch {
-      // A pattern that cannot even be globbed is the build's problem to
-      // report; saying it twice, in a diagnostic, helps nobody.
-    }
-  }
-
-  return barren
-}
-
-// A config module may expose its config as a `default` export or as the
-// namespace itself. `'default' in value` is what lets the compiler reach
-// `.default` without a cast.
-function unwrapDefault(value: unknown): unknown {
-  return typeof value === 'object' && value !== null && 'default' in value
-    ? (value.default ?? value)
-    : value
 }
 
 // Style Dictionary writes every generated file with a plain `writeFile` on the
@@ -503,33 +407,6 @@ const atomicVolume = Object.create(fs, {
 }) as typeof fs
 /* oxlint-enable typescript/no-unsafe-type-assertion */
 
-// A pattern is a glob when any of these appear in it. Deliberately the set
-// picomatch and tinyglobby act on, since those two are what match and expand
-// here — a path containing one of these characters literally is not
-// distinguishable from a pattern, and would not be matchable either.
-const GLOB_CHARACTERS = /[!*?[\]{}]/
-
-// The config extensions Style Dictionary loads with `import` rather than by
-// parsing the file — the `case` list in its own `loadFile`. They are the only
-// ones Node's permanent module cache applies to, and so the only ones this
-// plugin has to read on the build's behalf.
-//
-// Everything else Style Dictionary parses as JSON5, including `.json`, and
-// this list is what makes the plugin split the same way. Reading the two
-// halves apart is what silently unwatched a whole family of configurations:
-// a `.json5` or `.jsonc` file went down the import branch and failed there
-// while the build succeeded, and a `.json` file carrying a comment or a
-// trailing comma failed strict `JSON.parse` for the same reason.
-const IMPORTED_CONFIG_EXTENSIONS = ['.js', '.mjs', '.ts']
-
-// A configuration as `resolveConfigs` hands it on: either the object the
-// consumer passed or the path it was read from, plus the directory relative
-// paths inside it resolve against.
-interface ResolvedConfig {
-  config: Config | string
-  file?: string
-}
-
 // How to name a configuration in a message. A path is what a consumer
 // recognises; a configuration passed as an object or returned by a function has
 // no name, so it is identified by where it sits in the list rather than by a
@@ -538,29 +415,6 @@ function describeConfig(item: ResolvedConfig, index: number): string {
   return item.file
     ? `The configuration ${item.file}`
     : `The configuration at position ${index + 1}`
-}
-
-// Whether a config path is one Style Dictionary imports rather than parses.
-function isImportedConfig(file: string): boolean {
-  return IMPORTED_CONFIG_EXTENSIONS.some((extension) =>
-    file.endsWith(extension),
-  )
-}
-
-// The leading run of a pattern that contains no glob character —
-// `/p/tokens` for `/p/tokens/**/*.json`. Registering it alongside the files
-// that match today is what makes a token file created tomorrow visible:
-// watching only the current matches can never see a path that did not exist
-// when the watcher was built.
-function staticParentOf(pattern: string): string {
-  const segments = pattern.split('/')
-  const firstGlob = segments.findIndex((segment) =>
-    GLOB_CHARACTERS.test(segment),
-  )
-
-  return firstGlob === -1
-    ? path.posix.dirname(pattern)
-    : segments.slice(0, firstGlob).join('/')
 }
 
 // The fingerprints of configurations this process has compiled at least once.
@@ -649,42 +503,6 @@ function buildKey(root: string, resolved: ResolvedConfig[]): null | string {
   }
 }
 
-// The patterns one configuration reads, resolved the way the build resolves
-// them. The same `source`/`include` walk `getWatchTargets` does, for one
-// item rather than the whole set — against the working directory, because
-// that is where Style Dictionary's own `combineJSON` globs them.
-function sourcePatternsOf(configObj: Config): string[] {
-  const patterns: string[] = []
-
-  const add = (pattern: unknown) => {
-    if (typeof pattern === 'string') {
-      patterns.push(
-        (path.isAbsolute(pattern)
-          ? pattern
-          : path.resolve(process.cwd(), pattern)
-        ).replace(/\\/g, '/'),
-      )
-    }
-  }
-
-  for (const value of [configObj.source, configObj.include]) {
-    if (Array.isArray(value)) value.forEach(add)
-    else add(value)
-  }
-
-  return patterns
-}
-
-// `fs.statSync` without the throw. A file that is missing, or that cannot be
-// read, is the same answer to every caller here: nothing to compare against.
-function statOrNull(file: string): fs.Stats | null {
-  try {
-    return fs.statSync(file)
-  } catch {
-    return null
-  }
-}
-
 // Not exported. It cannot be called in the form a reader would guess —
 // unplugin types the factory as `(options, meta)`, and `meta` is the
 // bundler-identifying `UnpluginContextMeta` a consumer would have to build by
@@ -740,25 +558,6 @@ const unpluginFactory: UnpluginFactory<
           ? 'silent'
           : 'default'
 
-  // Which platforms this compile covers, or `undefined` for all of them.
-  //
-  // The array form applies to every build; the object form splits the first
-  // compile from the watch rebuilds, and `context` is what tells them apart —
-  // only the rebuild paths pass one. An absent key means every platform, so
-  // `{ watch: ['css'] }` builds everything once and then only css.
-  const platformsFor = (context: string | undefined): string[] | undefined => {
-    if (platformsOption === undefined) return undefined
-    if (Array.isArray(platformsOption)) return platformsOption
-
-    return context === undefined ? platformsOption.build : platformsOption.watch
-  }
-
-  // Whether a failure in this compile should be thrown rather than only
-  // reported. The two compiles are told apart by `runBuilds`'s `context`,
-  // which only the rebuild paths pass.
-  const failsTheBuild = (context: string | undefined): boolean =>
-    failOnError === true ||
-    (context === undefined ? failOnError === 'build' : failOnError === 'serve')
   // What the host is doing, for the function form of `config`. Populated where
   // each host knows the answer and read when that function is called — the
   // same shape as `root` and the message host above, and for the same reason:
@@ -845,54 +644,6 @@ const unpluginFactory: UnpluginFactory<
   // `closeBundle`: that fires once per bundle — every `BUNDLE_END` a consumer
   // calls `result.close()` on — and would read as a shutdown on every rebuild.
   let hostClosed = false
-
-  // What a watcher is handed, and what a changed path is tested against, are
-  // not the same list, and conflating them is why a glob source was watched by
-  // nothing at all. Every watcher in play takes filenames rather than
-  // patterns: Vite's chokidar and rollup's `FileWatcher` are both constructed
-  // with `disableGlobbing: true`, Vite's `addWatchFile` drops anything that
-  // fails `fs.existsSync`, and webpack never globs `fileDependencies`. So the
-  // patterns stay for matching and the paths are expanded for registering.
-  const expandPatterns = async (patterns: string[]): Promise<string[]> => {
-    const paths = new Set<string>()
-    const globs: string[] = []
-
-    for (const pattern of patterns) {
-      if (GLOB_CHARACTERS.test(pattern)) {
-        globs.push(pattern)
-
-        // Watching the directory as well as its current contents. chokidar
-        // reports a creation inside a watched directory, which is the only
-        // way a token file added later is ever noticed.
-        const parent = staticParentOf(pattern)
-        if (parent && fs.existsSync(parent)) paths.add(parent)
-      } else {
-        paths.add(pattern)
-      }
-    }
-
-    if (globs.length > 0) {
-      try {
-        // tinyglobby matches with picomatch, which is what
-        // `matchesWatchedFile` tests with, so what is registered here and what
-        // is accepted there cannot disagree.
-        for (const match of await glob(globs, { absolute: true })) {
-          paths.add(match.replace(/\\/g, '/'))
-        }
-      } catch (err) {
-        log(`Failed to expand watch patterns: ${errorMessage(err)}`, 'error')
-      }
-    }
-
-    return Array.from(paths)
-  }
-
-  // Whether a changed file is a token or config source rather than something
-  // this plugin just wrote. Both watch entry points ask through here, so
-  // neither can react to its own output.
-  const isWatchedSource = (file: string, patterns: string[]): boolean =>
-    !generatedDestinations.has(file.replace(/\\/g, '/')) &&
-    matchesWatchedFile(file, patterns)
 
   // Decided once, when the plugin is constructed, and held for its life. The
   // two streams are asked separately because they are redirected separately —
@@ -1015,506 +766,33 @@ const unpluginFactory: UnpluginFactory<
     })
   }
 
-  // Resolve config file paths / objects
-  const resolveConfigs = async (): Promise<ResolvedConfig[]> => {
-    let rawConfig = options.config
-
-    // Checked ahead of the discovery below, and by identity rather than
-    // truthiness: `false` is falsy, so the `!rawConfig` test that triggers
-    // discovery would treat "do not discover anything" as "go and look".
-    if (rawConfig === false) return []
-
-    // If config is not defined, look for default configuration files
-    if (!rawConfig) {
-      const defaults = [
-        'sd.config.json',
-        'config.json',
-        'sd.config.js',
-        'sd.config.mjs',
-      ]
-
-      const rejected: string[] = []
-
-      for (const file of defaults) {
-        const fullPath = path.resolve(root, file)
-        if (!fs.existsSync(fullPath)) continue
-
-        // Read before adopting. For the two `.json` names this is a parse and
-        // nothing more; for the two module names it is an import, and the
-        // module has already run by the time there is anything to check —
-        // which is what `config: false` exists for and why validation alone
-        // does not cover them.
-        const candidate = await readConfigObject(
-          { config: fullPath, file: fullPath },
-          false,
-        )
-
-        if (!looksLikeConfig(candidate)) {
-          rejected.push(file)
-          continue
-        }
-
-        // Announced, because "which configuration did it pick" was not
-        // answerable from the console at all, and discovery picks from four
-        // generic names.
-        if (!announcedDiscovery) {
-          announcedDiscovery = true
-          log(`Using the configuration it found at ${fullPath}`, 'info')
-        }
-
-        rawConfig = file
-        break
-      }
-
-      // Said whether or not something usable turned up after them. A skipped
-      // candidate is the interesting half of "no configuration found": the
-      // file is right there, and the reason it was not used is not guessable.
-      if (rejected.length > 0) {
-        log(
-          `Ignored ${rejected.join(', ')} in ${root}: nothing there declares platforms, source, include or tokens, so it does not look like a Style Dictionary configuration. Name it with the config option if it is one, or set config to false to stop looking.`,
-          'error',
-        )
-      }
-    }
-
-    if (!rawConfig) {
-      log(
-        'No configuration specified and no default config file found. Style Dictionary will not compile.',
-        'error',
-      )
-      return []
-    }
-
-    // Evaluate function if provided
-    if (typeof rawConfig === 'function') {
-      rawConfig = await rawConfig(configContext())
-    }
-
-    const configs = Array.isArray(rawConfig) ? rawConfig : [rawConfig]
-
-    return configs.map((conf) => {
-      if (typeof conf === 'string') {
-        const fullPath = path.resolve(root, conf)
-        return { config: fullPath, file: fullPath }
-      } else {
-        return { config: conf }
-      }
+  // Resolve config file paths / objects. The work is `resolveConfigOption`'s;
+  // what this adds is the instance it runs for, read at the moment of the call.
+  // `root` is assigned by the host after the factory has run, so it is passed
+  // as it stands now rather than as it stood when this was built.
+  const resolveConfigs = async (): Promise<ResolvedConfig[]> =>
+    resolveConfigOption({
+      config: options.config,
+      configContext,
+      discovery,
+      log,
+      root,
     })
-  }
-
-  // Imports a config module, re-evaluating it only when the file itself has
-  // changed. The query string is what decides that, and it is not decoration:
-  // Node's ESM cache is permanent and keyed on the specifier, so a config
-  // imported without one is evaluated once and never read again — which is
-  // how an edited `.mjs` config went on building the platform map the process
-  // started with, for the rest of the session.
-  //
-  // `Date.now()` fixed that staleness and bought two problems. Every watcher
-  // event registered another module record in a map nothing prunes, re-running
-  // the config's own `registerFormat` side effects for a file nobody touched.
-  // And its millisecond granularity meant an edit landing inside the same
-  // millisecond as the previous import shared that import's key, and was
-  // served the old module anyway. `mtimeMs` carries sub-millisecond
-  // resolution and only moves when the file does.
-  const importConfigModule = async (file: string): Promise<unknown> => {
-    let version: number
-    try {
-      version = fs.statSync(file).mtimeMs
-    } catch {
-      // A config that cannot be stat'd is about to fail its import too. The
-      // old key is what keeps that failure the import's to report.
-      version = Date.now()
-    }
-
-    // The dot goes, and that is not cosmetic. `mtimeMs` is fractional, so the
-    // query it produces ends in something that reads as a file extension to
-    // anything deriving a loader from the specifier without stripping the
-    // query first — `sd.config.ts?t=1789565080284.6606` is then a `.6606`
-    // file, and a TypeScript config gets parsed as JavaScript. Replacing the
-    // one dot keeps every distinct mtime a distinct key.
-    const key = String(version).replace('.', '_')
-
-    // Sequential on purpose: a config module runs arbitrary code at import
-    // time — `registerFormat` and friends — and Style Dictionary's registries
-    // are global, so importing several at once would interleave those
-    // registrations.
-    return unwrapDefault(await import(`${pathToFileURL(file).href}?t=${key}`))
-  }
-
-  // What a configuration item says, as an object. `report` is what stops the
-  // two readers of this from saying the same thing twice: a bad config has
-  // nowhere else to surface when the watch list is being built, while a build
-  // falls back to handing Style Dictionary the path and lets its message
-  // through instead.
-  const readConfigObject = async (
-    item: ResolvedConfig,
-    reportErrors: boolean,
-  ): Promise<Config | null> => {
-    if (typeof item.config !== 'string') return item.config
-
-    try {
-      // JSON5 rather than `JSON.parse`, because that is what Style Dictionary
-      // reads these files with — it is a superset, so a plain `.json` config
-      // parses identically and one carrying a comment stops being a config
-      // the build understands and the watch list does not.
-      const loaded: unknown = isImportedConfig(item.config)
-        ? await importConfigModule(item.config)
-        : JSON5.parse(fs.readFileSync(item.config, 'utf-8'))
-
-      if (isConfig(loaded)) return loaded
-
-      if (reportErrors) {
-        log(
-          `Config file did not resolve to a configuration object: ${item.config}`,
-          'error',
-        )
-      }
-    } catch (err) {
-      if (reportErrors) {
-        log(
-          `Failed to parse config file: ${item.config}. Error: ${errorMessage(err)}`,
-          'error',
-        )
-      }
-    }
-
-    return null
-  }
 
   // Parse token files to watch
   const getWatchTargets = async (
     resolvedConfigs: ResolvedConfig[],
   ): Promise<{ paths: string[]; patterns: string[] }> => {
-    const filesToWatch = new Set<string>()
-
-    for (const item of resolvedConfigs) {
-      if (item.file) {
-        filesToWatch.add(item.file.replace(/\\/g, '/'))
-      }
-
-      const configObj = await readConfigObject(item, true)
-
-      if (configObj) {
-        const addPattern = (pattern: unknown) => {
-          if (typeof pattern === 'string') {
-            // Against the working directory, because that is where Style
-            // Dictionary resolves it: `combineJSON` globs each pattern with
-            // no `cwd` of its own. Resolving against the configuration file's
-            // directory instead is how the watch list came to name paths the
-            // build never reads — a configuration in a subdirectory built
-            // correctly and watched nothing at all.
-            const absolutePattern = path.isAbsolute(pattern)
-              ? pattern
-              : path.resolve(process.cwd(), pattern)
-            const normalized = absolutePattern.replace(/\\/g, '/')
-            filesToWatch.add(normalized)
-          }
-        }
-
-        if (configObj.source) {
-          if (Array.isArray(configObj.source)) {
-            configObj.source.forEach(addPattern)
-          } else {
-            addPattern(configObj.source)
-          }
-        }
-
-        if (configObj.include) {
-          if (Array.isArray(configObj.include)) {
-            configObj.include.forEach(addPattern)
-          } else {
-            addPattern(configObj.include)
-          }
-        }
-      }
-    }
-
-    // Add manually configured watch files
-    if (options.watch) {
-      const extraWatches = Array.isArray(options.watch)
-        ? options.watch
-        : [options.watch]
-      for (const pattern of extraWatches) {
-        const absolutePattern = path.isAbsolute(pattern)
-          ? pattern
-          : path.resolve(root, pattern)
-        filesToWatch.add(absolutePattern.replace(/\\/g, '/'))
-      }
-    }
-
-    const patterns = Array.from(filesToWatch)
+    const patterns = await watchPatternsOf(
+      { log, root, watch: options.watch },
+      resolvedConfigs,
+    )
 
     // Recorded here rather than at each call site, so every path that derives
     // a watch list refreshes the one `watchChange` filters against.
     cachedPatterns = patterns
 
-    return { paths: await expandPatterns(patterns), patterns }
-  }
-
-  // What `new StyleDictionary` is handed for an item. Only a path in the JS
-  // family becomes an object, because those are exactly the extensions Style
-  // Dictionary's own `loadFile` reaches with `import` — the ones whose module
-  // record Node then caches forever, and so the only ones a build could read
-  // stale. The JSON5 family stays a path because there is nothing to gain:
-  // those are read from disk on every pass either way, so a build can never
-  // see one as it stood earlier in the process.
-  const configForBuild = async (
-    item: ResolvedConfig,
-  ): Promise<Config | string> => {
-    const { config } = item
-
-    if (typeof config !== 'string' || !isImportedConfig(config)) return config
-
-    const loaded = await readConfigObject(item, false)
-
-    // A config that could not be read falls back to the path, so the failure
-    // stays Style Dictionary's to report — it knows more about why an import
-    // failed than this does, a `.ts` config without type stripping especially.
-    if (!loaded) return item.config
-
-    // `loadFile` clones what it imports before handing it on, and passing an
-    // object skips that. It matters more here than it does there: the module
-    // record now outlives the build, and `extend` is called with
-    // `mutateOriginal`. Cloning throws on a config carrying functions — an
-    // inline transform — and Style Dictionary's own fallback in that case is
-    // to use the original, so this one matches it.
-    try {
-      return structuredClone(loaded)
-    } catch {
-      return loaded
-    }
-  }
-
-  // Every absolute destination a configuration declares, read off the
-  // configuration itself rather than off an extended Style Dictionary
-  // instance. Reading it here is the whole point: constructing the instance
-  // is what the skip exists to avoid.
-  //
-  // Resolved exactly as the build resolves it below, so the two name the same
-  // files — a relative `buildPath` against `root`, and a `destination`
-  // against that.
-  // `only` narrows this to named platforms, and exactly one caller wants that:
-  // the up-to-date check, which asks whether the work *this* compile would do
-  // is already done. Everywhere else the answer has to cover every declared
-  // platform, because a file an unselected platform wrote earlier is still the
-  // plugin's own output and has to stay out of the watch list.
-  const declaredDestinations = (
-    configObj: Config,
-    only?: string[],
-  ): string[] => {
-    const destinations: string[] = []
-
-    const entries = Object.entries(configObj.platforms ?? {})
-    const selected = only
-      ? entries.filter(([name]) => only.includes(name))
-      : entries
-
-    for (const [, platform] of selected) {
-      const buildPath = platform.buildPath ?? ''
-      const absoluteBuildPath = path.isAbsolute(buildPath)
-        ? buildPath
-        : path.resolve(root, buildPath)
-
-      for (const file of platform.files ?? []) {
-        if (file.destination) {
-          destinations.push(
-            path.isAbsolute(file.destination)
-              ? file.destination
-              : path.resolve(absoluteBuildPath, file.destination),
-          )
-        }
-      }
-    }
-
-    return destinations
-  }
-
-  // A stable identity for one resolved configuration, or `null` where it
-  // cannot have one. Functions are serialised by source rather than dropped,
-  // because an inline `format` or `transform` is exactly the edit a
-  // fingerprint has to notice, and `JSON.stringify` omits a function outright.
-  const configFingerprint = (item: ResolvedConfig): null | string => {
-    try {
-      return JSON.stringify(
-        [root, item.file ?? item.config],
-        (_key, value: unknown) =>
-          typeof value === 'function' ? `[fn]${String(value)}` : value,
-      )
-    } catch {
-      // Circular, or holding a BigInt. It takes no identity rather than a
-      // wrong one, so it compiles every time exactly as it did before.
-      return null
-    }
-  }
-
-  // Whether every file a configuration declares is already newer than every
-  // file it reads, so its compile can be skipped.
-  //
-  // Conservative in every direction it can be: anything it cannot establish —
-  // a destination that is missing, a source it cannot stat, a configuration
-  // declaring no destinations at all — is a reason to build rather than to
-  // skip.
-  const isUpToDate = async (
-    item: ResolvedConfig,
-    configObj: Config,
-    only?: string[],
-  ): Promise<boolean> => {
-    // An action writes what no `destination` names, so there is nothing for
-    // the comparison below to check and skipping would leave its work undone.
-    const hasActions = Object.values(configObj.platforms ?? {}).some(
-      (platform) => (platform.actions?.length ?? 0) > 0,
-    )
-    if (hasActions) return false
-
-    const destinations = declaredDestinations(configObj, only)
-    if (destinations.length === 0) return false
-
-    // `options.watch` belongs in here as much as `source` does. A consumer
-    // names an extra file because something in the build reads it — a custom
-    // format's own data file, most obviously — and leaving it out let a change
-    // to it be skipped over while the watcher dutifully reported it.
-    const extraWatches = options.watch
-      ? Array.isArray(options.watch)
-        ? options.watch
-        : [options.watch]
-      : []
-
-    const sources = await expandPatterns([
-      ...sourcePatternsOf(configObj),
-      ...extraWatches.map((pattern) =>
-        (path.isAbsolute(pattern)
-          ? pattern
-          : path.resolve(root, pattern)
-        ).replace(/\\/g, '/'),
-      ),
-    ])
-    if (item.file) sources.push(item.file.replace(/\\/g, '/'))
-
-    if (sources.length === 0) return false
-
-    let newestSource = -Infinity
-    let sawFile = false
-
-    for (const source of sources) {
-      const stats = statOrNull(source)
-      if (!stats) return false
-
-      // Directories are in this list on purpose — `expandPatterns` registers
-      // each pattern's static parent so a token file created later is
-      // noticed — but their mtime cannot be read as an input signal here. A
-      // directory's mtime moves whenever an entry is added or renamed inside
-      // it, and the atomic write renames every generated file into place, so
-      // a `buildPath` inside a watched directory made the build itself the
-      // newest thing the comparison could see. Nothing was ever up to date.
-      if (stats.isDirectory()) continue
-
-      sawFile = true
-      newestSource = Math.max(newestSource, stats.mtimeMs)
-    }
-
-    // Every pattern expanded to directories alone, so nothing was actually
-    // read. Style Dictionary would build an empty dictionary from that, and a
-    // skip would present the empty result as current.
-    if (!sawFile) return false
-
-    let oldestDestination = Infinity
-    for (const destination of destinations) {
-      const stats = statOrNull(destination)
-      if (!stats) return false
-      oldestDestination = Math.min(oldestDestination, stats.mtimeMs)
-    }
-
-    if (oldestDestination <= newestSource) return false
-
-    // A configuration given as a path has its own file among the sources
-    // above, so an edit to it has already been accounted for and the skip
-    // holds across processes.
-    if (item.file) return true
-
-    // One given as an object or a function has not. Only this process knows
-    // what it looked like when those destinations were written, so the skip
-    // holds only against a fingerprint recorded here.
-    const fingerprint = configFingerprint(item)
-
-    return fingerprint !== null && compiledFingerprints.has(fingerprint)
-  }
-
-  // The size-and-gzip table, in a function of its own so that the compile
-  // `try` in `runBuilds` can stop before it. Everything here is presentation
-  // over files Style Dictionary has already finished writing, so a throw from
-  // it is a reporting bug and nothing more.
-  const reportSizes = (generatedFiles: Set<string>) => {
-    const fileInfos: Array<{
-      coloredPath: string
-      gzipSizeStr: string
-      relativeDisplayPath: string
-      sizeStr: string
-    }> = []
-
-    for (const filePath of generatedFiles) {
-      if (fs.existsSync(filePath)) {
-        const displayPath = path.relative(root, filePath).replace(/\\/g, '/')
-        const dir = path.dirname(displayPath)
-        const base = path.basename(displayPath)
-        // The table goes to stdout, so it follows stdout's decision — which
-        // is not always stderr's, since the two are redirected separately.
-        const coloredPath =
-          dir === '.'
-            ? paint('32', base, stdoutColour)
-            : paint('90', `${dir}/`, stdoutColour) +
-              paint('32', base, stdoutColour)
-
-        try {
-          const stats = fs.statSync(filePath)
-          const bytes = stats.size
-          const sizeStr = `${(bytes / 1024).toFixed(2)} kB`
-
-          const content = fs.readFileSync(filePath)
-          const gzipBytes = zlib.gzipSync(content).length
-          const gzipSizeStr = `${(gzipBytes / 1024).toFixed(2)} kB`
-
-          fileInfos.push({
-            coloredPath,
-            gzipSizeStr,
-            relativeDisplayPath: displayPath,
-            sizeStr,
-          })
-        } catch {
-          // One unreadable destination costs its row rather than the table.
-          // Deliberately narrower than the caller's `catch`: it covers the
-          // three filesystem and gzip calls above and not the arithmetic
-          // below, so a padding bug is reported rather than quietly printing
-          // short.
-        }
-      }
-    }
-
-    if (fileInfos.length > 0) {
-      const longestPathLength = Math.max(
-        ...fileInfos.map((f) => f.relativeDisplayPath.length),
-        0,
-      )
-      const longestSizeLength = Math.max(
-        ...fileInfos.map((f) => f.sizeStr.length),
-        0,
-      )
-
-      for (const info of fileInfos) {
-        const pathPadding = ' '.repeat(
-          Math.max(2, longestPathLength - info.relativeDisplayPath.length + 2),
-        )
-        const sizePadded = info.sizeStr.padStart(longestSizeLength)
-        console.log(
-          info.coloredPath +
-            pathPadding +
-            paint(
-              '90',
-              `${sizePadded} │ gzip: ${info.gzipSizeStr}`,
-              stdoutColour,
-            ),
-        )
-      }
-    }
+    return { paths: await expandPatterns(patterns, log), patterns }
   }
 
   // Compile design tokens
@@ -1555,15 +833,23 @@ const unpluginFactory: UnpluginFactory<
         // the build below hands Style Dictionary the path and lets its own
         // message through, which is more specific than anything this could
         // say.
-        const declared = cache ? await readConfigObject(item, false) : null
-        const selectedPlatforms = platformsFor(context)
+        const declared = cache ? await readConfigObject(item) : null
+        const selectedPlatforms = platformsFor(platformsOption, context)
 
-        if (declared && (await isUpToDate(item, declared, selectedPlatforms))) {
+        if (
+          declared &&
+          (await isUpToDate(
+            { compiledFingerprints, log, root, watch: options.watch },
+            item,
+            declared,
+            selectedPlatforms,
+          ))
+        ) {
           // The destinations still have to be collected. They are what stops
           // the plugin's own output being treated as a watched source, so a
           // skipped configuration that contributed none would have its files
           // rebuild the moment a watcher noticed them.
-          for (const destination of declaredDestinations(declared)) {
+          for (const destination of declaredDestinations(root, declared)) {
             generatedFiles.add(destination)
           }
 
@@ -1623,7 +909,7 @@ const unpluginFactory: UnpluginFactory<
           // The configuration as an object, so its own patterns can be named.
           // `false` because a configuration that will not parse never reaches
           // here — the `extend` above would have thrown first.
-          const asObject = await readConfigObject(item, false)
+          const asObject = await readConfigObject(item)
           const barren = asObject
             ? await patternsMatchingNothing(sourcePatternsOf(asObject))
             : []
@@ -1700,7 +986,7 @@ const unpluginFactory: UnpluginFactory<
 
         // Recorded only now, so a configuration whose build threw is never
         // treated as one this process has compiled.
-        const fingerprint = configFingerprint(item)
+        const fingerprint = configFingerprint(root, item)
         if (fingerprint !== null) compiledFingerprints.add(fingerprint)
       }
 
@@ -1735,7 +1021,7 @@ const unpluginFactory: UnpluginFactory<
       // Reported, and then rethrown so the host stops. Swallowing it left
       // every target exiting 0 with the previous run's tokens still on disk
       // and in the bundle — a green build shipping stale values.
-      if (failsTheBuild(context)) throw err
+      if (failsTheBuild(failOnError, context)) throw err
 
       // Explicit, now that the reporting below sits outside the `try`. This
       // `catch` used to end the function by falling off the end of it; a
@@ -1805,7 +1091,7 @@ const unpluginFactory: UnpluginFactory<
     // where that cost buys nothing at all.
     if (report && !quiet && !everythingSkipped && generatedFiles.size > 0) {
       try {
-        reportSizes(generatedFiles)
+        reportSizes({ root, stdoutColour }, generatedFiles)
       } catch (err) {
         // At `'error'`, so it is said at every level including `silent`,
         // exactly as a compile failure is — and worded so it cannot be read
@@ -1911,7 +1197,11 @@ const unpluginFactory: UnpluginFactory<
   // Whether the discovered path has been announced. Once per plugin instance:
   // `resolveConfigs` runs on every build and rebuild, and a dev server would
   // otherwise repeat the line for the rest of the session.
-  let announcedDiscovery = false
+  //
+  // An object rather than a flag, because it is handed to
+  // `resolveConfigOption` to set: that function serves every instance in the
+  // process, so the record of what this one has said has to stay here.
+  const discovery = { announced: false }
 
   // Resolved by `configResolved` so it can amend the watcher's ignore list, and
   // handed to `configureServer` rather than resolved again — one start-up, one
@@ -2125,7 +1415,7 @@ const unpluginFactory: UnpluginFactory<
       // result: with the task closed, `Task.run` returns before
       // `updateWatchedFiles`, so every path registered here goes nowhere. What
       // deriving it does still do is read each config file — with
-      // `reportErrors: true` — and report an ENOENT for a project the host is
+      // its errors reported — and report an ENOENT for a project the host is
       // in the middle of tearing down. That report was the one thing this
       // block contributed after a close.
       if (!hostClosed) {
@@ -2326,7 +1616,14 @@ const unpluginFactory: UnpluginFactory<
                 if (filename === null) return
 
                 const changed = path.posix.join(directory, filename)
-                if (!isWatchedSource(changed, targets.patterns)) return
+                if (
+                  !isWatchedSource(
+                    changed,
+                    targets.patterns,
+                    generatedDestinations,
+                  )
+                )
+                  return
 
                 void schedule(path.basename(changed)).catch(() => {})
               })
@@ -2402,7 +1699,8 @@ const unpluginFactory: UnpluginFactory<
         // floating. `schedule` owns the whole rebuild including its errors,
         // so there is nothing here left to reject.
         server.watcher.on('all', (_event, file) => {
-          if (!isWatchedSource(file, targets.patterns)) return
+          if (!isWatchedSource(file, targets.patterns, generatedDestinations))
+            return
 
           // A dev server has no build to fail, so a rebuild that throws is
           // reported by the scheduler and the server keeps serving.
@@ -2435,7 +1733,11 @@ const unpluginFactory: UnpluginFactory<
       // with tokens, and resolving every configuration only to discard the
       // answer ran a consumer's `config` function once per unrelated file.
       // Skipped until a build has derived a list to filter against.
-      if (cachedPatterns && !isWatchedSource(id, cachedPatterns)) return
+      if (
+        cachedPatterns &&
+        !isWatchedSource(id, cachedPatterns, generatedDestinations)
+      )
+        return
 
       const resolved = await resolveConfigs()
       if (resolved.length === 0) return
@@ -2451,7 +1753,7 @@ const unpluginFactory: UnpluginFactory<
       // "change", so skipping what is not a source here is what keeps this
       // from rebuilding forever — both the files that match no pattern and
       // the ones that match only because this plugin wrote them.
-      if (!isWatchedSource(id, patterns)) return
+      if (!isWatchedSource(id, patterns, generatedDestinations)) return
 
       // Same division as `buildStart`: on webpack the compile belongs to
       // `beforeCompile`, which has already run for this compilation, so all
@@ -2460,7 +1762,7 @@ const unpluginFactory: UnpluginFactory<
 
       // Expanded again after the build rather than reusing the list from
       // before it, so a token file the build itself produced is registered.
-      for (const file of await expandPatterns(patterns)) {
+      for (const file of await expandPatterns(patterns, log)) {
         this.addWatchFile(file)
       }
     },

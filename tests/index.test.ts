@@ -5096,7 +5096,7 @@ describe('the contributor documentation', () => {
     // four. Pinned against the array rather than against a transcription, so a
     // fifth filename fails here rather than going undocumented.
     const source = fs.readFileSync(
-      new URL('../src/index.ts', import.meta.url),
+      new URL('../src/config.ts', import.meta.url),
       'utf-8',
     )
     const defaults = /const defaults = \[(?<body>[\s\S]*?)\]/.exec(source)
