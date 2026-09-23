@@ -1217,6 +1217,63 @@ describe('unplugin-style-dictionary (vite target)', () => {
     },
   )
 
+  // The record of what a build wrote belongs to the plugin instance that wrote
+  // it, and one process routinely holds several. Every build clears the record
+  // before refilling it, so a record shared between instances would be emptied
+  // by the other instance's build — leaving this one's output looking like a
+  // token source again, and rebuilding on it.
+  it('keeps its record of what it wrote when another instance builds', async () => {
+    const tokensDirectory = path.join(tempDir, 'shared-record')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+
+    const tokenSource = path.join(tokensDirectory, 'base.json')
+    const generated = path.join(tokensDirectory, 'flat.json')
+    const recordConfig = path.join(tempDir, 'shared-record.config.json')
+
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#000000' } } }),
+    )
+    // Output beside its own sources, so only the record tells the two apart.
+    fs.writeFileSync(
+      recordConfig,
+      JSON.stringify({
+        platforms: {
+          json: {
+            buildPath: posix(tokensDirectory) + '/',
+            files: [{ destination: 'flat.json', format: 'json/flat' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [`${posix(tokensDirectory)}/*.json`],
+      }),
+    )
+
+    const other = path.join(tempDir, 'shared-record-other')
+    fs.mkdirSync(path.join(other, 'gen'), { recursive: true })
+    const otherConfig = path.join(other, 'sd.config.json')
+    fs.writeFileSync(otherConfig, usableConfig(other, 'other.css'))
+
+    const plugin = vitePlugin({ config: recordConfig, silent: true })
+    await callBuildStart(plugin)
+
+    // A second instance in the same process, building something else.
+    await callBuildStart(vitePlugin({ config: otherConfig, silent: true }))
+
+    // Changed without going through the plugin, so a rebuild it should not
+    // have made writes visibly different content.
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+    )
+    const inodeAfterBuild = fs.statSync(generated).ino
+
+    await callWatchChange(plugin, generated)
+
+    expect(fs.statSync(generated).ino).toBe(inodeAfterBuild)
+    expect(fs.readFileSync(generated, 'utf-8')).toContain('#000000')
+  })
+
   // The existing fixtures keep the configuration and the tokens in one
   // directory, which is the single arrangement where the two bases coincide —
   // and why nothing here caught the plugin reading token patterns against the
@@ -4592,7 +4649,12 @@ describe("when the host's root is not the working directory", () => {
 
       expect(errors).toEqual([])
       expect(rows).toHaveLength(1)
-      expect(rows[0]).toContain('out.txt')
+
+      // Shown relative to the host's root, the directory Vite prints its own
+      // output from, so it climbs out of that to reach the file. A root read
+      // before the host assigned it would be the working directory, and the
+      // path would climb out of the repository instead.
+      expect(rows[0]).toMatch(/^\.\.\/out\/out\.txt\s/)
     } finally {
       logSpy.mockRestore()
     }
