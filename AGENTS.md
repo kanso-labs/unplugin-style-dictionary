@@ -282,10 +282,10 @@ That should print nothing.
 
 ## Workflows and checks
 
-`Build`, `Lint` and `Test` run on `pull_request` and on pushes to `main`. The
-three are the checks the repository's ruleset requires, so a merge is gated on
-them, and the push trigger is what re-verifies `main` afterwards rather than
-leaving it on trust.
+`Build`, `Lint` and `Test` run on `pull_request` and on pushes to `main`, and
+`Test` carries a second job, `Test on Windows`. Those four are the checks the
+repository's ruleset requires, so a merge is gated on them, and the push trigger
+is what re-verifies `main` afterwards rather than leaving it on trust.
 
 The `pull_request` trigger is deliberately unscoped. Adding `branches: [main]`
 would match the sibling repositories, but a pull request opened against any
@@ -296,8 +296,11 @@ as a hang rather than a failure because nothing will ever report.
 than the label on it, so keep the job name and the ruleset in sync in one
 change.
 
-Ruleset `19123565` ("Default") requires `Build`, `Lint` and `Test` by exact
-string.
+Ruleset `19123565` ("Default") requires `Build`, `Lint`, `Test` and
+`Test on Windows` by exact string, all four from GitHub Actions (integration
+`15368`). `gh api repos/kanso-labs/unplugin-style-dictionary/rulesets/19123565`
+is the source of truth, and it is worth reading rather than this paragraph: #351
+was filed from this paragraph five days after the ruleset had already changed.
 
 `Lint` runs actionlint as a step rather than as a job of its own, and that is
 the reason why: a new job is a new check name, nothing requires it, and it would
@@ -457,8 +460,8 @@ narrowed to runtime weight — the options are `bundleName`,
 nothing that filters. What `.github/codecov.yml` sets instead is
 `bundle_analysis.status: informational`, which keeps the number reported and
 stops it reading as a failure for a documentation change. Do not make it a
-required check: ruleset 19123565 names `Build`, `Lint` and `Test`, and a size
-figure is a prompt to look.
+required check: ruleset 19123565 names `Build`, `Lint`, `Test` and
+`Test on Windows`, and a size figure is a prompt to look.
 
 **Codecov validates a config on request, and that is worth using before guessing
 a key.**
@@ -1126,9 +1129,8 @@ without the check running at all. That is why the test for it passes
 both defects reached `main` unnoticed — nothing ran there, and a one-off
 experiment found them rather than a check.
 
-Ruleset 19123565 requires `Build`, `Lint` and `Test` by exact string, so that
-job reports without gating. Adding it to the ruleset is a repository-settings
-change and a separate decision.
+It gates merges. Ruleset 19123565 has required it by exact string since
+2026-09-18, fifteen minutes after #334 fixed the flake described below.
 
 `npm run format:check` passes there, and `.gitattributes` carries `eol=lf` for
 that reason — a Windows checkout otherwise yields CRLF and `oxfmt --check`
@@ -1150,9 +1152,14 @@ sample over a pass when what is being verified is a race.
 thread for the whole of it — worse than the rebuild it is trying to save. The
 async path waits on a timer and keeps serving, so it can afford the two seconds.
 
-**The job is not in the ruleset, and should not join it until this has been
-quiet for a while.** A required check that fails on a documentation pull request
-blocks every merge, which is worse than not having the check.
+**The job joined the ruleset once the fix had landed, and it has been quiet
+since.** Measured on 2026-09-23 across every `Test` run since #334 merged: 58
+Windows runs, 58 passes, 51 of them after the ruleset changed. Requiring it has
+a cost, and it is the one that held it back: a flake there now blocks every
+merge, documentation pull requests and Renovate's automerges included, and every
+merge waits on the Windows leg, the slowest in the workflow. What that buys is
+that a Windows regression can no longer merge green, which is how #306 and #307
+reached `main`.
 
 **The negation that un-ignores a `node_modules` token cannot be made to work on
 Windows, and that is measured rather than assumed.** Five rounds on a

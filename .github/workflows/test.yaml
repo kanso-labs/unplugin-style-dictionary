@@ -137,10 +137,10 @@ jobs:
   # never matched (#307). Both were found by a one-off experiment rather than
   # by CI, which is the gap this closes.
   #
-  # Ruleset 19123565 requires `Build`, `Lint` and `Test` by exact string, so
-  # this name is not required and cannot block a merge on its own. Adding it to
-  # the ruleset is a repository-settings change and is deliberately separate
-  # from adding the job.
+  # Ruleset 19123565 requires this job by its exact name, beside `Build`, `Lint`
+  # and `Test`, so renaming it edits the merge gate: change the name and the
+  # ruleset together. It joined the ruleset once the job had been quiet, which
+  # AGENTS.md records with the sample that showed it.
   #
   # The suite only, not coverage: the thresholds are measured against one
   # platform and a second set of numbers would fail on run-to-run difference

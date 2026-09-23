@@ -58,8 +58,8 @@ jobs:
       # anything, and actionlint flags the interpolated form.
       #
       # A step of this job rather than a job of its own, for the same reason
-      # actionlint is: the ruleset requires `Build`, `Lint` and `Test` by exact
-      # string, and a new job would be a name nothing requires.
+      # actionlint is: the ruleset requires its checks by exact job name, and a
+      # new job would be a name nothing requires.
       - name: Check the pull request title
         if: github.event_name == 'pull_request'
         env:
