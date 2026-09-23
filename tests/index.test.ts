@@ -9,7 +9,10 @@ import * as rollup from 'rollup'
 import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { StyleDictionaryConfigContext } from '../src/types.ts'
+import type {
+  StyleDictionaryConfigContext,
+  UnpluginStyleDictionaryOptions,
+} from '../src/types.ts'
 
 import packageJson from '../package.json' with { type: 'json' }
 import rolldownPlugin from '../src/rolldown.ts'
@@ -4458,6 +4461,144 @@ describe('when a configuration cannot be used', () => {
 // Every plugin in this suite used to pass `silent: true`, so the size and gzip
 // reporter — sixty lines of arithmetic and column alignment, and the only
 // thing a consumer sees on an ordinary build — never executed once.
+// Style Dictionary writes a relative `buildPath` against the working directory,
+// so everything that asks where the output went has to read it the same way.
+// The host's root is somewhere else here, which is the one arrangement in which
+// the two bases disagree — every other case builds with them the same, which is
+// why the plugin resolving `buildPath` against `root` went unnoticed.
+describe("when the host's root is not the working directory", () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-base-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // The host's root holds the configuration, and the output goes to a sibling
+  // named by a `buildPath` relative to the working directory — so Style
+  // Dictionary writes into the fixture rather than into the repository. A
+  // counting format stands in for the compile, so a skip can be observed.
+  const fixture = (name: string) => {
+    const root = path.join(tempDir, name, 'app')
+    const output = path.join(tempDir, name, 'out')
+    fs.mkdirSync(root, { recursive: true })
+
+    const counter = { calls: 0 }
+    const format = `custom/base-${name}`
+    StyleDictionary.registerFormat({
+      format: ({ dictionary }) => {
+        counter.calls++
+        return dictionary.allTokens
+          .map((token) => `${token.name}=${String(token.value)}`)
+          .join('\n')
+      },
+      name: format,
+    })
+
+    fs.writeFileSync(
+      path.join(root, 'sd.config.json'),
+      JSON.stringify({
+        platforms: {
+          text: {
+            buildPath: posix(path.relative(process.cwd(), output)) + '/',
+            files: [{ destination: 'out.txt', format }],
+            transformGroup: 'css',
+          },
+        },
+        tokens: { color: { brand: { value: '#123456' } } },
+      }),
+    )
+
+    return { counter, file: path.join(output, 'out.txt'), root }
+  }
+
+  // One build under Vite, with `root` resolved to the fixture's app directory
+  // rather than the working directory. Vite's logger is where the plugin's
+  // lines go once `configResolved` has run, so recording it keeps them out of
+  // the console as well as making them checkable.
+  const buildUnderViteRoot = async (
+    root: string,
+    options: UnpluginStyleDictionaryOptions,
+  ) => {
+    const errors: string[] = []
+    const info: string[] = []
+    const logger = {
+      error: (message: string) => {
+        errors.push(message)
+      },
+      info: (message: string) => {
+        info.push(message)
+      },
+    }
+
+    const plugin = vitePlugin({ config: 'sd.config.json', ...options })
+    if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
+      throw new TypeError('configResolved is not a callable hook')
+    }
+    await plugin.configResolved.call(
+      { addWatchFile: () => {} },
+      { command: 'build', logger, mode: 'production', root },
+    )
+
+    await callBuildStart(plugin)
+
+    return { errors, info }
+  }
+
+  it('hands onBuildEnd the file Style Dictionary wrote', async () => {
+    const { file, root } = fixture('build-end')
+
+    let handed: string[] = []
+    const { errors } = await buildUnderViteRoot(root, {
+      logLevel: 'silent',
+      onBuildEnd: (files) => {
+        handed = files
+      },
+    })
+
+    expect(errors).toEqual([])
+    expect(fs.existsSync(file)).toBe(true)
+
+    // The same list the plugin keeps as its own output, which is what stops a
+    // watcher treating a generated file as a token source.
+    expect(handed).toEqual([file])
+  })
+
+  it('skips a second build whose output is already current', async () => {
+    const { counter, root } = fixture('up-to-date')
+
+    await buildUnderViteRoot(root, { logLevel: 'silent' })
+    expect(counter.calls).toBe(1)
+
+    const { errors } = await buildUnderViteRoot(root, { logLevel: 'silent' })
+
+    expect(errors).toEqual([])
+    expect(counter.calls).toBe(1)
+  })
+
+  it('prints a size for the file it wrote', async () => {
+    const { root } = fixture('size-report')
+
+    // The table goes straight to the console, and so does Style Dictionary's
+    // own line for each file at the default level the table needs.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const { errors } = await buildUnderViteRoot(root, {})
+      const rows = logSpy.mock.calls
+        .map((call) => stripAnsi(String(call[0])))
+        .filter((line) => line.includes('gzip:'))
+
+      expect(errors).toEqual([])
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toContain('out.txt')
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+})
+
 describe('the size reporter', () => {
   const tempDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'unplugin-style-dictionary-reporter-'),
