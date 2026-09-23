@@ -81,6 +81,16 @@ export async function configForBuild(
   }
 }
 
+// How to name a configuration in a message. A path is what a consumer
+// recognises; a configuration passed as an object or returned by a function has
+// no name, so it is identified by where it sits in the list rather than by a
+// stringified dump of itself.
+export function describeConfig(item: ResolvedConfig, index: number): string {
+  return item.file
+    ? `The configuration ${item.file}`
+    : `The configuration at position ${index + 1}`
+}
+
 // What a configuration item says, as an object. `report` is where a failure is
 // said, and leaving it out is what stops the two readers of this from saying
 // the same thing twice: a bad config has nowhere else to surface when the
