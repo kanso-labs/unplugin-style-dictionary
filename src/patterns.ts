@@ -99,14 +99,24 @@ export async function patternsMatchingNothing(
 }
 
 // The patterns one configuration reads, resolved the way the build resolves
-// them. The same `source`/`include` walk `watchPatternsOf` does, for one
-// item rather than the whole set — against the working directory, because
-// that is where Style Dictionary's own `combineJSON` globs them.
+// them. The watch list, the up-to-date check and the empty-token-set message
+// all read a configuration's patterns through here, so they cannot disagree
+// about which files it reads.
+//
+// Against the working directory, because that is where Style Dictionary
+// resolves them: `combineJSON` globs each pattern with no `cwd` of its own.
+// Resolving against the configuration file's directory instead is how the
+// watch list came to name paths the build never reads — a configuration in a
+// subdirectory built correctly and watched nothing at all.
+//
+// An empty pattern is skipped, because Style Dictionary reads nothing from one.
+// Resolved, it would be the working directory itself, and the watch list used
+// to register exactly that for an empty entry in a `source` array.
 export function sourcePatternsOf(configObj: Config): string[] {
   const patterns: string[] = []
 
   const add = (pattern: unknown) => {
-    if (typeof pattern === 'string') {
+    if (typeof pattern === 'string' && pattern !== '') {
       patterns.push(
         (path.isAbsolute(pattern)
           ? pattern
@@ -151,36 +161,8 @@ export async function watchPatternsOf(
     const configObj = await readConfigObject(item, log)
 
     if (configObj) {
-      const addPattern = (pattern: unknown) => {
-        if (typeof pattern === 'string') {
-          // Against the working directory, because that is where Style
-          // Dictionary resolves it: `combineJSON` globs each pattern with
-          // no `cwd` of its own. Resolving against the configuration file's
-          // directory instead is how the watch list came to name paths the
-          // build never reads — a configuration in a subdirectory built
-          // correctly and watched nothing at all.
-          const absolutePattern = path.isAbsolute(pattern)
-            ? pattern
-            : path.resolve(process.cwd(), pattern)
-          const normalized = absolutePattern.replace(/\\/g, '/')
-          filesToWatch.add(normalized)
-        }
-      }
-
-      if (configObj.source) {
-        if (Array.isArray(configObj.source)) {
-          configObj.source.forEach(addPattern)
-        } else {
-          addPattern(configObj.source)
-        }
-      }
-
-      if (configObj.include) {
-        if (Array.isArray(configObj.include)) {
-          configObj.include.forEach(addPattern)
-        } else {
-          addPattern(configObj.include)
-        }
+      for (const pattern of sourcePatternsOf(configObj)) {
+        filesToWatch.add(pattern)
       }
     }
   }
