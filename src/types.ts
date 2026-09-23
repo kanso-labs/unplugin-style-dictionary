@@ -332,7 +332,8 @@ export interface UnpluginStyleDictionaryOptions {
   report?: boolean
 
   /**
-   * The directory a relative `config` path is looked up in.
+   * The directory a relative `config` path is looked up in, and a relative
+   * `watch` entry is resolved against.
    *
    * Defaults to the host's own root — Vite's `root`, webpack's `context` —
    * and to the working directory for rollup and rolldown, which offer none.
@@ -367,6 +368,13 @@ export interface UnpluginStyleDictionaryOptions {
    * because the watchers in play take filenames rather than patterns. A
    * pattern's own directory is registered alongside them, so a token file
    * created later is noticed too.
+   *
+   * A relative entry is resolved against `root`, like a relative `config`: both
+   * are options of this plugin rather than paths inside a configuration. That
+   * is not the base `source` and `include` use — Style Dictionary reads those
+   * against the working directory — so where the host's root is somewhere
+   * else, name a file here relative to the root, and in `source` relative to
+   * where the build runs.
    *
    * What a change to a watched file then triggers is the host's to decide —
    * see the interface documentation above.

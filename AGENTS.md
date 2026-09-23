@@ -33,6 +33,8 @@ test when it goes wrong:
 
 - `root` captured in the config lookup fails the `finds a config relative to …`
   cases under Vite, webpack and rspack.
+- `root` captured in the watch list fails
+  `registers a relative watch entry against the host's root`.
 - `root` captured in `PluginInstance` fails the size-table case under
   `when the host's root is not the working directory`.
 - The overlay callback copied into `PluginInstance` fails the two overlay cases
@@ -41,8 +43,6 @@ test when it goes wrong:
   `keeps its record of what it wrote when another instance builds`.
 - The scheduler's state moved to module scope fails
   `rebuilds each instance when two are triggered together`.
-
-`root` captured in the watch list still fails nothing.
 
 [`README.md`](README.md) is the consumer-facing documentation: options, per
 bundler usage, examples. Keep it correct when you change the public surface.
@@ -1100,6 +1100,14 @@ second time against `root`. On top of that, `cache` never skipped and the size
 table printed nothing. The cases under
 `when the host's root is not the working directory` pin all three. Every other
 case builds with the two the same, which is how it went unnoticed.
+
+**A relative `watch` entry is the one path `root` does move.** It is an option
+of this plugin, like `config`, rather than a path inside a configuration, and it
+has always been resolved against `root`. #369 made that the documented contract
+rather than a guess, since switching it would move the watched file for every
+consumer whose root is not the working directory. Both of its readers are pinned
+under `a relative watch entry`: the watch list, and the up-to-date check that
+counts the entry as an input.
 
 **A destination is joined onto its `buildPath`, not resolved against it.** Style
 Dictionary uses `path-unified/posix`'s `join`, so even an absolute destination
