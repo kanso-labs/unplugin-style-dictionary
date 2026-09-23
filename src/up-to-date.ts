@@ -194,8 +194,10 @@ export function writtenDestination(
   buildPath: string | undefined,
   destination: string,
 ): string {
+  // TEMPORARY, for #368: a base other than the working directory, standing in
+  // for the `root` reading #362 removed. Reverted before this merges.
   return path.resolve(
-    process.cwd(),
+    path.dirname(process.cwd()),
     buildPath ? path.join(buildPath, destination) : destination,
   )
 }
