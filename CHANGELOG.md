@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **build:** join an absolute destination onto its buildPath ([#371](https://github.com/kanso-labs/unplugin-style-dictionary/issues/371)) ([e73634c](https://github.com/kanso-labs/unplugin-style-dictionary/commit/e73634ccd42b338db1a15b8a07508e71c0d32cf3))
 * **build:** read a relative buildPath against the working directory ([#363](https://github.com/kanso-labs/unplugin-style-dictionary/issues/363)) ([fe21b3f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/fe21b3f4181e044d8db584b1ae789ae32c0f2b44))
 * **watch:** close the node_modules watchers in middleware mode ([#354](https://github.com/kanso-labs/unplugin-style-dictionary/issues/354)) ([d4a101e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d4a101eb21b4bb641d39b31be0489d87e49461f6))
 

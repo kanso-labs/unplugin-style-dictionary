@@ -1504,6 +1504,16 @@ output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
 merge to npm.
 
+**Merge a release pull request only once `Release Please` has run for the latest
+push to `main`.** release-please rebuilds its pull request after every push, and
+merging it before that run finishes releases whatever the pull request held at
+that moment. #371 merged nineteen seconds before #357, the 0.10.6 release: the
+tag carries #371's code, but neither the changelog nor the release notes listed
+it. release-please then counts the commit as released, so no later release would
+have listed it either, and the entry was added to `CHANGELOG.md` by hand. The
+run's status on `main`'s head commit is what to check; the release pull
+request's own checks say nothing about it.
+
 **commitlint runs on the pull request title, and on nothing else.** `Lint` pipes
 `github.event.pull_request.title` into it, and that is the whole of the
 enforcement. There is still no `commit-msg` hook — `.husky/` carries only
