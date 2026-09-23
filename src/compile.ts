@@ -22,6 +22,7 @@ import {
   configFingerprint,
   declaredDestinations,
   isUpToDate,
+  setExperimentBase,
   writtenDestination,
 } from './up-to-date.js'
 
@@ -81,6 +82,7 @@ export async function runBuilds(
   // Read when this compile starts rather than when the instance was built,
   // because the host assigns it after the factory has run.
   const root = instance.root()
+  setExperimentBase(root)
 
   const startTime = Date.now()
 
