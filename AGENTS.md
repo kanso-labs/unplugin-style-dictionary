@@ -18,14 +18,26 @@ once.
 **`src/index.ts` owns every piece of state, and the modules beside it own
 none.** The plugin factory there keeps each instance's state in its closure, and
 the top of that file keeps the little that is process-wide, such as
-`compilesInFlight`. `config.ts`, `patterns.ts`, `up-to-date.ts` and the rest
-take what they need as arguments and hold on to none of it, because one process
-routinely runs several instances of this plugin. `root` in particular is read
-when a call is made, never captured, because the host assigns it after the
-factory has run. Only the config lookup is pinned: captured there, the
-`finds a config relative to …` cases under Vite, webpack and rspack fail, while
-the same capture in the watch list, the up-to-date check or the size report
-fails nothing.
+`compilesInFlight`. `config.ts`, `patterns.ts`, `up-to-date.ts`, `compile.ts`
+and the rest take what they need as arguments and hold on to none of it, because
+one process routinely runs several instances of this plugin. `runBuilds` takes
+the instance's share as one `PluginInstance`, which the factory builds once.
+
+`root` in particular is read when a call is made, never captured, because the
+host assigns it after the factory has run. The overlay callback is reached the
+same way, because `configureServer` assigns it. Measured, each of these fails a
+test when it goes wrong:
+
+- `root` captured in the config lookup fails the `finds a config relative to …`
+  cases under Vite, webpack and rspack.
+- `root` captured in `PluginInstance` fails the size-table case under
+  `when the host's root is not the working directory`.
+- The overlay callback copied into `PluginInstance` fails the two overlay cases
+  in `tests/dev-server.test.ts`.
+- `generatedDestinations` shared between instances fails
+  `keeps its record of what it wrote when another instance builds`.
+
+`root` captured in the watch list still fails nothing.
 
 [`README.md`](README.md) is the consumer-facing documentation: options, per
 bundler usage, examples. Keep it correct when you change the public surface.
