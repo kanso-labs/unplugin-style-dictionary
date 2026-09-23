@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.6](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.5...unplugin-style-dictionary-v0.10.6) (2026-09-23)
+
+
+### Bug Fixes
+
+* **build:** read a relative buildPath against the working directory ([#363](https://github.com/kanso-labs/unplugin-style-dictionary/issues/363)) ([fe21b3f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/fe21b3f4181e044d8db584b1ae789ae32c0f2b44))
+* **watch:** close the node_modules watchers in middleware mode ([#354](https://github.com/kanso-labs/unplugin-style-dictionary/issues/354)) ([d4a101e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d4a101eb21b4bb641d39b31be0489d87e49461f6))
+
+
+### Dependencies
+
+* update dependency style-dictionary to v5.5.5 ([#355](https://github.com/kanso-labs/unplugin-style-dictionary/issues/355)) ([57b52b9](https://github.com/kanso-labs/unplugin-style-dictionary/commit/57b52b900e202748eb0f55cee3f8aef01f16f3ef))
+* update kanso-labs/actions action to v4.0.2 ([#356](https://github.com/kanso-labs/unplugin-style-dictionary/issues/356)) ([0eccf05](https://github.com/kanso-labs/unplugin-style-dictionary/commit/0eccf053ca5e321f2e3e7ec9efcaaa0cad57e175))
+
 ## [0.10.5](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.4...unplugin-style-dictionary-v0.10.5) (2026-09-22)
 
 
