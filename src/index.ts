@@ -17,6 +17,7 @@ import { runBuilds } from './compile.js'
 import { resolveConfigOption } from './config.js'
 import { asError, errorMessage } from './errors.js'
 import { expandPatterns, watchPatternsOf } from './patterns.js'
+import { createScheduler } from './scheduler.js'
 import { isWatchedSource } from './watch-filter.js'
 
 export type * from './types.js'
@@ -787,27 +788,6 @@ const unpluginFactory: UnpluginFactory<
     }
   }
 
-  // One rebuild per burst of watcher events, and never two at once.
-  //
-  // Two things went wrong without this. A single token edit under Vite's dev
-  // server reached both the `configureServer` listener and `watchChange` —
-  // Vite 6, 7 and 8 all invoke plugin `watchChange` while serving — and each
-  // started its own build, so one write produced two. And nothing serialised
-  // them: a four-file change started one build per file, all overlapping.
-  // `runBuilds` builds its configurations one after another precisely so two
-  // instances never write the same destination at once, and concurrent calls
-  // to it reintroduced that one level up.
-  //
-  // The trailing debounce collapses the burst; the in-flight chain means a
-  // trigger arriving mid-build queues exactly one follow-up rather than
-  // starting a second build beside it.
-  const REBUILD_DEBOUNCE_MS = 50
-
-  let debounceTimer: ReturnType<typeof setTimeout> | undefined
-  let pendingReason: string | undefined
-  let inFlight: Promise<void> | undefined
-  let waiting: Array<(failure?: { error: unknown }) => void> = []
-
   // Set by `configureServer`. A dev server's watcher is long-lived, so its
   // list has to follow a configuration that changes; every other target
   // re-registers on each build through `addWatchFile` instead.
@@ -847,83 +827,44 @@ const unpluginFactory: UnpluginFactory<
   // nothing at all on the only configuration that matters.
   let notifyBuildOutcome: ((error: Error | null) => void) | undefined
 
-  const drain = async (): Promise<void> => {
-    // A loop rather than a single pass: anything scheduled while the build
-    // below is running is picked up here instead of starting a second one.
-    while (pendingReason !== undefined) {
-      const reason = pendingReason
-      pendingReason = undefined
+  // A rebuild, as the scheduler runs it: resolve, compile, and bring the dev
+  // server's watch list up to date. A failure is rethrown once it has been
+  // reported, so the scheduler can hand it to every trigger this covered.
+  const rebuild = async (reason: string): Promise<void> => {
+    let compiling = false
 
-      // Captured before the await, so a trigger arriving mid-build waits for
-      // the next pass rather than being told this one covered it.
-      const resolvers = waiting
-      waiting = []
-
-      let failure: undefined | { error: unknown }
-      let compiling = false
-
-      try {
-        const resolved = await resolveConfigs()
-        if (resolved.length > 0) {
-          compiling = true
-          await runBuilds(instance, resolved, reason)
-          compiling = false
-          hasCompiled = true
-          await refreshServerWatchList?.(resolved)
-        }
-      } catch (err) {
-        failure = { error: err }
-
-        // `runBuilds` reports its own failure before rethrowing, so only the
-        // other things that can throw here — a `config` function of the
-        // consumer's that raises, a watch list that cannot be rebuilt — need
-        // reporting. They reach the overlay for the same reason: from the
-        // page's point of view the rebuild failed, whichever half of it did.
-        if (!compiling) {
-          log(`Rebuild failed: ${errorMessage(err)}`, 'error')
-          notifyBuildOutcome?.(asError(err))
-        }
+    try {
+      const resolved = await resolveConfigs()
+      if (resolved.length > 0) {
+        compiling = true
+        await runBuilds(instance, resolved, reason)
+        compiling = false
+        hasCompiled = true
+        await refreshServerWatchList?.(resolved)
+      }
+    } catch (err) {
+      // `runBuilds` reports its own failure before rethrowing, so only the
+      // other things that can throw here — a `config` function of the
+      // consumer's that raises, a watch list that cannot be rebuilt — need
+      // reporting. They reach the overlay for the same reason: from the
+      // page's point of view the rebuild failed, whichever half of it did.
+      if (!compiling) {
+        log(`Rebuild failed: ${errorMessage(err)}`, 'error')
+        notifyBuildOutcome?.(asError(err))
       }
 
-      // Handed on to whatever awaited this rebuild, which is `watchChange`
-      // and so the host under a watching bundler. Vite's dev-server listener
-      // has no build to fail and catches it.
-      for (const settle of resolvers) settle(failure)
+      throw err
     }
   }
 
-  // Resolves once a rebuild covering this trigger has finished.
-  const schedule = async (reason: string): Promise<void> => {
-    // Nothing consumes a rebuild once the host has closed its watcher. This is
-    // where a close actually lands: `watchChange` reaches here only after
-    // resolving configurations and deriving a watch list, so a `closeWatcher`
-    // arriving mid-hook finds no timer armed yet and nothing else to stop it.
-    //
-    // Resolving rather than rejecting, because the trigger was handled — by
-    // being declined — and the caller awaiting it is a host on its way out.
-    if (hostClosed) return
-
-    pendingReason = reason
-
-    const covered = new Promise<void>((resolve, reject) => {
-      waiting.push((failure) => {
-        if (failure) reject(asError(failure.error))
-        else resolve()
-      })
-    })
-
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
-      debounceTimer = undefined
-      inFlight = (inFlight ?? Promise.resolve()).then(drain)
-    }, REBUILD_DEBOUNCE_MS)
-
-    // A pending rebuild must not be what keeps a process alive; whatever is
-    // watching already is.
-    debounceTimer.unref()
-
-    return covered
-  }
+  // One rebuild per burst of watcher events, and never two at once — see
+  // `createScheduler`. Created here, once per plugin instance: a debounce two
+  // instances shared would run one instance's rebuild and drop the other's.
+  const schedule = createScheduler({
+    debounceMs: 50,
+    isClosed: () => hostClosed,
+    run: rebuild,
+  })
 
   // Every host that runs a rollup-shaped watcher calls this on shutdown, and
   // all three get the same handler below. There is deliberately no webpack
@@ -932,8 +873,8 @@ const unpluginFactory: UnpluginFactory<
   //
   // It raises the flag and nothing else. A debounce timer armed before the
   // close is deliberately left to fire: the rebuild it runs is one the host
-  // asked for while the project was still whole, and `drain` reports its own
-  // failures. Cancelling it would be a guard no test could fail on, since a
+  // asked for while the project was still whole, and `rebuild` reports its
+  // own failures. Cancelling it would be a guard no test could fail on, since a
   // trigger arriving after the close is declined by `schedule` instead.
   const closeWatcher = (): void => {
     hostClosed = true
