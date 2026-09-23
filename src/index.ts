@@ -524,9 +524,9 @@ const unpluginFactory: UnpluginFactory<
   // What the host is doing, for the function form of `config`. Populated where
   // each host knows the answer and read when that function is called — the
   // same shape as `root` and the message host above, and for the same reason:
-  // `resolveConfigs` is reached from five places now, and threading a context
-  // parameter through all five would make every caller restate what only the
-  // host can say.
+  // `resolveConfigs` is reached from every hook that builds or watches, and
+  // threading a context parameter through each of them would make every caller
+  // restate what only the host can say.
   let hostCommand: 'build' | 'serve' = 'build'
   let hostMode: string | undefined
   let isWatching = false

@@ -44,14 +44,6 @@ function isPluginHook<A extends unknown[]>(
   return typeof hook === 'function'
 }
 
-// Vite/Rollup normally provide the plugin-context `this` (with addWatchFile,
-// etc.) when invoking a hook. To unit-test buildStart in isolation we bind a
-// minimal stub context ourselves rather than spinning up a real dev server.
-//
-// Both callers return what the hook registered. The stub used to discard it,
-// and that is why nothing here could see the plugin handing a watcher an
-// unexpanded glob — which every watcher in play treats as a filename that does
-// not exist.
 // Style Dictionary ignores keys it does not know, and `Config` does not
 // declare this one — it exists only to make `JSON.stringify` throw, which is
 // what sends `buildKey` down its `null` path.
@@ -70,6 +62,14 @@ const refuseWithEperm = (): never => {
   throw error
 }
 
+// Vite/Rollup normally provide the plugin-context `this` (with addWatchFile,
+// etc.) when invoking a hook. To unit-test buildStart in isolation we bind a
+// minimal stub context ourselves rather than spinning up a real dev server.
+//
+// Both callers return what the hook registered. The stub used to discard it,
+// and that is why nothing here could see the plugin handing a watcher an
+// unexpanded glob — which every watcher in play treats as a filename that does
+// not exist.
 const callBuildStart = async (plugin: Plugin) => {
   const watched: string[] = []
   const context: BuildContext = {

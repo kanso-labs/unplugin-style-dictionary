@@ -78,7 +78,7 @@ rewrite files in that checkout rather than merely report them.
 
 **It is `.claude/worktrees`, not `.claude`.** `.claude/settings.json` is
 tracked, and oxfmt formats it; excluding the whole directory drops it from the
-set — 42 files rather than 43. The narrower pattern was measured to block the
+set, measured as one file fewer. The narrower pattern was measured to block the
 same hazard.
 
 Do not try to reproduce any of this from inside `.claude/worktrees/<name>/`.
