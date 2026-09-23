@@ -6,13 +6,26 @@ Guidance for coding agents working in this repository.
 
 `@kanso-labs/unplugin-style-dictionary` compiles Style Dictionary design tokens
 ahead of a bundler, and watches and recompiles them while a dev server runs. It
-is built on [unplugin](https://unplugin.unjs.io), so one implementation in
-`src/index.ts` targets Vite, Rolldown, Rollup, Rspack and Webpack.
+is built on [unplugin](https://unplugin.unjs.io), so one implementation targets
+Vite, Rolldown, Rollup, Rspack and Webpack.
 
 `src/{vite,rolldown,rollup,rspack,webpack}.ts` are three lines each — they
 re-export the matching `unplugin.<target>` and exist to give every bundler its
-own package entry point. **The behaviour lives in `src/index.ts` alone**, so a
-fix belongs there and reaches all five targets at once.
+own package entry point. **The behaviour lives in `src/index.ts` and the modules
+it imports, never in a target entry**, so a fix reaches all five targets at
+once.
+
+**`src/index.ts` owns every piece of state, and the modules beside it own
+none.** The plugin factory there keeps each instance's state in its closure, and
+the top of that file keeps the little that is process-wide, such as
+`compilesInFlight`. `config.ts`, `patterns.ts`, `up-to-date.ts` and the rest
+take what they need as arguments and hold on to none of it, because one process
+routinely runs several instances of this plugin. `root` in particular is read
+when a call is made, never captured, because the host assigns it after the
+factory has run. Only the config lookup is pinned: captured there, the
+`finds a config relative to …` cases under Vite, webpack and rspack fail, while
+the same capture in the watch list, the up-to-date check or the size report
+fails nothing.
 
 [`README.md`](README.md) is the consumer-facing documentation: options, per
 bundler usage, examples. Keep it correct when you change the public surface.
@@ -1397,8 +1410,8 @@ end. And the plugin itself stops doing watch-driven work once `closeWatcher` has
 run — that hook fires synchronously inside `close()`, and so before the
 in-flight hook resumes, which is the only reason a flag set there can help.
 `buildStart` skips its watch-list derivation, which rollup discards anyway once
-the task is closed, and that derivation reading each config with
-`reportErrors: true` is what reported an ENOENT for a project being torn down.
+the task is closed, and that derivation reading each config with its errors
+reported is what printed an ENOENT for a project being torn down.
 
 **The gate that stops a rebuild sits in `schedule`, not in a cancelled timer,
 and that is where measurement put it.** A close landing mid-`watchChange`
