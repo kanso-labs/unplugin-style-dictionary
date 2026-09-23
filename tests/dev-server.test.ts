@@ -822,4 +822,103 @@ describe('under a real vite dev server', () => {
 
     expect(events.filter((file) => file.includes('unrelated'))).toEqual([])
   }, 30000)
+
+  it.each([
+    {
+      label: 'in middleware mode',
+      options: { hmr: false, middlewareMode: true },
+    },
+    { label: 'listening', options: { host: '127.0.0.1' } },
+  ])(
+    'closes its own node_modules watchers when a server $label closes',
+    async ({ label, options }) => {
+      // #307 gave a `node_modules` token directory a watcher of the plugin's
+      // own, and registered its cleanup on `server.httpServer`'s `close`
+      // event. Middleware mode has no `httpServer` — it is how Vite runs under
+      // Express, Koa and most SSR setups — so the optional chain registered
+      // nothing, and every restart leaked one `fs.watch` handle per directory
+      // for the rest of the process. Every other case in this file boots in
+      // middleware mode, which is why that cleanup was the one line of #307
+      // no test had ever run.
+      //
+      // A plain directory rather than a symlink: #307's 2x2 showed that
+      // `node_modules` is the variable and the symlink is not.
+      const app = path.join(
+        tempDir,
+        `own-watchers-${label.replace(/\W+/g, '-')}`,
+      )
+      const tokens = path.join(app, 'node_modules', '@acme', 'tokens', 'src')
+      fs.mkdirSync(tokens, { recursive: true })
+      fs.mkdirSync(path.join(app, 'generated'), { recursive: true })
+
+      const tokenSource = path.join(tokens, 'color.json')
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#123456' } } }),
+      )
+
+      const configFile = path.join(app, 'sd.config.json')
+      const generated = path.join(app, 'generated', 'vars.css')
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
+          platforms: {
+            css: {
+              buildPath: posix(path.join(app, 'generated')) + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [posix(tokenSource)],
+        }),
+      )
+
+      // Records every `fs.watch` without replacing it, so the returned
+      // watchers are the real ones and each can be spied on for its close.
+      const watchSpy = vi.spyOn(fs, 'watch')
+
+      try {
+        server = await createServer({
+          configFile: false,
+          logLevel: 'silent',
+          plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+          root: app,
+          server: options,
+        })
+        if (!('middlewareMode' in options)) await server.listen()
+
+        // Up and built before it is closed, so this is a real shutdown rather
+        // than one that races the start-up build.
+        await waitUntil(() => fs.existsSync(generated), 10000)
+
+        const ours = watchSpy.mock.calls.flatMap(([watched], index) => {
+          const result = watchSpy.mock.results[index]
+          return typeof watched === 'string' &&
+            watched.includes('node_modules') &&
+            result.type === 'return'
+            ? [result.value]
+            : []
+        })
+
+        // Guards the assertion below against passing vacuously: "every
+        // watcher was closed" is true of none at all.
+        expect(ours.length).toBeGreaterThan(0)
+
+        const closes = ours.map((watcher) => vi.spyOn(watcher, 'close'))
+
+        await server.close()
+        server = undefined
+
+        // Read before any restore — `mockRestore` clears the recorded calls.
+        const unclosed = closes.filter((spy) => spy.mock.calls.length === 0)
+        expect(
+          unclosed.length,
+          `${unclosed.length} of ${ours.length} left open`,
+        ).toBe(0)
+      } finally {
+        watchSpy.mockRestore()
+      }
+    },
+    30000,
+  )
 })

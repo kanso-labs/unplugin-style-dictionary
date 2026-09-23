@@ -1136,6 +1136,23 @@ collapses the duplicate trigger it produces where the negation also works.
 on Linux and macOS, and dropping it would leave one mechanism where there are
 two.
 
+**Those watchers are closed from the `vite` block's `buildEnd`, and the reason
+is a leak.** #307 registered the cleanup on `server.httpServer?.once('close')`,
+and middleware mode — Express, Koa, most SSR — has no `httpServer`, so the
+optional chain registered nothing and every server restart leaked one `fs.watch`
+handle per directory. Nothing in the suite could see it: every `node_modules`
+case booted in middleware mode, and the cleanup was the one line of #307 no test
+had run.
+
+`buildEnd` is the hook that fires on a dev server's close in every mode, on
+every supported Vite, and never while it is serving — measured above. It also
+fires on every `vite build --watch` rebuild, which does not run
+`configureServer`, so there is nothing to close there. **Not `closeWatcher`**,
+which reads like the obvious home and never fires for a dev server: moved there,
+the watchers leak in listening mode as well as middleware mode.
+`tests/dev-server.test.ts` pins both modes by recording each watcher `fs.watch`
+returns and spying on its own `close`.
+
 **Vite's dev-server watcher cannot be reached after `configResolved`, and its
 ignore list only grows.** It is built from the resolved config with
 `**/.git/**`, `**/node_modules/**`, `**/test-results/**` and the cache directory
@@ -1393,11 +1410,18 @@ for while the project was still whole, and cancelling it would be a guard no
 test could fail on.
 
 The hook is registered in the `rollup`, `rolldown` and `vite` blocks rather than
-at the top level, because `UnpluginOptions` declares no `closeWatcher`. **Not
-`closeBundle`:** that fires once per bundle — the watcher cases call
-`result.close()` on every `BUNDLE_END` — and would read as a shutdown on every
-rebuild. webpack has no equivalent; its nearest is `compiler.hooks.watchClose`,
-and nothing measured shows it exposed.
+at the top level, because `UnpluginOptions` declares no `closeWatcher`.
+
+**Under Vite it covers `vite build --watch`, and never a dev server.** Measured
+on Vite 6.4.3, 7.3.6 and 8.3.0: closing a `vite build --watch` watcher fires
+`closeWatcher`, while `server.close()` on a dev server fires `buildEnd` once and
+`closeBundle` twice and `closeWatcher` not at all — in middleware mode and
+listening alike. So `hostClosed` is never raised when a dev server closes, and
+nothing a dev server has to tear down can hang off this handler. What does tear
+down there is in `buildEnd`, below. **Not `closeBundle`:** that fires once per
+bundle — the watcher cases call `result.close()` on every `BUNDLE_END` — and
+would read as a shutdown on every rebuild. webpack has no equivalent; its
+nearest is `compiler.hooks.watchClose`, and nothing measured shows it exposed.
 
 **`release_created` is compared against the string `'true'` on purpose.** The
 output carries the string `"false"` when release-please runs and decides not to
