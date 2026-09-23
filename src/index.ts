@@ -1902,6 +1902,12 @@ const unpluginFactory: UnpluginFactory<
     | ((resolved: ResolvedConfig[]) => Promise<void>)
     | undefined
 
+  // Also set by `configureServer`: closes the `node_modules` watchers it
+  // opened. Called from `buildEnd` rather than registered on the server's own
+  // shutdown, because nothing on the server fires in every mode — see the
+  // `vite` block's `buildEnd`.
+  let closeOwnWatchers: (() => void) | undefined
+
   // Whether the discovered path has been announced. Once per plugin instance:
   // `resolveConfigs` runs on every build and rebuild, and a dev server would
   // otherwise repeat the line for the rest of the session.
@@ -2174,6 +2180,24 @@ const unpluginFactory: UnpluginFactory<
     rspack: adoptCompiler,
 
     vite: {
+      // **`buildEnd` is the hook a dev server's close reliably reaches.** It
+      // replaced `server.httpServer?.once('close', …)`, which middleware mode
+      // — Express, Koa, most SSR — has no `httpServer` for, so the optional
+      // chain registered nothing and every restart leaked the watchers.
+      //
+      // Measured on Vite 6.4.3, 7.3.6 and 8.3.0, in middleware mode and
+      // listening alike: while a server runs only `buildStart` fires, and on
+      // `server.close()` it is `buildEnd` once and `closeBundle` twice.
+      // **`closeWatcher` fires in neither mode on any of them**, which is why
+      // this is not the `closeWatcher` handler registered below.
+      //
+      // `buildEnd` also fires at the end of `vite build`, and on every rebuild
+      // of `vite build --watch`. Neither runs `configureServer`, so there is
+      // nothing to close there and this is a no-op.
+      buildEnd() {
+        closeOwnWatchers?.()
+      },
+
       closeWatcher,
 
       async configResolved(config) {
@@ -2320,10 +2344,12 @@ const unpluginFactory: UnpluginFactory<
         }
 
         watchNodeModules(targets.paths)
-        server.httpServer?.once('close', () => {
+
+        // Clearing the map is what makes this safe to call more than once.
+        closeOwnWatchers = () => {
           for (const watcher of ownWatchers.values()) watcher.close()
           ownWatchers.clear()
-        })
+        }
 
         // Runs once per rebuild rather than once per event, which is why it
         // is handed to the scheduler rather than done in the listener.
