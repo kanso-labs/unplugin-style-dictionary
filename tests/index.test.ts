@@ -4721,6 +4721,93 @@ describe("when the host's root is not the working directory", () => {
   })
 })
 
+// Style Dictionary joins a destination onto its platform's `buildPath` rather
+// than resolving it against it, so even an absolute destination lands under the
+// build path. The plugin took an absolute destination on its own, and named a
+// file that was never written.
+//
+// Rooted but with no drive letter, which is absolute on every platform and
+// still joins onto a Windows build path as a path Style Dictionary can write.
+// Style Dictionary writes it inside the fixture, and the old reading only ever
+// stat'd it at the filesystem root, never wrote there.
+describe('when a destination is absolute', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-absolute-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // A counting format stands in for the compile, so a skip can be observed.
+  const fixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    fs.mkdirSync(directory, { recursive: true })
+
+    const counter = { calls: 0 }
+    const format = `custom/absolute-${name}`
+    StyleDictionary.registerFormat({
+      format: ({ dictionary }) => {
+        counter.calls++
+        return dictionary.allTokens
+          .map((token) => `${token.name}=${String(token.value)}`)
+          .join('\n')
+      },
+      name: format,
+    })
+
+    const configPath = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        platforms: {
+          text: {
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: '/nested/out.txt', format }],
+            transformGroup: 'css',
+          },
+        },
+        tokens: { color: { brand: { value: '#123456' } } },
+      }),
+    )
+
+    return {
+      configPath,
+      counter,
+      file: path.join(directory, 'out', 'nested', 'out.txt'),
+    }
+  }
+
+  it('hands onBuildEnd the file Style Dictionary wrote under the buildPath', async () => {
+    const { configPath, file } = fixture('build-end')
+
+    let handed: string[] = []
+    await callBuildStart(
+      vitePlugin({
+        config: configPath,
+        logLevel: 'silent',
+        onBuildEnd: (files) => {
+          handed = files
+        },
+      }),
+    )
+
+    expect(fs.existsSync(file)).toBe(true)
+    expect(handed).toEqual([file])
+  })
+
+  it('skips a second build whose output is already current', async () => {
+    const { configPath, counter } = fixture('up-to-date')
+
+    await callBuildStart(vitePlugin({ config: configPath, logLevel: 'silent' }))
+    expect(counter.calls).toBe(1)
+
+    await callBuildStart(vitePlugin({ config: configPath, logLevel: 'silent' }))
+    expect(counter.calls).toBe(1)
+  })
+})
+
 describe('the size reporter', () => {
   const tempDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'unplugin-style-dictionary-reporter-'),
