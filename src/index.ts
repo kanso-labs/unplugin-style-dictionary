@@ -849,7 +849,7 @@ const unpluginFactory: UnpluginFactory<
           // the plugin's own output being treated as a watched source, so a
           // skipped configuration that contributed none would have its files
           // rebuild the moment a watcher noticed them.
-          for (const destination of declaredDestinations(root, declared)) {
+          for (const destination of declaredDestinations(declared)) {
             generatedFiles.add(destination)
           }
 
@@ -969,13 +969,19 @@ const unpluginFactory: UnpluginFactory<
         // being triggered by the write it just made, and a rebuild passes a
         // `context` — so gating the collection on `!context` left it empty on
         // exactly the builds a watcher is live for.
+        //
+        // Against the working directory, which is what Style Dictionary joins a
+        // relative `buildPath` to when it writes. `root` is only where the
+        // configuration was found: resolving against it named files that did
+        // not exist whenever the two differed, and handed those to
+        // `onBuildEnd`, the size report and this very set.
         for (const platform of Object.values(sd.platforms)) {
           const buildPath = platform.buildPath ?? ''
           for (const file of platform.files ?? []) {
             if (file.destination) {
               const absoluteBuildPath = path.isAbsolute(buildPath)
                 ? buildPath
-                : path.resolve(root, buildPath)
+                : path.resolve(process.cwd(), buildPath)
               const absoluteDestination = path.isAbsolute(file.destination)
                 ? file.destination
                 : path.resolve(absoluteBuildPath, file.destination)

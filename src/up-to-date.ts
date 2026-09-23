@@ -41,16 +41,19 @@ export function configFingerprint(
 // instance. Reading it here is the whole point: constructing the instance
 // is what the skip exists to avoid.
 //
-// Resolved exactly as `runBuilds` resolves it, so the two name the same
-// files — a relative `buildPath` against `root`, and a `destination`
-// against that.
+// Resolved the way Style Dictionary resolves it when it writes: a relative
+// `buildPath` against the working directory, and a `destination` against
+// that. `root` has no say here. It is where a relative `config` path is looked
+// up and nothing more, and reading `buildPath` against it named files that did
+// not exist whenever the two differed — so the up-to-date check never skipped.
+// `runBuilds` collects what it built on the same base, so the two agree.
+//
 // `only` narrows this to named platforms, and exactly one caller wants that:
 // the up-to-date check, which asks whether the work *this* compile would do
 // is already done. Everywhere else the answer has to cover every declared
 // platform, because a file an unselected platform wrote earlier is still the
 // plugin's own output and has to stay out of the watch list.
 export function declaredDestinations(
-  root: string,
   configObj: Config,
   only?: string[],
 ): string[] {
@@ -65,7 +68,7 @@ export function declaredDestinations(
     const buildPath = platform.buildPath ?? ''
     const absoluteBuildPath = path.isAbsolute(buildPath)
       ? buildPath
-      : path.resolve(root, buildPath)
+      : path.resolve(process.cwd(), buildPath)
 
     for (const file of platform.files ?? []) {
       if (file.destination) {
@@ -111,7 +114,7 @@ export async function isUpToDate(
   )
   if (hasActions) return false
 
-  const destinations = declaredDestinations(root, configObj, only)
+  const destinations = declaredDestinations(configObj, only)
   if (destinations.length === 0) return false
 
   // `options.watch` belongs in here as much as `source` does. A consumer
