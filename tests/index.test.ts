@@ -4746,6 +4746,120 @@ describe("when the host's root is not the working directory", () => {
   })
 })
 
+// A relative `watch` entry is resolved against `root`, like a relative
+// `config`, and not against the working directory the paths inside a
+// configuration use. Both readers of the option are pinned here: the watch list
+// a build registers, and the up-to-date check that counts the entry as an
+// input. Every other case names `watch` absolutely or not at all, so a `root`
+// read before the host assigned it went unnoticed in both.
+describe('a relative watch entry', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-watch-entry-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // The host's root holds the configuration and the extra file, and the output
+  // goes somewhere absolute, so the `watch` entry is the one relative path in
+  // play. A counting format stands in for the compile, so a skip can be seen.
+  const fixture = (name: string) => {
+    const root = path.join(tempDir, name, 'app')
+    fs.mkdirSync(root, { recursive: true })
+
+    const counter = { calls: 0 }
+    const format = `custom/watch-entry-${name}`
+    StyleDictionary.registerFormat({
+      format: ({ dictionary }) => {
+        counter.calls++
+        return dictionary.allTokens
+          .map((token) => `${token.name}=${String(token.value)}`)
+          .join('\n')
+      },
+      name: format,
+    })
+
+    fs.writeFileSync(
+      path.join(root, 'sd.config.json'),
+      JSON.stringify({
+        platforms: {
+          text: {
+            buildPath: posix(path.join(tempDir, name, 'out')) + '/',
+            files: [{ destination: 'out.txt', format }],
+            transformGroup: 'css',
+          },
+        },
+        tokens: { color: { brand: { value: '#123456' } } },
+      }),
+    )
+
+    const extra = path.join(root, 'extra.json')
+    fs.writeFileSync(extra, '{}')
+
+    return { counter, extra, root }
+  }
+
+  // One build under Vite, with the host's root at the fixture rather than the
+  // working directory. Hands back what the build registered for watching, and
+  // what the plugin reported through Vite's logger.
+  const buildAtRoot = async (root: string) => {
+    const errors: string[] = []
+    const logger = {
+      error: (message: string) => {
+        errors.push(message)
+      },
+      info: () => {
+        // `'silent'` drops the progress lines; only a failure would land here.
+      },
+    }
+
+    const plugin = vitePlugin({
+      config: 'sd.config.json',
+      logLevel: 'silent',
+      watch: 'extra.json',
+    })
+    if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
+      throw new TypeError('configResolved is not a callable hook')
+    }
+    await plugin.configResolved.call(
+      { addWatchFile: () => {} },
+      { command: 'build', logger, mode: 'production', root },
+    )
+
+    const watched = await callBuildStart(plugin)
+    return { errors, watched }
+  }
+
+  it("registers a relative watch entry against the host's root", async () => {
+    const { extra, root } = fixture('registered')
+
+    const { errors, watched } = await buildAtRoot(root)
+
+    expect(errors).toEqual([])
+    expect(watched).toContain(posix(extra))
+  })
+
+  it("reads a relative watch entry against the host's root when deciding to skip", async () => {
+    const { counter, extra, root } = fixture('up-to-date')
+
+    await buildAtRoot(root)
+    expect(counter.calls).toBe(1)
+
+    // Unchanged, so the entry is found and the build is skipped. Read against
+    // any other base it would be missing, which is never up to date.
+    await buildAtRoot(root)
+    expect(counter.calls).toBe(1)
+
+    // Newer than the output, so the entry is what makes this one compile.
+    const later = new Date(Date.now() + 60_000)
+    fs.utimesSync(extra, later, later)
+    await buildAtRoot(root)
+    expect(counter.calls).toBe(2)
+  })
+})
+
 // Style Dictionary joins a destination onto its platform's `buildPath` rather
 // than resolving it against it, so even an absolute destination lands under the
 // build path. The plugin took an absolute destination on its own, and named a
