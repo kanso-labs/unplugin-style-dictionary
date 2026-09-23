@@ -4588,18 +4588,34 @@ describe("when the host's root is not the working directory", () => {
     path.join(os.tmpdir(), 'unplugin-style-dictionary-base-'),
   )
 
+  // The output goes under the working directory, not beside the root, and that
+  // placement is what lets these cases fail at all. Next to the root, the
+  // relative `buildPath` climbed to the filesystem root — `../../../../../tmp/…`
+  // — and `..` stops there, so reading it against any base no deeper than the
+  // working directory named the same file. That is the Linux runner, whose
+  // temporary root sits shallower than its checkout; and on Windows
+  // `path.relative` cannot reach across drives at all, so the path came out
+  // absolute. Measured on both runners with the fix for #362 reverted: all
+  // three passed, on Linux and on Windows alike. Inside `.vitest/`, which the suite already writes to and git
+  // ignores, the path has no `..` in it and never leaves the checkout's drive.
+  fs.mkdirSync(path.join(process.cwd(), '.vitest'), { recursive: true })
+  const outputDir = fs.mkdtempSync(
+    path.join(process.cwd(), '.vitest', 'base-output-'),
+  )
+
   afterEach(() => {
-    if (fs.existsSync(tempDir))
-      fs.rmSync(tempDir, { force: true, recursive: true })
+    for (const directory of [tempDir, outputDir]) {
+      if (fs.existsSync(directory))
+        fs.rmSync(directory, { force: true, recursive: true })
+    }
   })
 
-  // The host's root holds the configuration, and the output goes to a sibling
-  // named by a `buildPath` relative to the working directory — so Style
-  // Dictionary writes into the fixture rather than into the repository. A
-  // counting format stands in for the compile, so a skip can be observed.
+  // The host's root holds the configuration, and the output is named by a
+  // `buildPath` relative to the working directory. A counting format stands in
+  // for the compile, so a skip can be observed.
   const fixture = (name: string) => {
     const root = path.join(tempDir, name, 'app')
-    const output = path.join(tempDir, name, 'out')
+    const output = path.join(outputDir, name)
     fs.mkdirSync(root, { recursive: true })
 
     const counter = { calls: 0 }
@@ -4614,12 +4630,19 @@ describe("when the host's root is not the working directory", () => {
       name: format,
     })
 
+    // Reading this `buildPath` against `root` is the mistake every case here
+    // exists to catch, so the fixture has to be one where that reading names a
+    // different file. Checked rather than assumed: a layout that stops meeting
+    // it fails here, instead of passing without testing anything.
+    const buildPath = path.relative(process.cwd(), output)
+    expect(path.resolve(root, buildPath)).not.toBe(output)
+
     fs.writeFileSync(
       path.join(root, 'sd.config.json'),
       JSON.stringify({
         platforms: {
           text: {
-            buildPath: posix(path.relative(process.cwd(), output)) + '/',
+            buildPath: posix(buildPath) + '/',
             files: [{ destination: 'out.txt', format }],
             transformGroup: 'css',
           },
@@ -4696,7 +4719,7 @@ describe("when the host's root is not the working directory", () => {
   })
 
   it('prints a size for the file it wrote', async () => {
-    const { root } = fixture('size-report')
+    const { file, root } = fixture('size-report')
 
     // The table goes straight to the console, and so does Style Dictionary's
     // own line for each file at the default level the table needs.
@@ -4711,10 +4734,11 @@ describe("when the host's root is not the working directory", () => {
       expect(rows).toHaveLength(1)
 
       // Shown relative to the host's root, the directory Vite prints its own
-      // output from, so it climbs out of that to reach the file. A root read
-      // before the host assigned it would be the working directory, and the
-      // path would climb out of the repository instead.
-      expect(rows[0]).toMatch(/^\.\.\/out\/out\.txt\s/)
+      // output from. A root read before the host assigned it would be the
+      // working directory, and the path shown would be the `.vitest/…` one.
+      expect(rows[0]?.startsWith(`${posix(path.relative(root, file))}  `)).toBe(
+        true,
+      )
     } finally {
       logSpy.mockRestore()
     }
