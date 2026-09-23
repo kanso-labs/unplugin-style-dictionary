@@ -36,10 +36,10 @@ jobs:
       # would be a new name nothing requires — free to fail without stopping
       # anything.
       - name: Run actionlint
-        uses: kanso-labs/actions/lint-workflows@v4.0.1
+        uses: kanso-labs/actions/lint-workflows@v4.0.2
 
       - name: Set up Node
-        uses: kanso-labs/actions/setup-node@v4.0.1
+        uses: kanso-labs/actions/setup-node@v4.0.2
         with:
           ignore-scripts: true
 
