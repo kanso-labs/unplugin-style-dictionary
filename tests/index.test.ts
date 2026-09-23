@@ -4283,6 +4283,26 @@ describe('the watch list a build registers', () => {
     return { directory, include, platforms, source }
   }
 
+  it('registers nothing for an empty pattern, which Style Dictionary reads nothing from', async () => {
+    // Resolved, an empty pattern is the working directory itself, and an
+    // empty entry in a `source` array used to put exactly that on the watch
+    // list — so a rollup watcher rebuilt the bundle on any change anywhere in
+    // the project.
+    const { directory, platforms, source } = fixture('empty-pattern')
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({ platforms, source: [posix(source), ''] }),
+    )
+
+    const watched = await callBuildStart(
+      vitePlugin({ config: configFile, silent: true }),
+    )
+
+    expect(watched).toContain(posix(source))
+    expect(watched).not.toContain(posix(process.cwd()))
+  })
+
   it('registers the config file, every source and every include', async () => {
     const { directory, include, platforms, source } = fixture('source-include')
     const configFile = path.join(directory, 'sd.config.json')
