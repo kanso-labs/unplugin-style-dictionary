@@ -2797,6 +2797,49 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     })
 
+    it("finds a config relative to Vite's root", async () => {
+      // Every other case here names `root` itself, and naming it skips the
+      // adoption from `config.root` altogether — so a `root` read before
+      // `configResolved` assigned it passed all of them. The working directory
+      // is this repository, which holds no configuration under any of the four
+      // names, so only the root Vite resolved can find this one.
+      const directory = rootWith('vite-root', {
+        'sd.config.json': usableConfig(
+          path.join(tempDir, 'discovery-vite-root'),
+          'vite-root.css',
+        ),
+      })
+
+      // Vite's logger rather than the console, which is where the plugin's
+      // lines go once `configResolved` has run. `'silent'` drops the progress
+      // lines, so anything recorded here is a failure being reported.
+      const reported: string[] = []
+      const logger = {
+        error: (message: string) => {
+          reported.push(message)
+        },
+        info: (message: string) => {
+          reported.push(message)
+        },
+      }
+
+      const plugin = vitePlugin({ logLevel: 'silent' })
+      if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
+        throw new TypeError('configResolved is not a callable hook')
+      }
+      await plugin.configResolved.call(
+        { addWatchFile: () => {} },
+        { command: 'build', logger, mode: 'production', root: directory },
+      )
+
+      await callBuildStart(plugin)
+
+      expect(reported).toEqual([])
+      expect(
+        fs.readFileSync(path.join(directory, 'gen', 'vite-root.css'), 'utf-8'),
+      ).toContain('--color-brand: #123456;')
+    })
+
     it('does not look at all when config is false', async () => {
       // The only thing that covers a discovered `.js`: reading a module means
       // running it, so validation happens after the side effects. A project
