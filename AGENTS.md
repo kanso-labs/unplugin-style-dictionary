@@ -1061,6 +1061,19 @@ validation happens _after_ the side effects and only opting out prevents them.
 Do not drop the `.js` and `.mjs` names to fix that — and do not drop
 `config.json` either; Style Dictionary's own CLI defaults to it.
 
+**`root` finds the configuration and moves nothing inside it.** A relative
+`source`, `include` or `buildPath` is read against the working directory,
+because that is what Style Dictionary does when it globs and when it writes.
+#192 chose that base so a configuration behaves as it does under Style
+Dictionary's own CLI, and `src/types.ts` and README promise it. The destination
+code went on resolving `buildPath` against `root` until #362, and it only shows
+when the two differ: measured with a Vite `root` beside the working directory,
+`onBuildEnd` was handed `/var/var/folders/…`, the cwd-relative path resolved a
+second time against `root`. On top of that, `cache` never skipped and the size
+table printed nothing. The cases under
+`when the host's root is not the working directory` pin all three. Every other
+case builds with the two the same, which is how it went unnoticed.
+
 **An empty token set has to be caught before `buildAllPlatforms`, and the window
 is one line wide.** Style Dictionary treats a `source` matching no files as
 success: it writes the destination with no tokens in it, prints its usual tick
