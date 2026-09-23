@@ -22,6 +22,9 @@ the top of that file keeps the little that is process-wide, such as
 and the rest take what they need as arguments and hold on to none of it, because
 one process routinely runs several instances of this plugin. `runBuilds` takes
 the instance's share as one `PluginInstance`, which the factory builds once.
+`createScheduler` in `scheduler.ts` differs in shape but not in substance. It
+hands back a closure that holds a scheduler's state, and the factory calls it
+once per instance, so that state is still the instance's own.
 
 `root` in particular is read when a call is made, never captured, because the
 host assigns it after the factory has run. The overlay callback is reached the
@@ -36,6 +39,8 @@ test when it goes wrong:
   in `tests/dev-server.test.ts`.
 - `generatedDestinations` shared between instances fails
   `keeps its record of what it wrote when another instance builds`.
+- The scheduler's state moved to module scope fails
+  `rebuilds each instance when two are triggered together`.
 
 `root` captured in the watch list still fails nothing.
 
@@ -206,6 +211,12 @@ Specific to this repository:
 
 `tests/index.test.ts` drives the Vite target against real files in a temporary
 directory, rather than mocking Style Dictionary.
+
+`tests/scheduler.test.ts` drives `createScheduler` on its own, with no bundler
+behind it. The one case whose timing matters runs on fake timers. It has to
+spread its triggers out, because a burst fired on one tick collapses through the
+in-flight chain alone. Measured: with the debounce's `clearTimeout` removed, a
+same-tick burst still produced exactly one run.
 
 Hooks are called with a hand-built context. Vite and Rollup normally supply the
 plugin-context `this` — `addWatchFile` and friends — when they invoke a hook, so
@@ -992,8 +1003,9 @@ against a real consumer. `tests/index.test.ts` pins that layout directly.
 
 **The scheduler serialises one plugin instance; `compilesInFlight` serialises
 the process.** They solve the same problem at different scopes and neither
-replaces the other. `hasCompiled` and the scheduler are closure state inside
-`unpluginFactory`, so they see only their own instance — and one process
+replaces the other. `hasCompiled` is closure state inside `unpluginFactory`, and
+the scheduler is built once per instance by `createScheduler` in
+`src/scheduler.ts`, so both see only their own instance — and one process
 routinely holds several. A single `vitest run` with two test projects and
 browser mode stands up five Vite servers, each with its own instance, each
 running `buildStart`; the last two start together. `compilesInFlight` is a

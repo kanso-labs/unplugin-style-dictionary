@@ -1274,6 +1274,66 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.readFileSync(generated, 'utf-8')).toContain('#000000')
   })
 
+  // Each plugin instance schedules its own rebuilds. A scheduler two
+  // instances shared would collapse their triggers into one rebuild, run by
+  // whichever armed the debounce last, and tell the other its trigger was
+  // covered — so its output would stay stale while it reported success.
+  it('rebuilds each instance when two are triggered together', async () => {
+    const setUp = (name: string) => {
+      const directory = path.join(tempDir, `together-${name}`)
+      fs.mkdirSync(directory, { recursive: true })
+
+      const token = path.join(directory, 'tokens.json')
+      const config = path.join(directory, 'sd.config.json')
+
+      fs.writeFileSync(
+        token,
+        JSON.stringify({ color: { brand: { value: '#000000' } } }),
+      )
+      fs.writeFileSync(
+        config,
+        JSON.stringify({
+          platforms: {
+            css: {
+              buildPath: posix(path.join(directory, 'out')) + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [posix(token)],
+        }),
+      )
+
+      return {
+        output: path.join(directory, 'out', 'vars.css'),
+        plugin: vitePlugin({ config, silent: true }),
+        token,
+      }
+    }
+
+    const instances = [setUp('first'), setUp('second')]
+
+    for (const { plugin } of instances) await callBuildStart(plugin)
+
+    for (const { token } of instances) {
+      fs.writeFileSync(
+        token,
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+      )
+    }
+
+    // Started together, so both triggers land inside one debounce window.
+    await Promise.all(
+      instances.map(async ({ plugin, token }) =>
+        callWatchChange(plugin, token),
+      ),
+    )
+
+    for (const { output } of instances) {
+      expect(fs.readFileSync(output, 'utf-8')).toContain('#ff0000')
+    }
+  })
+
   // The existing fixtures keep the configuration and the tokens in one
   // directory, which is the single arrangement where the two bases coincide —
   // and why nothing here caught the plugin reading token patterns against the
