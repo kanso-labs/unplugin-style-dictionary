@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.7](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.6...unplugin-style-dictionary-v0.10.7) (2026-09-24)
+
+
+### Dependencies
+
+* update dependency oxfmt to v0.69.0 ([#377](https://github.com/kanso-labs/unplugin-style-dictionary/issues/377)) ([9e274c3](https://github.com/kanso-labs/unplugin-style-dictionary/commit/9e274c355a82a587263dc90659ec0f5ec90af362))
+
 ## [0.10.6](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.5...unplugin-style-dictionary-v0.10.6) (2026-09-23)
 
 
