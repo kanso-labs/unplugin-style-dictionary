@@ -4631,9 +4631,6 @@ const buildUnderViteRoot = async (
   return { errors, info }
 }
 
-// Every plugin in this suite used to pass `silent: true`, so the size and gzip
-// reporter — sixty lines of arithmetic and column alignment, and the only
-// thing a consumer sees on an ordinary build — never executed once.
 // Style Dictionary writes a relative `buildPath` against the working directory,
 // so everything that asks where the output went has to read it the same way.
 // The host's root is somewhere else here, which is the one arrangement in which
@@ -4970,6 +4967,9 @@ describe('when a destination is absolute', () => {
   })
 })
 
+// Every plugin in this suite used to pass `silent: true`, so the size and gzip
+// reporter — sixty lines of arithmetic and column alignment, and the only
+// thing a consumer sees on an ordinary build — never executed once.
 describe('the size reporter', () => {
   const tempDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'unplugin-style-dictionary-reporter-'),
