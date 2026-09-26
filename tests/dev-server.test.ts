@@ -65,6 +65,34 @@ const asHmrFrame = (data: unknown): HmrFrame | null => {
   return isHmrFrame(parsed) ? parsed : null
 }
 
+// A real client on the same `vite-hmr` subprotocol Vite's own browser client
+// uses, reading frames off the socket. Spying on `server.hot.send` would pass
+// just as happily on a payload Vite declines to transmit, and the claim here
+// is that the failure reaches the page.
+const connectHmrClient = async (running: ViteDevServer) => {
+  const url = running.resolvedUrls?.local[0]
+  if (!url) throw new Error('the dev server reported no local URL')
+
+  const frames: HmrFrame[] = []
+  const socket = new WebSocket(url.replace(/^http/, 'ws'), 'vite-hmr')
+
+  socket.addEventListener('message', (event) => {
+    const frame = asHmrFrame(event.data)
+    if (frame) frames.push(frame)
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener('open', () => {
+      resolve()
+    })
+    socket.addEventListener('error', () => {
+      reject(new Error('could not open an hmr connection'))
+    })
+  })
+
+  return { frames, socket }
+}
+
 // Style Dictionary reports an unresolvable reference by count, so two broken
 // references produce a message that differs from one broken reference's.
 const breakReferences = (tokenSource: string, count: number) => {
@@ -275,34 +303,6 @@ describe('under a real vite dev server', () => {
       buildSpy.mockRestore()
     }
   }, 30000)
-
-  // A real client on the same `vite-hmr` subprotocol Vite's own browser client
-  // uses, reading frames off the socket. Spying on `server.hot.send` would pass
-  // just as happily on a payload Vite declines to transmit, and the claim here
-  // is that the failure reaches the page.
-  const connectHmrClient = async (running: ViteDevServer) => {
-    const url = running.resolvedUrls?.local[0]
-    if (!url) throw new Error('the dev server reported no local URL')
-
-    const frames: HmrFrame[] = []
-    const socket = new WebSocket(url.replace(/^http/, 'ws'), 'vite-hmr')
-
-    socket.addEventListener('message', (event) => {
-      const frame = asHmrFrame(event.data)
-      if (frame) frames.push(frame)
-    })
-
-    await new Promise<void>((resolve, reject) => {
-      socket.addEventListener('open', () => {
-        resolve()
-      })
-      socket.addEventListener('error', () => {
-        reject(new Error('could not open an hmr connection'))
-      })
-    })
-
-    return { frames, socket }
-  }
 
   // `logLevel: 'silent'` rather than the `'warn'` that is usually right for a
   // test not asserting on the progress lines. `'warn'` leaves Style
