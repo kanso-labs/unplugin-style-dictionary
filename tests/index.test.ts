@@ -135,6 +135,24 @@ const callWatchChange = async (plugin: Plugin, id: string) => {
   return watched
 }
 
+// A richer plugin context than `callBuildStart` binds. The stub there
+// carries `addWatchFile` and nothing else on purpose — it is what a hook
+// sees when no host has claimed the messages, and the console fallback is
+// what this contrasts against.
+const callWithContext = async (
+  plugin: Plugin,
+  context: Record<string, unknown>,
+) => {
+  if (!isPluginHook<[]>(plugin.buildStart)) {
+    throw new TypeError('buildStart is not a callable hook')
+  }
+
+  // Assigned to the declared context type first, so the extra channels
+  // ride along as a widened object rather than through a cast.
+  const bound: BuildContext = { addWatchFile: () => {}, ...context }
+  await plugin.buildStart.call(bound)
+}
+
 // A minimal configuration that discovery will accept: it declares `platforms`
 // and supplies its tokens inline, so it needs no source files on disk.
 const usableConfig = (directory: string, destination: string) =>
@@ -587,41 +605,42 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.readFileSync(output, 'utf-8')).toContain('color-primary=#0070f3')
   })
 
+  // A config function whose only format throws, so every compile of it fails.
+  const failingConfig = () => {
+    StyleDictionary.registerFormat({
+      format: () => {
+        throw new Error('the format blew up')
+      },
+      name: 'custom/counting-shared-failure',
+    })
+
+    return {
+      platforms: {
+        text: {
+          buildPath: tempDir.replace(/\\/g, '/') + '/',
+          files: [
+            {
+              destination: 'shared-failure.txt',
+              format: 'custom/counting-shared-failure',
+            },
+          ],
+          transformGroup: 'css',
+        },
+      },
+      source: [tokenFile.replace(/\\/g, '/')],
+    }
+  }
+
   it('reports the failure to every instance waiting on one compile', async () => {
     // An instance that waited on a compile which failed must not carry on as
     // though the tokens were written — the whole reason `failOnError`
     // defaults to stopping the build.
-    const config = () => {
-      StyleDictionary.registerFormat({
-        format: () => {
-          throw new Error('the format blew up')
-        },
-        name: 'custom/counting-shared-failure',
-      })
-
-      return {
-        platforms: {
-          text: {
-            buildPath: tempDir.replace(/\\/g, '/') + '/',
-            files: [
-              {
-                destination: 'shared-failure.txt',
-                format: 'custom/counting-shared-failure',
-              },
-            ],
-            transformGroup: 'css',
-          },
-        },
-        source: [tokenFile.replace(/\\/g, '/')],
-      }
-    }
-
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {
       const results = await Promise.allSettled(
         Array.from({ length: 3 }, async () =>
-          callBuildStart(vitePlugin({ config, silent: true })),
+          callBuildStart(vitePlugin({ config: failingConfig, silent: true })),
         ),
       )
 
@@ -1274,44 +1293,46 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.readFileSync(generated, 'utf-8')).toContain('#000000')
   })
 
+  // A plugin instance over a fixture of its own, so two of them share nothing
+  // but the process they run in.
+  const setUpInstance = (name: string) => {
+    const directory = path.join(tempDir, `together-${name}`)
+    fs.mkdirSync(directory, { recursive: true })
+
+    const token = path.join(directory, 'tokens.json')
+    const config = path.join(directory, 'sd.config.json')
+
+    fs.writeFileSync(
+      token,
+      JSON.stringify({ color: { brand: { value: '#000000' } } }),
+    )
+    fs.writeFileSync(
+      config,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(token)],
+      }),
+    )
+
+    return {
+      output: path.join(directory, 'out', 'vars.css'),
+      plugin: vitePlugin({ config, silent: true }),
+      token,
+    }
+  }
+
   // Each plugin instance schedules its own rebuilds. A scheduler two
   // instances shared would collapse their triggers into one rebuild, run by
   // whichever armed the debounce last, and tell the other its trigger was
   // covered — so its output would stay stale while it reported success.
   it('rebuilds each instance when two are triggered together', async () => {
-    const setUp = (name: string) => {
-      const directory = path.join(tempDir, `together-${name}`)
-      fs.mkdirSync(directory, { recursive: true })
-
-      const token = path.join(directory, 'tokens.json')
-      const config = path.join(directory, 'sd.config.json')
-
-      fs.writeFileSync(
-        token,
-        JSON.stringify({ color: { brand: { value: '#000000' } } }),
-      )
-      fs.writeFileSync(
-        config,
-        JSON.stringify({
-          platforms: {
-            css: {
-              buildPath: posix(path.join(directory, 'out')) + '/',
-              files: [{ destination: 'vars.css', format: 'css/variables' }],
-              transformGroup: 'css',
-            },
-          },
-          source: [posix(token)],
-        }),
-      )
-
-      return {
-        output: path.join(directory, 'out', 'vars.css'),
-        plugin: vitePlugin({ config, silent: true }),
-        token,
-      }
-    }
-
-    const instances = [setUp('first'), setUp('second')]
+    const instances = [setUpInstance('first'), setUpInstance('second')]
 
     for (const { plugin } of instances) await callBuildStart(plugin)
 
@@ -2341,52 +2362,52 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })
   })
 
+  // The colour decision is taken when the plugin is constructed and held for
+  // its life, so the environment has to be in place before the factory runs —
+  // which is why each case builds its own plugin rather than sharing one.
+  const captureBuild = async (
+    env: Record<string, string | undefined>,
+    isTTY: boolean,
+  ) => {
+    const previousEnv = { ...process.env }
+    const previousTTY = process.stdout.isTTY
+
+    const written: string[] = []
+    const collect = (...call: unknown[]) => {
+      written.push(String(call[0]))
+    }
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(collect)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(collect)
+
+    try {
+      for (const key of ['FORCE_COLOR', 'NO_COLOR', 'TERM']) {
+        delete process.env[key]
+      }
+      for (const [key, value] of Object.entries(env)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      process.stdout.isTTY = isTTY
+
+      // No `silent`, because the progress lines and the size table are two
+      // thirds of what carried escapes.
+      await callBuildStart(vitePlugin({ config: configFile }))
+    } finally {
+      process.stdout.isTTY = previousTTY
+      process.env = previousEnv
+      logSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
+
+    return written
+  }
+
   // Every line the plugin wrote carried hardcoded escapes, and nothing read
   // `NO_COLOR`, `FORCE_COLOR` or `isTTY` — so a redirected build, a CI log and
   // a `NO_COLOR=1` run all got them anyway, while the host's own lines beside
   // them came out clean.
   describe('when the terminal says what it wants', () => {
     const ESCAPE = '['
-
-    // The decision is taken when the plugin is constructed and held for its
-    // life, so the environment has to be in place before the factory runs —
-    // which is why each case builds its own plugin rather than sharing one.
-    const captureBuild = async (
-      env: Record<string, string | undefined>,
-      isTTY: boolean,
-    ) => {
-      const previousEnv = { ...process.env }
-      const previousTTY = process.stdout.isTTY
-
-      const written: string[] = []
-      const collect = (...call: unknown[]) => {
-        written.push(String(call[0]))
-      }
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(collect)
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(collect)
-
-      try {
-        for (const key of ['FORCE_COLOR', 'NO_COLOR', 'TERM']) {
-          delete process.env[key]
-        }
-        for (const [key, value] of Object.entries(env)) {
-          if (value === undefined) delete process.env[key]
-          else process.env[key] = value
-        }
-        process.stdout.isTTY = isTTY
-
-        // No `silent`, because the progress lines and the size table are two
-        // thirds of what carried escapes.
-        await callBuildStart(vitePlugin({ config: configFile }))
-      } finally {
-        process.stdout.isTTY = previousTTY
-        process.env = previousEnv
-        logSpy.mockRestore()
-        errorSpy.mockRestore()
-      }
-
-      return written
-    }
 
     it('writes no escapes under NO_COLOR, including in the size table', async () => {
       const written = await captureBuild({ NO_COLOR: '1' }, true)
@@ -2446,24 +2467,6 @@ describe('unplugin-style-dictionary (vite target)', () => {
   // under webpack the messages were absent from `stats.toJson()` and everything
   // built on it, and under Vite they bypassed `customLogger` and `clearScreen`.
   describe('when the host offers somewhere to put a message', () => {
-    // A richer plugin context than `callBuildStart` binds. The stub there
-    // carries `addWatchFile` and nothing else on purpose — it is what a hook
-    // sees when no host has claimed the messages, and the console fallback is
-    // what this contrasts against.
-    const callWithContext = async (
-      plugin: Plugin,
-      context: Record<string, unknown>,
-    ) => {
-      if (!isPluginHook<[]>(plugin.buildStart)) {
-        throw new TypeError('buildStart is not a callable hook')
-      }
-
-      // Assigned to the declared context type first, so the extra channels
-      // ride along as a widened object rather than through a cast.
-      const bound: BuildContext = { addWatchFile: () => {}, ...context }
-      await plugin.buildStart.call(bound)
-    }
-
     it('reports through the plugin context rather than the console', async () => {
       const warned: string[] = []
       const infos: string[] = []
@@ -2813,25 +2816,25 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })
   })
 
+  // Its own directory per case, because the suite's shared fixture writes an
+  // `sd.config.json` into `tempDir` that discovery would find first.
+  const rootWith = (name: string, files: Record<string, string>) => {
+    const directory = path.join(tempDir, `discovery-${name}`)
+    fs.mkdirSync(path.join(directory, 'gen'), { recursive: true })
+
+    for (const [file, contents] of Object.entries(files)) {
+      fs.writeFileSync(path.join(directory, file), contents)
+    }
+
+    return directory
+  }
+
   // Given no `config`, the plugin adopts the first file in the root whose name
   // is one of four generic ones — and `config.json` is an extremely common name
   // for something else entirely. It used to adopt whatever it found, add it to
   // the watch set, and print `Compiled successfully!` over it, with no line
   // saying which file it had picked.
   describe('when it goes looking for a configuration', () => {
-    // Its own directory per case, because the suite's shared fixture writes an
-    // `sd.config.json` into `tempDir` that discovery would find first.
-    const rootWith = (name: string, files: Record<string, string>) => {
-      const directory = path.join(tempDir, `discovery-${name}`)
-      fs.mkdirSync(path.join(directory, 'gen'), { recursive: true })
-
-      for (const [file, contents] of Object.entries(files)) {
-        fs.writeFileSync(path.join(directory, file), contents)
-      }
-
-      return directory
-    }
-
     it('refuses an unrelated config.json instead of compiling over it', async () => {
       const directory = rootWith('unrelated', {
         'config.json': JSON.stringify({
@@ -3033,43 +3036,43 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })
   })
 
+  const threePlatforms = (directory: string) => {
+    fs.mkdirSync(directory, { recursive: true })
+
+    const destination = (name: string) => path.join(directory, `${name}-out`)
+
+    const platformFor = (name: string, file: string, format: string) => ({
+      buildPath: destination(name).replace(/\\/g, '/') + '/',
+      files: [{ destination: file, format }],
+      transformGroup: name === 'android' ? 'android' : name,
+    })
+
+    const configFileFor = path.join(directory, 'three.config.json')
+    fs.writeFileSync(
+      configFileFor,
+      JSON.stringify({
+        platforms: {
+          android: platformFor('android', 'colors.xml', 'android/resources'),
+          css: platformFor('css', 'vars.css', 'css/variables'),
+          scss: platformFor('scss', 'vars.scss', 'scss/variables'),
+        },
+        source: [path.join(tempDir, 'tokens.json').replace(/\\/g, '/')],
+      }),
+    )
+
+    return {
+      configFile: configFileFor,
+      wrote: (name: string, file: string) =>
+        fs.existsSync(path.join(destination(name), file)),
+    }
+  }
+
   // Every rebuild compiled every platform, so a dev server serving a web app
   // paid for Objective-C headers, Android XML and Dart classes on every token
   // save. Measured over a six-platform configuration with the timer around the
   // build call alone: 36 ms for all of them against 2 ms for css at 3,000
   // tokens, and 330 ms against 12 ms at 30,000.
   describe('when only some platforms are wanted', () => {
-    const threePlatforms = (directory: string) => {
-      fs.mkdirSync(directory, { recursive: true })
-
-      const destination = (name: string) => path.join(directory, `${name}-out`)
-
-      const platformFor = (name: string, file: string, format: string) => ({
-        buildPath: destination(name).replace(/\\/g, '/') + '/',
-        files: [{ destination: file, format }],
-        transformGroup: name === 'android' ? 'android' : name,
-      })
-
-      const configFileFor = path.join(directory, 'three.config.json')
-      fs.writeFileSync(
-        configFileFor,
-        JSON.stringify({
-          platforms: {
-            android: platformFor('android', 'colors.xml', 'android/resources'),
-            css: platformFor('css', 'vars.css', 'css/variables'),
-            scss: platformFor('scss', 'vars.scss', 'scss/variables'),
-          },
-          source: [path.join(tempDir, 'tokens.json').replace(/\\/g, '/')],
-        }),
-      )
-
-      return {
-        configFile: configFileFor,
-        wrote: (name: string, file: string) =>
-          fs.existsSync(path.join(destination(name), file)),
-      }
-    }
-
     it('builds the named platform and leaves the others unwritten', async () => {
       const { configFile: scoped, wrote } = threePlatforms(
         path.join(tempDir, 'scoped-array'),
@@ -3919,6 +3922,22 @@ describe('when the host closes its watcher', () => {
   }, 30000)
 })
 
+// The js platform on its own, then the same config renamed and with a css
+// platform beside it — an edit that is invisible in the output unless the
+// build read the file again.
+const esmConfig = (directory: string, edited: boolean) => {
+  const platforms = edited
+    ? `js: { transformGroup: 'js', buildPath: '${posix(directory)}/', files: [{ destination: 'renamed.js', format: 'javascript/es6' }] },
+      css: { transformGroup: 'css', buildPath: '${posix(directory)}/', files: [{ destination: 'vars.css', format: 'css/variables' }] },`
+    : `js: { transformGroup: 'js', buildPath: '${posix(directory)}/', files: [{ destination: 'tokens.js', format: 'javascript/es6' }] },`
+
+  return `export default {
+      source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
+      platforms: { ${platforms} },
+    }
+`
+}
+
 // Editing a `.js`, `.mjs` or `.ts` config while a watcher is live used to
 // change nothing about what got built, and the plugin logged a successful
 // rebuild anyway. Style Dictionary imports a config path with no cache-busting
@@ -3949,22 +3968,6 @@ describe('when the config file itself changes', () => {
     )
 
     return directory
-  }
-
-  // The js platform on its own, then the same config renamed and with a css
-  // platform beside it — an edit that is invisible in the output unless the
-  // build read the file again.
-  const esmConfig = (directory: string, edited: boolean) => {
-    const platforms = edited
-      ? `js: { transformGroup: 'js', buildPath: '${posix(directory)}/', files: [{ destination: 'renamed.js', format: 'javascript/es6' }] },
-      css: { transformGroup: 'css', buildPath: '${posix(directory)}/', files: [{ destination: 'vars.css', format: 'css/variables' }] },`
-      : `js: { transformGroup: 'js', buildPath: '${posix(directory)}/', files: [{ destination: 'tokens.js', format: 'javascript/es6' }] },`
-
-    return `export default {
-      source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
-      platforms: { ${platforms} },
-    }
-`
   }
 
   it('builds what an edited .mjs config says, not what it said at startup', async () => {
@@ -4137,6 +4140,40 @@ describe('when a watched change is not a token source', () => {
   }, 30000)
 })
 
+// Each case writes the same configuration in its own syntax. The JSON family
+// carries a comment and a trailing comma on purpose: that is the half of
+// JSON5 a strict parser rejects, and `.json` is the format the README leads
+// with.
+const jsonFamily = (directory: string) => `{
+  // a comment, which only a JSON5 parser accepts
+  platforms: {
+    js: {
+      transformGroup: 'js',
+      buildPath: '${posix(directory)}/',
+      files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+    },
+  },
+  source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
+}
+`
+
+const esmFamily = (directory: string) => `export default {
+  platforms: {
+    js: {
+      transformGroup: 'js',
+      buildPath: '${posix(directory)}/',
+      files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+    },
+  },
+  source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
+}
+`
+
+// `satisfies` is the point: it is type syntax, so the file only imports at
+// all where Node strips types.
+const typescript = (directory: string) =>
+  esmFamily(directory).replace(/\n$/, ' satisfies Record<string, unknown>\n')
+
 // The watch list used to be derived by a different parser from the one the
 // build reads the file with. `.json5` and `.jsonc` went down the import branch
 // and failed there while the build succeeded, and a `.json` config carrying a
@@ -4152,40 +4189,6 @@ describe('every supported config file format', () => {
     if (fs.existsSync(tempDir))
       fs.rmSync(tempDir, { force: true, recursive: true })
   })
-
-  // Each case writes the same configuration in its own syntax. The JSON family
-  // carries a comment and a trailing comma on purpose: that is the half of
-  // JSON5 a strict parser rejects, and `.json` is the format the README leads
-  // with.
-  const jsonFamily = (directory: string) => `{
-  // a comment, which only a JSON5 parser accepts
-  platforms: {
-    js: {
-      transformGroup: 'js',
-      buildPath: '${posix(directory)}/',
-      files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
-    },
-  },
-  source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
-}
-`
-
-  const esmFamily = (directory: string) => `export default {
-  platforms: {
-    js: {
-      transformGroup: 'js',
-      buildPath: '${posix(directory)}/',
-      files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
-    },
-  },
-  source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
-}
-`
-
-  // `satisfies` is the point: it is type syntax, so the file only imports at
-  // all where Node strips types.
-  const typescript = (directory: string) =>
-    esmFamily(directory).replace(/\n$/, ' satisfies Record<string, unknown>\n')
 
   it.each([
     { extension: 'json', write: jsonFamily },
@@ -4474,6 +4477,25 @@ describe('the watch list a build registers', () => {
   )
 })
 
+const buildAndCollect = async (
+  options: NonNullable<Parameters<typeof vitePlugin>[0]>,
+) => {
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    // Settling at all is half of every case here: a configuration that
+    // rejects a promise nobody holds used to leave `buildStart` unfinished.
+    // `logLevel` ahead of the spread so a case can still override it. See
+    // the note on the other broken-config block above for why `'warn'`.
+    await callBuildStart(
+      vitePlugin({ failOnError: 'serve', logLevel: 'warn', ...options }),
+    )
+
+    return errorSpy.mock.calls.map((call) => String(call[0]))
+  } finally {
+    errorSpy.mockRestore()
+  }
+}
+
 // A configuration that cannot be used has to come out of the plugin as a
 // logged message rather than as silence or as a dead host. Every case here
 // runs with `failOnError: 'serve'`, so the build completes and the assertion
@@ -4500,25 +4522,6 @@ describe('when a configuration cannot be used', () => {
     )
 
     return { directory, source }
-  }
-
-  const buildAndCollect = async (
-    options: NonNullable<Parameters<typeof vitePlugin>[0]>,
-  ) => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      // Settling at all is half of every case here: a configuration that
-      // rejects a promise nobody holds used to leave `buildStart` unfinished.
-      // `logLevel` ahead of the spread so a case can still override it. See
-      // the note on the other broken-config block above for why `'warn'`.
-      await callBuildStart(
-        vitePlugin({ failOnError: 'serve', logLevel: 'warn', ...options }),
-      )
-
-      return errorSpy.mock.calls.map((call) => String(call[0]))
-    } finally {
-      errorSpy.mockRestore()
-    }
   }
 
   it('reports a config path that does not exist', async () => {
@@ -4594,6 +4597,39 @@ describe('when a configuration cannot be used', () => {
     ).toBe(true)
   }, 30000)
 })
+
+// One build under Vite, with `root` resolved to the fixture's app directory
+// rather than the working directory. Vite's logger is where the plugin's
+// lines go once `configResolved` has run, so recording it keeps them out of
+// the console as well as making them checkable.
+const buildUnderViteRoot = async (
+  root: string,
+  options: UnpluginStyleDictionaryOptions,
+) => {
+  const errors: string[] = []
+  const info: string[] = []
+  const logger = {
+    error: (message: string) => {
+      errors.push(message)
+    },
+    info: (message: string) => {
+      info.push(message)
+    },
+  }
+
+  const plugin = vitePlugin({ config: 'sd.config.json', ...options })
+  if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
+    throw new TypeError('configResolved is not a callable hook')
+  }
+  await plugin.configResolved.call(
+    { addWatchFile: () => {} },
+    { command: 'build', logger, mode: 'production', root },
+  )
+
+  await callBuildStart(plugin)
+
+  return { errors, info }
+}
 
 // Every plugin in this suite used to pass `silent: true`, so the size and gzip
 // reporter — sixty lines of arithmetic and column alignment, and the only
@@ -4675,39 +4711,6 @@ describe("when the host's root is not the working directory", () => {
     return { counter, file: path.join(output, 'out.txt'), root }
   }
 
-  // One build under Vite, with `root` resolved to the fixture's app directory
-  // rather than the working directory. Vite's logger is where the plugin's
-  // lines go once `configResolved` has run, so recording it keeps them out of
-  // the console as well as making them checkable.
-  const buildUnderViteRoot = async (
-    root: string,
-    options: UnpluginStyleDictionaryOptions,
-  ) => {
-    const errors: string[] = []
-    const info: string[] = []
-    const logger = {
-      error: (message: string) => {
-        errors.push(message)
-      },
-      info: (message: string) => {
-        info.push(message)
-      },
-    }
-
-    const plugin = vitePlugin({ config: 'sd.config.json', ...options })
-    if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
-      throw new TypeError('configResolved is not a callable hook')
-    }
-    await plugin.configResolved.call(
-      { addWatchFile: () => {} },
-      { command: 'build', logger, mode: 'production', root },
-    )
-
-    await callBuildStart(plugin)
-
-    return { errors, info }
-  }
-
   it('hands onBuildEnd the file Style Dictionary wrote', async () => {
     const { file, root } = fixture('build-end')
 
@@ -4766,6 +4769,37 @@ describe("when the host's root is not the working directory", () => {
   })
 })
 
+// One build under Vite, with the host's root at the fixture rather than the
+// working directory. Hands back what the build registered for watching, and
+// what the plugin reported through Vite's logger.
+const buildAtRoot = async (root: string) => {
+  const errors: string[] = []
+  const logger = {
+    error: (message: string) => {
+      errors.push(message)
+    },
+    info: () => {
+      // `'silent'` drops the progress lines; only a failure would land here.
+    },
+  }
+
+  const plugin = vitePlugin({
+    config: 'sd.config.json',
+    logLevel: 'silent',
+    watch: 'extra.json',
+  })
+  if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
+    throw new TypeError('configResolved is not a callable hook')
+  }
+  await plugin.configResolved.call(
+    { addWatchFile: () => {} },
+    { command: 'build', logger, mode: 'production', root },
+  )
+
+  const watched = await callBuildStart(plugin)
+  return { errors, watched }
+}
+
 // A relative `watch` entry is resolved against `root`, like a relative
 // `config`, and not against the working directory the paths inside a
 // configuration use. Both readers of the option are pinned here: the watch list
@@ -4819,37 +4853,6 @@ describe('a relative watch entry', () => {
     fs.writeFileSync(extra, '{}')
 
     return { counter, extra, root }
-  }
-
-  // One build under Vite, with the host's root at the fixture rather than the
-  // working directory. Hands back what the build registered for watching, and
-  // what the plugin reported through Vite's logger.
-  const buildAtRoot = async (root: string) => {
-    const errors: string[] = []
-    const logger = {
-      error: (message: string) => {
-        errors.push(message)
-      },
-      info: () => {
-        // `'silent'` drops the progress lines; only a failure would land here.
-      },
-    }
-
-    const plugin = vitePlugin({
-      config: 'sd.config.json',
-      logLevel: 'silent',
-      watch: 'extra.json',
-    })
-    if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
-      throw new TypeError('configResolved is not a callable hook')
-    }
-    await plugin.configResolved.call(
-      { addWatchFile: () => {} },
-      { command: 'build', logger, mode: 'production', root },
-    )
-
-    const watched = await callBuildStart(plugin)
-    return { errors, watched }
   }
 
   it("registers a relative watch entry against the host's root", async () => {
