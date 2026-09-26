@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.9](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.8...unplugin-style-dictionary-v0.10.9) (2026-09-26)
+
+
+### Dependencies
+
+* update dependency @rspack/core to v2.2.7 ([#435](https://github.com/kanso-labs/unplugin-style-dictionary/issues/435)) ([ae1480f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ae1480fceb0ebde839b445e529fde871f8f6c38b))
+* update dependency eslint-plugin-perfectionist to v5.12.0 ([#433](https://github.com/kanso-labs/unplugin-style-dictionary/issues/433)) ([7e0b0c1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/7e0b0c19f14fecf491c107b7a818e796a6cc20b2))
+
 ## [0.10.8](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.7...unplugin-style-dictionary-v0.10.8) (2026-09-25)
 
 
