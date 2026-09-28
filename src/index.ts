@@ -7,6 +7,7 @@ import { createUnplugin } from 'unplugin'
 
 import type { PluginInstance } from './compile.js'
 import type { ResolvedConfig } from './config.js'
+import type { WatchPatterns } from './patterns.js'
 import type {
   StyleDictionaryConfigContext,
   UnpluginStyleDictionaryOptions,
@@ -590,7 +591,7 @@ const unpluginFactory: UnpluginFactory<
   // one thing it cannot see is a `config` function that starts returning
   // different sources with no file changing at all, and that was never
   // observable without a rebuild to observe it in.
-  let cachedPatterns: string[] | undefined
+  let cachedPatterns: undefined | WatchPatterns
 
   // Whether `watchChange` has fired since the last `buildStart`, and whether
   // anything has been compiled yet. Rollup, rolldown and webpack all run
@@ -716,7 +717,7 @@ const unpluginFactory: UnpluginFactory<
   // Parse token files to watch
   const getWatchTargets = async (
     resolvedConfigs: ResolvedConfig[],
-  ): Promise<{ paths: string[]; patterns: string[] }> => {
+  ): Promise<{ paths: string[]; patterns: WatchPatterns }> => {
     const patterns = await watchPatternsOf(
       { log, root, watch: options.watch },
       resolvedConfigs,
