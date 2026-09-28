@@ -439,18 +439,24 @@ Three things are compared: every file the configuration reads (its `source` and
 file it declares, and — for a configuration that is not a file — what the
 configuration looked like when those files were written.
 
-Once this process has compiled a configuration, the files it reads are compared
-against what that compile saw before it started reading. A token saved while a
-rebuild is compiling is newer than that, so the rebuild queued for it runs, even
-though the output the rebuild went on to write is newer still. Before then, the
-files it reads are compared against the files it declares.
+Once a configuration has been compiled, the files it reads are compared against
+what that compile saw before it started reading. A token saved while a rebuild
+is compiling is newer than that, so the rebuild queued for it runs, even though
+the output the rebuild went on to write is newer still. The record of what each
+compile read is kept in `node_modules/.cache/unplugin-style-dictionary`, beside
+the nearest `package.json`, so it survives a restart. Where there is no record,
+the files a configuration reads are compared against the files it declares.
+
+A declared file that changed since the compile that wrote it is compiled over
+rather than trusted, whatever its mtime says. Generated output is disposable, so
+an edit made to it by hand does not survive the next build.
 
 Two cases never skip, because neither can be settled from the filesystem:
 
-| Case                                                                                 | Why                                                                                                                                                                                                                                   |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The first compile of a process, for a configuration given as an object or a function | There is no config file to stat, so an edit to the object inside `vite.config.ts` moves no mtime. Within one process the resolved configuration is compared against the one last built; across processes there is nothing to compare. |
-| A platform declaring `actions`                                                       | An action writes what no `destination` names, so a skip would leave its work undone.                                                                                                                                                  |
+| Case                                                                                 | Why                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The first compile of a process, for a configuration given as an object or a function | There is no config file to stat, so an edit to the object inside `vite.config.ts` moves no mtime. Within one process the resolved configuration is compared against the one last built. An earlier process's record is not trusted for it, because its functions are compared by their source and what they close over can differ. |
+| A platform declaring `actions`                                                       | An action writes what no `destination` names, so a skip would leave its work undone.                                                                                                                                                                                                                                               |
 
 A custom format that reads something off-disk — an environment variable, a
 network call — cannot be detected this way either. Set `cache: false` where that
@@ -771,15 +777,17 @@ export interface UnpluginStyleDictionaryOptions {
    * 4,000-token, two-platform configuration — and under Vite it runs inside
    * `server.listen()`, so the dev server does not accept a connection until
    * it finishes whether or not a token changed. A configuration is treated as
-   * up to date when every file it declares exists and nothing it reads, its
-   * own config file included, has changed since the compile that wrote them
-   * read it.
+   * up to date when every file it declares exists and is as the compile that
+   * wrote it left it, and nothing it reads, its own config file included, has
+   * changed since that compile read it.
    *
-   * Where this process ran that compile, "since" means since the moment it
-   * began reading, so a token saved while a rebuild is compiling is rebuilt
-   * rather than taken for part of the output the rebuild went on to write.
-   * Before this process has compiled a configuration, the files it reads are
-   * compared against the files it declares instead.
+   * "Since" means since the moment that compile began reading, so a token
+   * saved while a rebuild is compiling is rebuilt rather than taken for part
+   * of the output the rebuild went on to write. What each compile read is
+   * kept in `node_modules/.cache/unplugin-style-dictionary` beside the nearest
+   * `package.json`, so a restart still knows it. Where nothing is recorded,
+   * the files a configuration reads are compared against the files it
+   * declares instead.
    *
    * Two things are never skipped, because neither can be told from the
    * filesystem:
@@ -788,7 +796,9 @@ export interface UnpluginStyleDictionaryOptions {
    *   object or a function.** There is no config file to stat, so an edit to
    *   the object inside `vite.config.ts` moves no mtime. Within one process
    *   the resolved configuration is compared against the one that was last
-   *   built; across processes there is nothing to compare, so it builds.
+   *   built. An earlier process's record is not trusted for it, because its
+   *   functions are compared by their source and what they close over can
+   *   differ from one process to the next, so it builds.
    * - **A platform declaring `actions`.** An action writes what no
    *   `destination` names, so a skip would leave its work undone.
    *

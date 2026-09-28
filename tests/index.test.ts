@@ -85,6 +85,17 @@ const callBuildStart = async (plugin: Plugin) => {
   return watched
 }
 
+// A restart, as seen from inside one test file: the plugin module imported
+// afresh, so nothing the process recorded in memory is left and only what was
+// persisted can speak for an earlier compile. A case using it passes its own
+// `root`, which keeps those records under its own directory rather than the
+// repository's.
+const restartedVitePlugin = async () => {
+  vi.resetModules()
+  const { default: restarted } = await import('../src/vite.ts')
+  return restarted
+}
+
 // Whatever reached `console.error` while `work` ran. The read happens before
 // the restore on purpose: `mockRestore` resets the recorded calls along with
 // the implementation, so an assertion made after it sees an empty list however
@@ -1133,18 +1144,24 @@ describe('unplugin-style-dictionary (vite target)', () => {
 
   it('compiles a source saved after the last compile read it, however old the output makes it look', async () => {
     // The shape of a save that lands mid-compile: newer than what the compile
-    // read, older than what it went on to write. The output's mtime is moved
-    // ahead rather than raced for, so the case is the same on every run.
+    // read, older than what it went on to write. The sources' mtimes are set
+    // rather than raced for, so the case is the same on every run, and the
+    // output is left exactly as the compile wrote it — moving it would be a
+    // rewrite, which is caught on other grounds.
     const fixture = freshnessFixture('saved-mid-compile')
+    const before = new Date(Date.now() - 60_000)
+    fs.utimesSync(fixture.source, before, before)
+    fs.utimesSync(fixture.configPath, before, before)
 
     await callBuildStart(
       vitePlugin({ config: fixture.configPath, silent: true }),
     )
     expect(fixture.counter.calls).toBe(1)
 
-    const later = new Date(Date.now() + 60_000)
-    fs.utimesSync(fixture.output, later, later)
+    // After what the compile read, and before what it wrote.
     fixture.writeSource('#ff0000')
+    const between = new Date(before.getTime() + 30_000)
+    fs.utimesSync(fixture.source, between, between)
 
     await callBuildStart(
       vitePlugin({ config: fixture.configPath, silent: true }),
@@ -1152,6 +1169,177 @@ describe('unplugin-style-dictionary (vite target)', () => {
 
     expect(fixture.counter.calls).toBe(2)
     expect(fs.readFileSync(fixture.output, 'utf8')).toContain('#ff0000')
+  })
+
+  it('compiles over an output something else rewrote since it was built', async () => {
+    // Anything that writes generated output leaves it newer than every
+    // source, so its mtime says nothing about whether it is still what the
+    // build wrote. The record says: the file no longer has the mtime the
+    // compile left it with.
+    const fixture = freshnessFixture('rewritten-output')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    fs.writeFileSync(fixture.output, 'not what the build wrote')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(2)
+    expect(fs.readFileSync(fixture.output, 'utf8')).toContain('color-primary=')
+  })
+
+  it('skips over an output an edit left unchanged, after a restart', async () => {
+    // An edit one destination does not carry leaves that destination byte for
+    // byte as it was, so the atomic write skips its rename and its mtime stays
+    // behind the edited source. Compared against the output, that
+    // configuration was never up to date again, and a restart has nothing
+    // else to go on unless the last compile's record survived it.
+    const directory = path.join(tempDir, 'unchanged-destination')
+    const tokensDirectory = path.join(directory, 'tokens')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+
+    const counter = { calls: 0 }
+    const format = 'custom/restart-unchanged-destination'
+    StyleDictionary.registerFormat({
+      format: ({ dictionary }) => {
+        counter.calls++
+        return dictionary.allTokens
+          .map((token) => `${token.name}=${String(token.value)}`)
+          .join('\n')
+      },
+      name: format,
+    })
+    for (const category of ['color', 'size']) {
+      StyleDictionary.registerFilter({
+        filter: (token) => token.path[0] === category,
+        name: `custom/restart-${category}`,
+      })
+    }
+
+    const sizes = path.join(tokensDirectory, 'size.json')
+    fs.writeFileSync(
+      path.join(tokensDirectory, 'color.json'),
+      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+    )
+    fs.writeFileSync(
+      sizes,
+      JSON.stringify({ size: { base: { value: '4px' } } }),
+    )
+
+    const configPath = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        platforms: {
+          text: {
+            buildPath: directory.replace(/\\/g, '/') + '/',
+            files: ['color', 'size'].map((category) => ({
+              destination: `${category}.txt`,
+              filter: `custom/restart-${category}`,
+              format,
+            })),
+            transformGroup: 'css',
+          },
+        },
+        source: [tokensDirectory.replace(/\\/g, '/') + '/*.json'],
+      }),
+    )
+
+    const options = { config: configPath, root: directory, silent: true }
+
+    await callBuildStart(vitePlugin(options))
+    expect(counter.calls).toBe(2)
+
+    // Only `size.txt` carries this, so `color.txt` is rendered identically and
+    // keeps its mtime. Stamped a second ahead, so no filesystem's timestamp
+    // granularity can tie it with what the first build wrote.
+    fs.writeFileSync(
+      sizes,
+      JSON.stringify({ size: { base: { value: '8px' } } }),
+    )
+    const later = new Date(Date.now() + 1000)
+    fs.utimesSync(sizes, later, later)
+    await callBuildStart(vitePlugin(options))
+    expect(counter.calls).toBe(4)
+
+    const restarted = await restartedVitePlugin()
+    await callBuildStart(restarted(options))
+
+    expect(counter.calls).toBe(4)
+  })
+
+  it('still builds an object configuration on the first compile after a restart', async () => {
+    // Its record survives the restart like any other, and is not enough on
+    // its own: the object's functions are fingerprinted by their source, and
+    // what they close over can differ from one process to the next. So the
+    // first compile of a process builds it, as the `cache` docs promise.
+    const fixture = freshnessFixture('object-config-restart')
+    const options = {
+      config: {
+        platforms: {
+          text: {
+            buildPath: fixture.directory.replace(/\\/g, '/') + '/',
+            files: [{ destination: 'out.txt', format: fixture.format }],
+            transformGroup: 'css',
+          },
+        },
+        source: [fixture.source.replace(/\\/g, '/')],
+      },
+      root: fixture.directory,
+      silent: true,
+    }
+
+    await callBuildStart(vitePlugin(options))
+    await callBuildStart(vitePlugin(options))
+    expect(fixture.counter.calls).toBe(1)
+
+    const restarted = await restartedVitePlugin()
+    await callBuildStart(restarted(options))
+
+    expect(fixture.counter.calls).toBe(2)
+  })
+
+  it('skips after a save that changed nothing, after a restart', async () => {
+    // The same shape with one destination: a save that rewrites a source
+    // with the bytes it already had moves its mtime, the compile it triggers
+    // renders what is already there, and the output keeps its old mtime.
+    const fixture = freshnessFixture('no-op-save')
+    const options = {
+      config: fixture.configPath,
+      root: fixture.directory,
+      silent: true,
+    }
+
+    await callBuildStart(vitePlugin(options))
+    await callBuildStart(vitePlugin(options))
+    expect(fixture.counter.calls).toBe(1)
+
+    fixture.writeSource('#0070f3')
+    const later = new Date(Date.now() + 1000)
+    fs.utimesSync(fixture.source, later, later)
+    await callBuildStart(vitePlugin(options))
+    expect(fixture.counter.calls).toBe(2)
+
+    const restarted = await restartedVitePlugin()
+    const messages = await (async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        await callBuildStart(restarted({ ...options, silent: false }))
+        return logSpy.mock.calls.map((call) => String(call[0]))
+      } finally {
+        logSpy.mockRestore()
+      }
+    })()
+
+    expect(fixture.counter.calls).toBe(2)
+    expect(
+      messages.some((message) =>
+        message.includes('Design tokens are already up to date'),
+      ),
+    ).toBe(true)
   })
 
   it('still skips the configuration a rebuild did not touch', async () => {

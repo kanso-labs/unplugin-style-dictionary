@@ -413,9 +413,19 @@ const atomicVolume = Object.create(fs, {
 // The fingerprint carries the root, so two projects in one process never share
 // one. A configuration given as a path needs no fingerprint to be skipped: its
 // own file is one of the sources, so an edit to it is visible across processes
-// as well as within one. Where nothing is recorded — a process's first compile
-// — the check compares the sources against the output instead.
+// as well as within one.
+//
+// It outlives the process through a copy persisted beside each project's other
+// build caches, loaded the first time a compile runs for that root. Without it
+// a process's first compile could only compare the sources against the output,
+// and after one edit left any destination byte-identical — so its mtime stayed
+// behind — that comparison never skipped again. Where nothing is recorded, in
+// memory or on disk, it is still what the check falls back on.
 const destinationRecords = new Map<string, DestinationRecord>()
+
+// The file each root's records persist to, once this process has loaded it.
+// Being in here is what says the load has happened.
+const persistedRecordFiles = new Map<string, string>()
 
 // A compile that is running right now, keyed by `buildKey`, so bundler
 // instances in one process wait on each other rather than each starting their
@@ -752,6 +762,7 @@ const unpluginFactory: UnpluginFactory<
     onBuildEnd,
     onBuildError,
     onBuildStart,
+    persistedRecordFiles,
     platformsOption,
     quiet,
     report,

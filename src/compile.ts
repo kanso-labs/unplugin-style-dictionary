@@ -24,6 +24,10 @@ import {
   declaredDestinations,
   isUpToDate,
   newestSourceOf,
+  readPersistedRecords,
+  recordOf,
+  recordsFileFor,
+  writePersistedRecords,
   writtenDestination,
 } from './up-to-date.js'
 
@@ -35,7 +39,9 @@ import {
 // copied when this was built would be the working directory and `undefined`
 // for good. `generatedDestinations` is the instance's own record of what it
 // wrote, and `destinationRecords` is the process's record of which
-// configuration last wrote each file and what it read; neither lives here.
+// configuration last wrote each file and what it read, with
+// `persistedRecordFiles` naming the file each root's copy persists to;
+// none of them lives here.
 export interface PluginInstance {
   cache: boolean
   destinationRecords: Map<string, DestinationRecord>
@@ -46,6 +52,7 @@ export interface PluginInstance {
   onBuildEnd: UnpluginStyleDictionaryOptions['onBuildEnd']
   onBuildError: UnpluginStyleDictionaryOptions['onBuildError']
   onBuildStart: UnpluginStyleDictionaryOptions['onBuildStart']
+  persistedRecordFiles: Map<string, string>
   platformsOption: UnpluginStyleDictionaryOptions['platforms']
   quiet: boolean
   report: boolean
@@ -72,6 +79,7 @@ export async function runBuilds(
     onBuildEnd,
     onBuildError,
     onBuildStart,
+    persistedRecordFiles,
     platformsOption,
     quiet,
     report,
@@ -94,6 +102,24 @@ export async function runBuilds(
   // How many configurations were already up to date. Read by the reporting
   // below, which is why it sits out here with `generatedFiles`.
   let skipped = 0
+
+  // The records an earlier process persisted for this root, loaded the first
+  // time this process compiles for it and never over a record this process
+  // wrote itself. Only with `cache` on, the one case that reads or keeps
+  // them: every other build compiles regardless.
+  let recordsFile = cache ? persistedRecordFiles.get(root) : undefined
+  if (cache && recordsFile === undefined) {
+    recordsFile = recordsFileFor(root)
+    persistedRecordFiles.set(root, recordsFile)
+    for (const [destination, record] of readPersistedRecords(recordsFile)) {
+      if (!destinationRecords.has(destination)) {
+        destinationRecords.set(destination, record)
+      }
+    }
+  }
+
+  // What this compile recorded, and so what it adds to the persisted copy.
+  const recorded = new Map<string, DestinationRecord>()
 
   try {
     if (!context) {
@@ -302,11 +328,19 @@ export async function runBuilds(
       //
       // `newestSource` goes in beside the fingerprint. It was taken before
       // this compile read anything, so a source saved while it ran is newer
-      // than it, and the rebuild queued for that save is not skipped.
+      // than it, and the rebuild queued for that save is not skipped. So does
+      // each file's mtime as this compile left it, byte-identical skip and
+      // all: a later check trusts the record only while the file still has
+      // it. A file that was never written gets no record, so it is compiled
+      // next time rather than vouched for.
       const fingerprint = configFingerprint(root, item)
       if (fingerprint !== null) {
         for (const destination of writing) {
-          destinationRecords.set(destination, { fingerprint, newestSource })
+          const record = recordOf(destination, fingerprint, newestSource)
+          if (record) {
+            destinationRecords.set(destination, record)
+            recorded.set(destination, record)
+          }
         }
       }
     }
@@ -316,6 +350,14 @@ export async function runBuilds(
     // again. A build that throws never reaches this and leaves the previous
     // set standing, which is the safe direction: the files it wrote before
     // failing are still ours.
+    // Once per compile rather than per configuration, and only after every
+    // configuration succeeded. A compile that throws persists nothing, which
+    // is safe: whatever it rewrote no longer has the mtime its old record
+    // names, so that record vouches for nothing.
+    if (recordsFile !== undefined && recorded.size > 0) {
+      writePersistedRecords(recordsFile, recorded)
+    }
+
     generatedDestinations.clear()
     for (const destination of generatedFiles) {
       generatedDestinations.add(destination.replace(/\\/g, '/'))
