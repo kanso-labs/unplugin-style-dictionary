@@ -1322,7 +1322,9 @@ describe('unplugin-style-dictionary (vite target)', () => {
         `self-trigger-${id}.config.json`,
       )
       const generated = path.join(buildDirectory, 'flat.json')
-      const sourcePattern = `${tokensDirectory.replace(/\\\\/g, '/')}/${sourceGlob}`
+      // Separators written as `/`, as every producer of a watch pattern writes
+      // them: `matchesWatchedFile` reads a backslash as an escape.
+      const sourcePattern = `${tokensDirectory.replace(/\\/g, '/')}/${sourceGlob}`
 
       fs.writeFileSync(
         tokenSource,
