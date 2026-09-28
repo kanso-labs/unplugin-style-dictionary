@@ -4,6 +4,8 @@
 // Nothing here holds state — not even the record of which configuration last
 // wrote each destination, which is process-wide and lives in `index.ts` beside
 // `compilesInFlight`. What a plugin instance owns is handed in on each call.
+// The functions that read and write the persisted copy of that record work on
+// a file they are handed and keep nothing.
 
 import type { Config } from 'style-dictionary'
 
@@ -20,14 +22,21 @@ import {
   watchOptionPatterns,
 } from './patterns.js'
 
-// What this process knows about the compile that last wrote one destination:
-// which configuration it was, and the newest source it saw before it read any
-// of them. `newestSource` is `null` where that compile did not look, which is
-// when `cache` was off or the sources could not be established.
+// What is known about the compile that last wrote one destination: which
+// configuration it was, the newest source it saw before it read any of them,
+// and the file's mtime once it was done. `newestSource` is `null` where that
+// compile did not look, which is when `cache` was off or the sources could not
+// be established. `persisted` marks a record an earlier process left.
 export interface DestinationRecord {
   fingerprint: string
   newestSource: null | number
+  persisted?: true
+  written: number
 }
+
+// Bumped whenever what a record or a fingerprint means changes, so a file an
+// older version of the plugin wrote is ignored rather than misread.
+const RECORDS_VERSION = 1
 
 // A stable identity for one resolved configuration, or `null` where it
 // cannot have one. Functions are serialised by source rather than dropped,
@@ -98,13 +107,15 @@ export function declaredDestinations(
 // Whether a configuration's compile can be skipped: every file it declares
 // exists, and nothing it reads has changed since the compile that wrote them.
 //
-// "Since" is measured against what that compile read wherever this process
-// ran it. Its record holds the newest source it saw before reading, and a
-// source newer than that is one it never read. Comparing against the output
-// instead, as a first compile still has to, lost a save that landed while a
-// rebuild ran: the rebuild wrote its output after the save, so the output was
-// newer than an edit it never read, and the follow-up the scheduler queued
-// for that save was skipped as up to date.
+// "Since" is measured against what that compile read wherever it left a
+// record, in this process or persisted by an earlier one. The record holds the
+// newest source it saw before reading, and a source newer than that is one it
+// never read. Comparing against the output instead lost a save that landed
+// while a rebuild ran, because the rebuild wrote its output after the save.
+// It also never skipped again once an edit left one destination unchanged:
+// the atomic write keeps a byte-identical file's mtime, so the edited source
+// stayed newer than it for good. Only with no record at all is the output
+// compared.
 //
 // Conservative in every direction it can be: anything it cannot establish —
 // a destination that is missing, a source it cannot stat, a configuration
@@ -145,14 +156,24 @@ export function isUpToDate(
     const writtenByThis =
       fingerprint !== null && record?.fingerprint === fingerprint
 
+    // The file has moved since this configuration wrote it, so something
+    // wrote it afterwards and nothing here can say what it holds. Its mtime
+    // is no evidence either way: an edit to generated output is newer than
+    // every source, and would have been kept.
+    if (writtenByThis && record.written !== stats.mtimeMs) return false
+
     // A configuration given as a path has its own file among the sources, so
     // an edit to it is accounted for and the skip holds across processes. One
-    // given as an object or a function has not, and only this process knows
-    // which configuration last wrote each destination — so it skips only over
-    // files this one wrote. Having built it at some point is not enough: an
-    // edit that was then undone left the edit's output standing, and so did a
-    // build of it that threw partway.
-    if (!item.file && !writtenByThis) return false
+    // given as an object or a function has not, so it skips only over files
+    // this process wrote for it. Having built it at some point is not enough:
+    // an edit that was then undone left the edit's output standing, and so
+    // did a build of it that threw partway. An earlier process's record is not
+    // enough either, which is why the first compile of a process builds it:
+    // its functions are fingerprinted by their source, and what they close
+    // over can differ from one process to the next.
+    if (!item.file && (!writtenByThis || record.persisted === true)) {
+      return false
+    }
 
     const lastRead = writtenByThis ? record.newestSource : null
 
@@ -233,6 +254,137 @@ export async function newestSourceOf(
   // read. Style Dictionary would build an empty dictionary from that, and a
   // skip would present the empty result as current.
   return sawFile ? newestSource : null
+}
+
+// The records an earlier process persisted, each marked as such. Anything
+// that does not read as this version's records — a missing file, one another
+// version wrote, one cut short — is no records at all, which costs a compile
+// and never a wrong skip.
+export function readPersistedRecords(
+  file: string,
+): Map<string, DestinationRecord> {
+  const records = new Map<string, DestinationRecord>()
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return records
+  }
+
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !('version' in parsed) ||
+    parsed.version !== RECORDS_VERSION ||
+    !('records' in parsed) ||
+    typeof parsed.records !== 'object' ||
+    parsed.records === null
+  ) {
+    return records
+  }
+
+  const stored = parsed.records
+  for (const destination of Object.keys(stored)) {
+    const value: unknown = Reflect.get(stored, destination)
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      'fingerprint' in value &&
+      typeof value.fingerprint === 'string' &&
+      'newestSource' in value &&
+      (value.newestSource === null || typeof value.newestSource === 'number') &&
+      'written' in value &&
+      typeof value.written === 'number'
+    ) {
+      records.set(destination, {
+        fingerprint: value.fingerprint,
+        newestSource: value.newestSource,
+        persisted: true,
+        written: value.written,
+      })
+    }
+  }
+
+  return records
+}
+
+// The record a compile leaves for one destination it wrote, or `null` where
+// the file is not there to vouch for.
+export function recordOf(
+  destination: string,
+  fingerprint: string,
+  newestSource: null | number,
+): DestinationRecord | null {
+  const stats = statOrNull(destination)
+  return stats ? { fingerprint, newestSource, written: stats.mtimeMs } : null
+}
+
+// Where one project's records persist: under the nearest `package.json`'s
+// `node_modules/.cache`, the directory build tools share for this, and where
+// Vite keeps its own cache. The nearest package rather than `root`, because a
+// host's root can be a subdirectory — Vite's `root: 'src'` — and a cache
+// there would put a `node_modules` inside the consumer's sources. No `.json`
+// extension, so no `source` glob a consumer writes can read it as tokens.
+export function recordsFileFor(root: string): string {
+  let directory = root
+  while (!fs.existsSync(path.join(directory, 'package.json'))) {
+    const parent = path.dirname(directory)
+    if (parent === directory) {
+      directory = root
+      break
+    }
+    directory = parent
+  }
+
+  return path.join(
+    directory,
+    'node_modules',
+    '.cache',
+    'unplugin-style-dictionary',
+    'records',
+  )
+}
+
+// Merges what one compile recorded into the persisted records.
+//
+// Read again right before the write rather than trusted from the load, so a
+// record another process added since is kept. Two processes writing at once
+// can still lose one's entries, and that only costs a compile on the next
+// start. An entry whose destination is gone is dropped, which bounds the file
+// by the files that exist. Written through a temporary file and a rename, so
+// a reader never sees half of it.
+export function writePersistedRecords(
+  file: string,
+  recorded: ReadonlyMap<string, DestinationRecord>,
+): void {
+  const merged = readPersistedRecords(file)
+  for (const [destination, record] of recorded) merged.set(destination, record)
+
+  const records: Record<string, Omit<DestinationRecord, 'persisted'>> = {}
+  for (const [destination, { fingerprint, newestSource, written }] of merged) {
+    if (statOrNull(destination)) {
+      records[destination] = { fingerprint, newestSource, written }
+    }
+  }
+
+  const temporary = `${file}.${String(process.pid)}.tmp`
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({ records, version: RECORDS_VERSION }),
+    )
+    fs.renameSync(temporary, file)
+  } catch {
+    // Only a cache: failing to write it costs a compile on the next start,
+    // and never this build.
+    try {
+      fs.rmSync(temporary, { force: true })
+    } catch {
+      // Nothing more to do about a temporary file that cannot be removed.
+    }
+  }
 }
 
 // Where Style Dictionary writes one file, as an absolute path.
