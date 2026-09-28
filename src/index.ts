@@ -380,24 +380,34 @@ const atomicVolume = Object.create(fs, {
 }) as typeof fs
 /* oxlint-enable typescript/no-unsafe-type-assertion */
 
-// The fingerprints of configurations this process has compiled at least once.
-// It is what lets a configuration given as an object or a function be skipped
-// at all: such a configuration has no file to stat, so an edit to it inside
-// `vite.config.ts` moves no mtime and the filesystem cannot tell the two
-// apart. Having built it here, the plugin can — the fingerprint changes with
-// the configuration.
+// Which configuration last wrote each destination, as the fingerprint of that
+// configuration keyed by the file. It is what lets a configuration given as an
+// object or a function be skipped at all: such a configuration has no file to
+// stat, so an edit to it inside `vite.config.ts` moves no mtime and the
+// filesystem cannot tell the two apart. Having built it here, the plugin can —
+// the fingerprint changes with the configuration.
+//
+// Keyed by destination rather than kept as the set of everything ever built,
+// because the question is what the file on disk holds now. A set answered
+// "was this built at some point", which an edit that was then undone, or a
+// build that threw halfway through its platforms, both answer wrongly: the
+// file holds the edit either way. It also grew with every distinct
+// configuration, where this is bounded by the number of destinations.
 //
 // Module scope rather than the factory's, for the same reason `compilesInFlight`
 // below is: the instances that would otherwise repeat the work are different
 // instances, so per-instance state cannot see them. A `vitest run` stands up
 // several, and a function configuration — the form the README recommends for
-// registering custom formats — would be the one form that never skipped.
+// registering custom formats — would be the one form that never skipped. It is
+// kept up whether or not `cache` is on: an instance that rewrote a file without
+// updating it would leave another instance vouching for output no longer its
+// own.
 //
 // The fingerprint carries the root, so two projects in one process never share
-// one. A configuration given as a path needs none of this: its own file is one
-// of the sources the mtime comparison reads, so an edit to it is visible across
-// processes as well as within one.
-const compiledFingerprints = new Set<string>()
+// one. A configuration given as a path is skipped without consulting this: its
+// own file is one of the sources the mtime comparison reads, so an edit to it
+// is visible across processes as well as within one.
+const destinationFingerprints = new Map<string, string>()
 
 // A compile that is running right now, keyed by `buildKey`, so bundler
 // instances in one process wait on each other rather than each starting their
@@ -724,7 +734,7 @@ const unpluginFactory: UnpluginFactory<
   // are assigned after this runs — see `PluginInstance`.
   const instance: PluginInstance = {
     cache,
-    compiledFingerprints,
+    destinationFingerprints,
     failOnError,
     generatedDestinations,
     log,

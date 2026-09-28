@@ -32,10 +32,11 @@ import {
 // `configResolved`, the overlay callback by `configureServer` — so a value
 // copied when this was built would be the working directory and `undefined`
 // for good. `generatedDestinations` is the instance's own record of what it
-// wrote, and `compiledFingerprints` is the process's; neither lives here.
+// wrote, and `destinationFingerprints` is the process's record of which
+// configuration last wrote each file; neither lives here.
 export interface PluginInstance {
   cache: boolean
-  compiledFingerprints: Set<string>
+  destinationFingerprints: Map<string, string>
   failOnError: NonNullable<UnpluginStyleDictionaryOptions['failOnError']>
   generatedDestinations: Set<string>
   log: (message: string, type: 'error' | 'info' | 'success') => void
@@ -61,7 +62,7 @@ export async function runBuilds(
 ): Promise<void> {
   const {
     cache,
-    compiledFingerprints,
+    destinationFingerprints,
     failOnError,
     generatedDestinations,
     log,
@@ -121,7 +122,7 @@ export async function runBuilds(
       if (
         declared &&
         (await isUpToDate(
-          { compiledFingerprints, log, root, watch },
+          { destinationFingerprints, log, root, watch },
           item,
           declared,
           selectedPlatforms,
@@ -215,6 +216,22 @@ export async function runBuilds(
       // through `rename` while the read path stays exactly as it was.
       sd.volume = volume
 
+      // The files this compile is about to write, named exactly as the
+      // up-to-date check names them, and only the selected platforms' — a
+      // scoped build leaves the others' files, and whatever wrote them, alone.
+      const writing = declaredDestinations(
+        { platforms: sd.platforms },
+        selectedPlatforms,
+      )
+
+      // Forgotten before the first write rather than overwritten after the
+      // last, because a build that throws partway has already replaced some
+      // of these files. A record left standing would vouch for output that
+      // no longer matches the configuration it names.
+      for (const destination of writing) {
+        destinationFingerprints.delete(destination)
+      }
+
       if (selectedPlatforms === undefined) {
         await sd.buildAllPlatforms()
       } else {
@@ -267,10 +284,16 @@ export async function runBuilds(
         }
       }
 
-      // Recorded only now, so a configuration whose build threw is never
-      // treated as one this process has compiled.
+      // Recorded only now, so a build that threw vouches for none of what it
+      // wrote before throwing. Every configuration is recorded, a file-backed
+      // one included: an object configuration naming the same file has to
+      // see that something else wrote it last.
       const fingerprint = configFingerprint(root, item)
-      if (fingerprint !== null) compiledFingerprints.add(fingerprint)
+      if (fingerprint !== null) {
+        for (const destination of writing) {
+          destinationFingerprints.set(destination, fingerprint)
+        }
+      }
     }
 
     // Replaced wholesale rather than added to, so a destination dropped from

@@ -940,7 +940,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fixture.counter.calls).toBe(2)
   })
 
-  it('skips an object configuration only once this process has built it', async () => {
+  it('skips an object configuration only over output this process last built from it', async () => {
     // An object has no file to stat, so the filesystem cannot tell an edited
     // one from the one that wrote the output beside it. The first build of a
     // process therefore always runs, and only a fingerprint recorded here
@@ -976,6 +976,159 @@ describe('unplugin-style-dictionary (vite target)', () => {
       vitePlugin({ config: configWith('kui'), silent: true }),
     )
     expect(fixture.counter.calls).toBe(2)
+
+    // And back again. This process has built the original before, but the
+    // file on disk is the edit's now, so what decides a skip is which
+    // configuration wrote it last.
+    await callBuildStart(
+      vitePlugin({ config: configWith(undefined), silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(3)
+    expect(fs.readFileSync(fixture.output, 'utf8')).not.toContain('kui-')
+  })
+
+  it('skips nothing a failed build of an object configuration had already replaced', async () => {
+    // A build that throws partway has already rewritten the files before the
+    // failure, so undoing the edit that broke it has to compile: those files
+    // hold the edit now, not what the original configuration wrote.
+    const fixture = freshnessFixture('object-config-failed')
+    const buildPath = fixture.directory.replace(/\\/g, '/') + '/'
+
+    StyleDictionary.registerFormat({
+      format: () => {
+        throw new Error('the second platform broke')
+      },
+      name: 'custom/freshness-object-config-throws',
+    })
+
+    const pluginFor = (edited: boolean) =>
+      vitePlugin({
+        config: {
+          platforms: {
+            second: {
+              buildPath,
+              files: [
+                {
+                  destination: 'second.txt',
+                  format: edited
+                    ? 'custom/freshness-object-config-throws'
+                    : fixture.format,
+                },
+              ],
+              transformGroup: 'css',
+            },
+            text: {
+              buildPath,
+              files: [{ destination: 'out.txt', format: fixture.format }],
+              prefix: edited ? 'kui' : undefined,
+              transformGroup: 'css',
+            },
+          },
+          source: [fixture.source.replace(/\\/g, '/')],
+        },
+        failOnError: false,
+        // In this order, so the edited build writes `out.txt` and only then
+        // reaches the platform that throws.
+        platforms: ['text', 'second'],
+        silent: true,
+      })
+
+    await callBuildStart(pluginFor(false))
+
+    const messages = await collectErrors(async () => {
+      await callBuildStart(pluginFor(true))
+    })
+    expect(
+      messages.some((message) => message.includes('the second platform broke')),
+    ).toBe(true)
+    expect(fs.readFileSync(fixture.output, 'utf8')).toContain('kui-')
+
+    const beforeRevert = fixture.counter.calls
+    await callBuildStart(pluginFor(false))
+
+    expect(fixture.counter.calls).toBeGreaterThan(beforeRevert)
+    expect(fs.readFileSync(fixture.output, 'utf8')).not.toContain('kui-')
+  })
+
+  // Two platforms writing two files from one object configuration, which the
+  // two cases below edit by adding a prefix to both.
+  const twoPlatformConfig = (
+    fixture: ReturnType<typeof freshnessFixture>,
+    prefix: string | undefined,
+  ) => {
+    const buildPath = fixture.directory.replace(/\\/g, '/') + '/'
+    const platform = (destination: string) => ({
+      buildPath,
+      files: [{ destination, format: fixture.format }],
+      prefix,
+      transformGroup: 'css',
+    })
+
+    return {
+      platforms: { second: platform('second.txt'), text: platform('out.txt') },
+      source: [fixture.source.replace(/\\/g, '/')],
+    }
+  }
+
+  it('keeps its record of who wrote a file when `cache` is off', async () => {
+    // The record is the process's, so an instance that skips no builds still
+    // has to keep it. One that rewrote a file without saying so would leave
+    // another instance vouching for output that is no longer its own.
+    const fixture = freshnessFixture('object-config-cache-off')
+
+    await callBuildStart(
+      vitePlugin({
+        config: twoPlatformConfig(fixture, undefined),
+        silent: true,
+      }),
+    )
+    await callBuildStart(
+      vitePlugin({
+        cache: false,
+        config: twoPlatformConfig(fixture, 'kui'),
+        silent: true,
+      }),
+    )
+    expect(fs.readFileSync(fixture.output, 'utf8')).toContain('kui-')
+
+    await callBuildStart(
+      vitePlugin({
+        config: twoPlatformConfig(fixture, undefined),
+        silent: true,
+      }),
+    )
+
+    expect(fs.readFileSync(fixture.output, 'utf8')).not.toContain('kui-')
+  })
+
+  it('vouches only for the platforms a scoped build wrote', async () => {
+    // A build scoped to one platform leaves the other's file as it was, and
+    // whatever wrote it still wrote it. Recording the edit against both would
+    // let a full build of the edit skip a file that never received it.
+    const fixture = freshnessFixture('object-config-scoped')
+    const second = path.join(fixture.directory, 'second.txt')
+
+    await callBuildStart(
+      vitePlugin({
+        config: twoPlatformConfig(fixture, undefined),
+        silent: true,
+      }),
+    )
+    await callBuildStart(
+      vitePlugin({
+        config: twoPlatformConfig(fixture, 'kui'),
+        platforms: ['text'],
+        silent: true,
+      }),
+    )
+    expect(fs.readFileSync(fixture.output, 'utf8')).toContain('kui-')
+    expect(fs.readFileSync(second, 'utf8')).not.toContain('kui-')
+
+    await callBuildStart(
+      vitePlugin({ config: twoPlatformConfig(fixture, 'kui'), silent: true }),
+    )
+
+    expect(fs.readFileSync(second, 'utf8')).toContain('kui-')
   })
 
   it('drops the size table, and reading every file to build it, when `report` is false', async () => {
