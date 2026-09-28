@@ -1,5 +1,7 @@
 import picomatch from 'picomatch'
 
+import type { WatchPatterns } from './patterns.js'
+
 // Whether a changed file is a token or config source rather than something
 // this plugin just wrote. Both watch entry points ask through here, so
 // neither can react to its own output.
@@ -7,14 +9,22 @@ import picomatch from 'picomatch'
 // `generatedDestinations` is the plugin instance's own record of what it
 // wrote, so it is handed in rather than held: one module serves every
 // instance in the process, and each one's output is its own.
+//
+// A literal is a path, so it is compared as one. A config file reaches here
+// that way, and so does a token file named without a glob, and neither may be
+// read as a pattern: the project's own directory can hold characters a glob
+// treats as syntax.
 export function isWatchedSource(
   file: string,
-  patterns: string[],
+  { globs, literals }: WatchPatterns,
   generatedDestinations: ReadonlySet<string>,
 ): boolean {
+  const normalizedFile = file.replace(/\\/g, '/')
+
   return (
-    !generatedDestinations.has(file.replace(/\\/g, '/')) &&
-    matchesWatchedFile(file, patterns)
+    !generatedDestinations.has(normalizedFile) &&
+    (literals.includes(normalizedFile) ||
+      matchesWatchedFile(normalizedFile, globs))
   )
 }
 
@@ -50,17 +60,19 @@ export function isWatchedSource(
 // picomatch and is already installed wherever this plugin is. Its `dot: false`
 // default is deliberate: it is what glob, and so Style Dictionary, reads
 // sources with, so a dotfile is invisible to the filter and to the build alike.
+//
+// **The patterns are used exactly as given.** A backslash in one is an escape:
+// the part of a pattern the plugin prefixed is escaped, and every producer
+// already writes separators as `/`. Rewriting backslashes to slashes here
+// turned each escape into a separator, so a project in `Dropbox (Personal)`
+// matched none of its own token files.
 export function matchesWatchedFile(file: string, patterns: string[]): boolean {
   const normalizedFile = file.replace(/\\/g, '/')
 
-  return patterns.some((pattern) => {
-    const normalizedPattern = pattern.replace(/\\/g, '/')
-
-    // A config file reaches this function as its own literal path, which is
-    // both the common case and the one shape that is not a glob at all.
-    return (
-      normalizedPattern === normalizedFile ||
-      picomatch.isMatch(normalizedFile, normalizedPattern)
-    )
-  })
+  return patterns.some(
+    (pattern) =>
+      // An absolute path a consumer wrote with a glob character in it is filed
+      // as a glob, and still names itself.
+      pattern === normalizedFile || picomatch.isMatch(normalizedFile, pattern),
+  )
 }

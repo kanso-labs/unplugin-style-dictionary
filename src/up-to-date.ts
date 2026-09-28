@@ -14,7 +14,11 @@ import path from 'node:path'
 import type { Log, ResolvedConfig } from './config.js'
 import type { UnpluginStyleDictionaryOptions } from './types.js'
 
-import { expandPatterns, sourcePatternsOf } from './patterns.js'
+import {
+  expandPatterns,
+  sourcePatternsOf,
+  watchOptionPatterns,
+} from './patterns.js'
 
 // A stable identity for one resolved configuration, or `null` where it
 // cannot have one. Functions are serialised by source rather than dropped,
@@ -119,18 +123,14 @@ export async function isUpToDate(
   // names an extra file because something in the build reads it — a custom
   // format's own data file, most obviously — and leaving it out let a change
   // to it be skipped over while the watcher dutifully reported it.
-  const extraWatches = watch ? (Array.isArray(watch) ? watch : [watch]) : []
+  const read = sourcePatternsOf(configObj)
+  const extra = watchOptionPatterns(root, watch)
 
   const sources = await expandPatterns(
-    [
-      ...sourcePatternsOf(configObj),
-      ...extraWatches.map((pattern) =>
-        (path.isAbsolute(pattern)
-          ? pattern
-          : path.resolve(root, pattern)
-        ).replace(/\\/g, '/'),
-      ),
-    ],
+    {
+      globs: [...read.globs, ...extra.globs],
+      literals: [...read.literals, ...extra.literals],
+    },
     log,
   )
   if (item.file) sources.push(item.file.replace(/\\/g, '/'))

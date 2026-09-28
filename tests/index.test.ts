@@ -1322,7 +1322,9 @@ describe('unplugin-style-dictionary (vite target)', () => {
         `self-trigger-${id}.config.json`,
       )
       const generated = path.join(buildDirectory, 'flat.json')
-      const sourcePattern = `${tokensDirectory.replace(/\\\\/g, '/')}/${sourceGlob}`
+      // Separators written as `/`, as every producer of a watch pattern writes
+      // them: `matchesWatchedFile` reads a backslash as an escape.
+      const sourcePattern = `${tokensDirectory.replace(/\\/g, '/')}/${sourceGlob}`
 
       fs.writeFileSync(
         tokenSource,
@@ -1613,6 +1615,105 @@ describe('unplugin-style-dictionary (vite target)', () => {
       process.chdir(originalCwd)
     }
   })
+
+  it.each([['Dropbox (Personal)'], ['app [v2]'], ['my{app}']])(
+    'watches a project in a directory named %s the way it builds it',
+    async (name) => {
+      // The project's own path is prefixed onto every relative pattern, and in
+      // a glob its characters are syntax. Parentheses left a glob source
+      // matching none of its own files, so an edit never rebuilt; brackets and
+      // braces cut the static parent at the project directory, so every
+      // sibling project was watched recursively. Style Dictionary globs the
+      // relative pattern itself, so the build was right all along.
+      const projectRoot = path.join(tempDir, 'glob-syntax', name)
+      fs.mkdirSync(path.join(projectRoot, 'tokens'), { recursive: true })
+      fs.writeFileSync(
+        path.join(projectRoot, 'tokens', 'color.json'),
+        JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+      )
+
+      const counter = { calls: 0 }
+      const format = `custom/glob-syntax-${name}`
+      StyleDictionary.registerFormat({
+        format: ({ dictionary }) => {
+          counter.calls++
+          return dictionary.allTokens
+            .map((token) => `${token.name}=${String(token.value)}`)
+            .join('\n')
+        },
+        name: format,
+      })
+
+      fs.writeFileSync(
+        path.join(projectRoot, 'sd.config.json'),
+        JSON.stringify({
+          platforms: {
+            text: {
+              buildPath: 'build/',
+              files: [{ destination: 'out.txt', format }],
+              transformGroup: 'css',
+            },
+          },
+          source: ['tokens/**/*.json'],
+        }),
+      )
+
+      const originalCwd = process.cwd()
+      process.chdir(projectRoot)
+      try {
+        // From the working directory rather than `projectRoot`, which macOS
+        // reaches through a symlink and so spells differently.
+        const here = process.cwd()
+        const token = path.join(here, 'tokens', 'color.json')
+        const output = path.join(here, 'build', 'out.txt')
+
+        const plugin = vitePlugin({ config: 'sd.config.json', silent: true })
+        const watched = await callBuildStart(plugin)
+        expect(counter.calls).toBe(1)
+
+        // The token file is registered, and so is its directory, which is how
+        // a token file added later gets noticed. Nothing outside the project
+        // is.
+        expect(watched).toContain(token.replace(/\\/g, '/'))
+        expect(watched).toContain(path.join(here, 'tokens').replace(/\\/g, '/'))
+        for (const registered of watched) {
+          expect(path.relative(here, registered).startsWith('..')).toBe(false)
+        }
+
+        // An edit is recognised as a source and rebuilds.
+        fs.writeFileSync(
+          token,
+          JSON.stringify({ color: { primary: { value: '#ff0000' } } }),
+        )
+        await callWatchChange(plugin, token)
+        expect(fs.readFileSync(output, 'utf8')).toContain(
+          'color-primary=#ff0000',
+        )
+        expect(counter.calls).toBe(2)
+
+        // With nothing changed since, the next build finds its sources and
+        // skips.
+        await callBuildStart(
+          vitePlugin({ config: 'sd.config.json', silent: true }),
+        )
+        expect(counter.calls).toBe(2)
+
+        // And after an edit it compiles. With the token file missing from its
+        // sources, the check compared the config file alone and kept the old
+        // output across a restart.
+        fs.writeFileSync(
+          token,
+          JSON.stringify({ color: { primary: { value: '#00ff00' } } }),
+        )
+        await callBuildStart(
+          vitePlugin({ config: 'sd.config.json', silent: true }),
+        )
+        expect(counter.calls).toBe(3)
+      } finally {
+        process.chdir(originalCwd)
+      }
+    },
+  )
 
   it('looks a relative config path up under the root option', async () => {
     const nestedConfig = writeNestedConfig('root-option', [

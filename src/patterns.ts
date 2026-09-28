@@ -8,7 +8,7 @@ import type { Config } from 'style-dictionary'
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { glob } from 'tinyglobby'
+import { escapePath, glob } from 'tinyglobby'
 
 import type { Log, ResolvedConfig } from './config.js'
 import type { UnpluginStyleDictionaryOptions } from './types.js'
@@ -20,7 +20,24 @@ import { errorMessage } from './errors.js'
 // picomatch and tinyglobby act on, since those two are what match and expand
 // here — a path containing one of these characters literally is not
 // distinguishable from a pattern, and would not be matchable either.
+//
+// That is why it is only ever asked of what a consumer wrote. The plugin
+// makes a relative pattern absolute by prefixing a directory of its own
+// choosing, and that directory's characters are no part of the pattern.
 const GLOB_CHARACTERS = /[!*?[\]{}]/
+
+// The patterns a watch list is made of, split by what each one is. The split
+// is decided once, from the pattern as the consumer wrote it, and never again
+// from the absolute string: that string carries the project's own path, and a
+// project in `Dropbox (Personal)` or `app [v2]` would read as a glob.
+//
+// `literals` are absolute paths, matched by equality and registered as they
+// are. `globs` are absolute patterns in picomatch's syntax, in which the part
+// the plugin prefixed is escaped.
+export interface WatchPatterns {
+  globs: string[]
+  literals: string[]
+}
 
 // What a watcher is handed, and what a changed path is tested against, are
 // not the same list, and conflating them is why a glob source was watched by
@@ -30,24 +47,17 @@ const GLOB_CHARACTERS = /[!*?[\]{}]/
 // fails `fs.existsSync`, and webpack never globs `fileDependencies`. So the
 // patterns stay for matching and the paths are expanded for registering.
 export async function expandPatterns(
-  patterns: string[],
+  { globs, literals }: WatchPatterns,
   log: Log,
 ): Promise<string[]> {
-  const paths = new Set<string>()
-  const globs: string[] = []
+  const paths = new Set<string>(literals)
 
-  for (const pattern of patterns) {
-    if (GLOB_CHARACTERS.test(pattern)) {
-      globs.push(pattern)
-
-      // Watching the directory as well as its current contents. chokidar
-      // reports a creation inside a watched directory, which is the only
-      // way a token file added later is ever noticed.
-      const parent = staticParentOf(pattern)
-      if (parent && fs.existsSync(parent)) paths.add(parent)
-    } else {
-      paths.add(pattern)
-    }
+  for (const pattern of globs) {
+    // Watching the directory as well as its current contents. chokidar
+    // reports a creation inside a watched directory, which is the only way a
+    // token file added later is ever noticed.
+    const parent = staticParentOf(pattern)
+    if (parent && fs.existsSync(parent)) paths.add(parent)
   }
 
   if (globs.length > 0) {
@@ -72,20 +82,15 @@ export async function expandPatterns(
 // empty set. This names the pattern at fault, which the token count cannot, and
 // it reports a mistyped pattern in a configuration whose others still match —
 // where nothing fails at all and one platform quietly loses its tokens.
-export async function patternsMatchingNothing(
-  patterns: string[],
-): Promise<string[]> {
-  const barren: string[] = []
+export async function patternsMatchingNothing({
+  globs,
+  literals,
+}: WatchPatterns): Promise<string[]> {
+  // A literal path is a `stat`, not a glob, which keeps the common case off
+  // the filesystem walk.
+  const barren = literals.filter((literal) => !fs.existsSync(literal))
 
-  for (const pattern of patterns) {
-    // A literal path is a `stat`, not a glob: `tinyglobby` treats a path with
-    // no magic characters as a literal anyway, and this keeps the common case
-    // off the filesystem walk.
-    if (!GLOB_CHARACTERS.test(pattern)) {
-      if (!fs.existsSync(pattern)) barren.push(pattern)
-      continue
-    }
-
+  for (const pattern of globs) {
     try {
       const matched = await glob([pattern], { absolute: true })
       if (matched.length === 0) barren.push(pattern)
@@ -112,23 +117,35 @@ export async function patternsMatchingNothing(
 // An empty pattern is skipped, because Style Dictionary reads nothing from one.
 // Resolved, it would be the working directory itself, and the watch list used
 // to register exactly that for an empty entry in a `source` array.
-export function sourcePatternsOf(configObj: Config): string[] {
-  const patterns: string[] = []
+export function sourcePatternsOf(configObj: Config): WatchPatterns {
+  const patterns: WatchPatterns = { globs: [], literals: [] }
 
   const add = (pattern: unknown) => {
     if (typeof pattern === 'string' && pattern !== '') {
-      patterns.push(
-        (path.isAbsolute(pattern)
-          ? pattern
-          : path.resolve(process.cwd(), pattern)
-        ).replace(/\\/g, '/'),
-      )
+      addAnchored(patterns, process.cwd(), pattern)
     }
   }
 
   for (const value of [configObj.source, configObj.include]) {
     if (Array.isArray(value)) value.forEach(add)
     else add(value)
+  }
+
+  return patterns
+}
+
+// The `watch` option's entries, resolved the way #369 settled: a relative one
+// against `root`, since it is an option of this plugin rather than a path
+// inside a configuration. The watch list and the up-to-date check both read
+// them through here.
+export function watchOptionPatterns(
+  root: string,
+  watch: UnpluginStyleDictionaryOptions['watch'],
+): WatchPatterns {
+  const patterns: WatchPatterns = { globs: [], literals: [] }
+
+  for (const pattern of watch ? (Array.isArray(watch) ? watch : [watch]) : []) {
+    addAnchored(patterns, root, pattern)
   }
 
   return patterns
@@ -150,35 +167,63 @@ export async function watchPatternsOf(
     watch: UnpluginStyleDictionaryOptions['watch']
   },
   resolvedConfigs: ResolvedConfig[],
-): Promise<string[]> {
-  const filesToWatch = new Set<string>()
+): Promise<WatchPatterns> {
+  const globs = new Set<string>()
+  const literals = new Set<string>()
+
+  const add = (patterns: WatchPatterns) => {
+    for (const pattern of patterns.globs) globs.add(pattern)
+    for (const literal of patterns.literals) literals.add(literal)
+  }
 
   for (const item of resolvedConfigs) {
-    if (item.file) {
-      filesToWatch.add(item.file.replace(/\\/g, '/'))
-    }
+    // A path, whatever characters its directories happen to contain.
+    if (item.file) literals.add(item.file.replace(/\\/g, '/'))
 
     const configObj = await readConfigObject(item, log)
-
-    if (configObj) {
-      for (const pattern of sourcePatternsOf(configObj)) {
-        filesToWatch.add(pattern)
-      }
-    }
+    if (configObj) add(sourcePatternsOf(configObj))
   }
 
-  // Add manually configured watch files
-  if (watch) {
-    const extraWatches = Array.isArray(watch) ? watch : [watch]
-    for (const pattern of extraWatches) {
-      const absolutePattern = path.isAbsolute(pattern)
-        ? pattern
-        : path.resolve(root, pattern)
-      filesToWatch.add(absolutePattern.replace(/\\/g, '/'))
-    }
+  add(watchOptionPatterns(root, watch))
+
+  return { globs: Array.from(globs), literals: Array.from(literals) }
+}
+
+// One pattern as a consumer wrote it, made absolute against `base` and filed
+// under what it is.
+//
+// Whether it is a glob is read off what they wrote, before anything is
+// prefixed, and of a relative glob only the prefix is escaped. The rest is
+// theirs, glob characters included, exactly as `GLOB_CHARACTERS` says. The
+// prefix is `base` joined with the pattern's leading static segments,
+// resolved together so a `./` or `../` still settles against `base`.
+//
+// An absolute glob is taken as written. Every character in it is the
+// consumer's, and escaping any would be guessing which they meant as syntax.
+function addAnchored(into: WatchPatterns, base: string, written: string): void {
+  const pattern = written.replace(/\\/g, '/')
+
+  if (!GLOB_CHARACTERS.test(pattern)) {
+    into.literals.push(path.resolve(base, pattern).replace(/\\/g, '/'))
+    return
   }
 
-  return Array.from(filesToWatch)
+  if (path.isAbsolute(pattern)) {
+    into.globs.push(pattern)
+    return
+  }
+
+  const segments = pattern.split('/')
+  const firstGlob = segments.findIndex((segment) =>
+    GLOB_CHARACTERS.test(segment),
+  )
+  const prefix = path
+    .resolve(base, segments.slice(0, firstGlob).join('/'))
+    .replace(/\\/g, '/')
+
+  into.globs.push(
+    path.posix.join(escapePath(prefix), segments.slice(firstGlob).join('/')),
+  )
 }
 
 // The leading run of a pattern that contains no glob character —
@@ -186,13 +231,22 @@ export async function watchPatternsOf(
 // that match today is what makes a token file created tomorrow visible:
 // watching only the current matches can never see a path that did not exist
 // when the watcher was built.
+//
+// An escaped character is not a glob character, so the prefix `addAnchored`
+// escaped never ends the run, and the result is unescaped: it is a path on
+// disk, handed to `fs.existsSync` and to the watcher. Before the prefix was
+// escaped, a project in `app [v2]` cut the run at its own directory, and the
+// directory holding every project beside it was registered instead.
 function staticParentOf(pattern: string): string {
   const segments = pattern.split('/')
   const firstGlob = segments.findIndex((segment) =>
-    GLOB_CHARACTERS.test(segment),
+    GLOB_CHARACTERS.test(segment.replace(/\\./g, '')),
   )
 
-  return firstGlob === -1
-    ? path.posix.dirname(pattern)
-    : segments.slice(0, firstGlob).join('/')
+  const parent =
+    firstGlob === -1
+      ? path.posix.dirname(pattern)
+      : segments.slice(0, firstGlob).join('/')
+
+  return parent.replace(/\\(.)/g, '$1')
 }
