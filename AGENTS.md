@@ -995,7 +995,7 @@ another, reintroduced one level up.
 **A directory's mtime is not an input signal, and reading it as one made nothing
 ever up to date.** `expandPatterns` deliberately registers each pattern's static
 parent directory alongside the files matching it today, so a token file created
-tomorrow is watched. `isUpToDate` walks the same list and must skip the
+tomorrow is watched. `newestSourceOf` walks the same list and must skip the
 directories in it: a directory's mtime moves whenever an entry is renamed inside
 it, and the atomic write renames every generated file into place. With a
 `buildPath` inside a `source` directory — the layout `generatedDestinations`

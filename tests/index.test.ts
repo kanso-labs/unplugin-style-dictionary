@@ -1131,6 +1131,48 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.readFileSync(second, 'utf8')).toContain('kui-')
   })
 
+  it('compiles a source saved after the last compile read it, however old the output makes it look', async () => {
+    // The shape of a save that lands mid-compile: newer than what the compile
+    // read, older than what it went on to write. The output's mtime is moved
+    // ahead rather than raced for, so the case is the same on every run.
+    const fixture = freshnessFixture('saved-mid-compile')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(1)
+
+    const later = new Date(Date.now() + 60_000)
+    fs.utimesSync(fixture.output, later, later)
+    fixture.writeSource('#ff0000')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(2)
+    expect(fs.readFileSync(fixture.output, 'utf8')).toContain('#ff0000')
+  })
+
+  it('still skips the configuration a rebuild did not touch', async () => {
+    // What the record buys over not checking at all on a rebuild: an edit to
+    // one configuration's tokens compiles that configuration alone.
+    const edited = freshnessFixture('rebuild-edited')
+    const untouched = freshnessFixture('rebuild-untouched')
+
+    const plugin = vitePlugin({
+      config: [edited.configPath, untouched.configPath],
+      silent: true,
+    })
+    await callBuildStart(plugin)
+    expect([edited.counter.calls, untouched.counter.calls]).toEqual([1, 1])
+
+    edited.writeSource('#ff0000')
+    await callWatchChange(plugin, edited.source)
+
+    expect([edited.counter.calls, untouched.counter.calls]).toEqual([2, 1])
+  })
+
   it('drops the size table, and reading every file to build it, when `report` is false', async () => {
     const fixture = freshnessFixture('report-off')
 

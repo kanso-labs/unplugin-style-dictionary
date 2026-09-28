@@ -86,8 +86,15 @@ export interface UnpluginStyleDictionaryOptions {
    * 4,000-token, two-platform configuration — and under Vite it runs inside
    * `server.listen()`, so the dev server does not accept a connection until
    * it finishes whether or not a token changed. A configuration is treated as
-   * up to date when every file it declares exists and is newer than every
-   * file it reads, its own config file included.
+   * up to date when every file it declares exists and nothing it reads, its
+   * own config file included, has changed since the compile that wrote them
+   * read it.
+   *
+   * Where this process ran that compile, "since" means since the moment it
+   * began reading, so a token saved while a rebuild is compiling is rebuilt
+   * rather than taken for part of the output the rebuild went on to write.
+   * Before this process has compiled a configuration, the files it reads are
+   * compared against the files it declares instead.
    *
    * Two things are never skipped, because neither can be told from the
    * filesystem:

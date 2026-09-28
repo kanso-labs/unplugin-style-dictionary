@@ -304,6 +304,85 @@ describe('under a real vite dev server', () => {
     }
   }, 30000)
 
+  it('rebuilds a source saved while a rebuild is compiling', async () => {
+    // The scheduler queues a follow-up for a save that lands mid-compile, and
+    // with `cache` on that follow-up asks the up-to-date check first. The
+    // compile in flight writes its output after the save, so comparing the
+    // save against that output called it stale and skipped it: the old value
+    // stayed served until something else was edited.
+    const directory = path.join(tempDir, 'mid-compile-save')
+    const tokensDirectory = path.join(directory, 'tokens')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+
+    const first = path.join(tokensDirectory, 'a.json')
+    const second = path.join(tokensDirectory, 'b.json')
+    fs.writeFileSync(first, JSON.stringify({ a: { value: 'A0' } }))
+    fs.writeFileSync(second, JSON.stringify({ b: { value: 'B0' } }))
+
+    // Slow enough that a save can land between the compile reading the
+    // sources and writing the output.
+    StyleDictionary.registerFormat({
+      format: async ({ dictionary }) => {
+        await settle(300)
+        return dictionary.allTokens
+          .map((token) => `${token.name}=${String(token.value)}`)
+          .join('\n')
+      },
+      name: 'custom/slow-mid-compile',
+    })
+
+    const generated = path.join(directory, 'generated', 'out.txt')
+    let saveDuringNextBuild = false
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [
+        vitePlugin({
+          config: {
+            platforms: {
+              text: {
+                buildPath: posix(path.join(directory, 'generated')) + '/',
+                files: [
+                  { destination: 'out.txt', format: 'custom/slow-mid-compile' },
+                ],
+                transformGroup: 'css',
+              },
+            },
+            source: [posix(tokensDirectory) + '/*.json'],
+          },
+          // Armed for the one rebuild the edit below triggers, and saving
+          // halfway through the format's sleep.
+          onBuildStart: () => {
+            if (!saveDuringNextBuild) return
+            saveDuringNextBuild = false
+            setTimeout(() => {
+              fs.writeFileSync(second, JSON.stringify({ b: { value: 'B1' } }))
+            }, 150)
+          },
+          silent: true,
+        }),
+      ],
+      root: directory,
+      server: { hmr: false, middlewareMode: true },
+    })
+
+    await waitUntil(() => fs.existsSync(generated), 10000)
+    await settle(300)
+
+    saveDuringNextBuild = true
+    fs.writeFileSync(first, JSON.stringify({ a: { value: 'A1' } }))
+
+    const current = () => fs.readFileSync(generated, 'utf-8')
+    await waitUntil(
+      () => current().includes('a=A1') && current().includes('b=B1'),
+      10000,
+    )
+
+    expect(current()).toContain('a=A1')
+    expect(current()).toContain('b=B1')
+  }, 30000)
+
   // `logLevel: 'silent'` rather than the `'warn'` that is usually right for a
   // test not asserting on the progress lines. `'warn'` leaves Style
   // Dictionary's own file table on stdout, and nothing here reads it; the one
