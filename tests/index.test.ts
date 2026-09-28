@@ -1689,12 +1689,24 @@ describe('unplugin-style-dictionary (vite target)', () => {
         )
         expect(counter.calls).toBe(2)
 
-        // And with nothing changed since, the next build finds its sources
-        // and skips.
+        // With nothing changed since, the next build finds its sources and
+        // skips.
         await callBuildStart(
           vitePlugin({ config: 'sd.config.json', silent: true }),
         )
         expect(counter.calls).toBe(2)
+
+        // And after an edit it compiles. With the token file missing from its
+        // sources, the check compared the config file alone and kept the old
+        // output across a restart.
+        fs.writeFileSync(
+          token,
+          JSON.stringify({ color: { primary: { value: '#00ff00' } } }),
+        )
+        await callBuildStart(
+          vitePlugin({ config: 'sd.config.json', silent: true }),
+        )
+        expect(counter.calls).toBe(3)
       } finally {
         process.chdir(originalCwd)
       }
