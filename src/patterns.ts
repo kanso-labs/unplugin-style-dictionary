@@ -243,10 +243,8 @@ function staticParentOf(pattern: string): string {
     GLOB_CHARACTERS.test(segment.replace(/\\./g, '')),
   )
 
-  const parent =
-    firstGlob === -1
-      ? path.posix.dirname(pattern)
-      : segments.slice(0, firstGlob).join('/')
-
-  return parent.replace(/\\(.)/g, '$1')
+  // Every glob carries an unescaped glob character in the part the consumer
+  // wrote. Were there none, `-1` would drop only the last segment, which is
+  // still the pattern's own directory.
+  return segments.slice(0, firstGlob).join('/').replace(/\\(.)/g, '$1')
 }
