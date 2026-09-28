@@ -13,6 +13,7 @@ import StyleDictionary from 'style-dictionary'
 
 import type { ResolvedConfig } from './config.js'
 import type { UnpluginStyleDictionaryOptions } from './types.js'
+import type { DestinationRecord } from './up-to-date.js'
 
 import { configForBuild, describeConfig, readConfigObject } from './config.js'
 import { asError, errorMessage } from './errors.js'
@@ -22,6 +23,7 @@ import {
   configFingerprint,
   declaredDestinations,
   isUpToDate,
+  newestSourceOf,
   writtenDestination,
 } from './up-to-date.js'
 
@@ -32,11 +34,11 @@ import {
 // `configResolved`, the overlay callback by `configureServer` — so a value
 // copied when this was built would be the working directory and `undefined`
 // for good. `generatedDestinations` is the instance's own record of what it
-// wrote, and `destinationFingerprints` is the process's record of which
-// configuration last wrote each file; neither lives here.
+// wrote, and `destinationRecords` is the process's record of which
+// configuration last wrote each file and what it read; neither lives here.
 export interface PluginInstance {
   cache: boolean
-  destinationFingerprints: Map<string, string>
+  destinationRecords: Map<string, DestinationRecord>
   failOnError: NonNullable<UnpluginStyleDictionaryOptions['failOnError']>
   generatedDestinations: Set<string>
   log: (message: string, type: 'error' | 'info' | 'success') => void
@@ -62,7 +64,7 @@ export async function runBuilds(
 ): Promise<void> {
   const {
     cache,
-    destinationFingerprints,
+    destinationRecords,
     failOnError,
     generatedDestinations,
     log,
@@ -119,14 +121,23 @@ export async function runBuilds(
       const declared = cache ? await readConfigObject(item) : null
       const selectedPlatforms = platformsFor(platformsOption, context)
 
+      // What this configuration reads, as it stands before the compile below
+      // reads any of it. The up-to-date check needs it now, and the record
+      // needs it afterwards: it is what the next check measures "changed
+      // since" against. Only asked with `cache` on, the one case that reads it.
+      const newestSource = declared
+        ? await newestSourceOf({ log, root, watch }, item, declared)
+        : null
+
       if (
         declared &&
-        (await isUpToDate(
-          { destinationFingerprints, log, root, watch },
+        isUpToDate(
+          { destinationRecords, root },
           item,
           declared,
+          newestSource,
           selectedPlatforms,
-        ))
+        )
       ) {
         // The destinations still have to be collected. They are what stops
         // the plugin's own output being treated as a watched source, so a
@@ -229,7 +240,7 @@ export async function runBuilds(
       // of these files. A record left standing would vouch for output that
       // no longer matches the configuration it names.
       for (const destination of writing) {
-        destinationFingerprints.delete(destination)
+        destinationRecords.delete(destination)
       }
 
       if (selectedPlatforms === undefined) {
@@ -288,10 +299,14 @@ export async function runBuilds(
       // wrote before throwing. Every configuration is recorded, a file-backed
       // one included: an object configuration naming the same file has to
       // see that something else wrote it last.
+      //
+      // `newestSource` goes in beside the fingerprint. It was taken before
+      // this compile read anything, so a source saved while it ran is newer
+      // than it, and the rebuild queued for that save is not skipped.
       const fingerprint = configFingerprint(root, item)
       if (fingerprint !== null) {
         for (const destination of writing) {
-          destinationFingerprints.set(destination, fingerprint)
+          destinationRecords.set(destination, { fingerprint, newestSource })
         }
       }
     }

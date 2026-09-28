@@ -429,7 +429,7 @@ after dropping `legacy.scss` from a configuration, a clean run left
 
 ## Skipping a Build That Would Change Nothing
 
-A configuration whose output is already newer than everything it reads is not
+A configuration whose output already reflects everything it reads is not
 compiled again. `buildAllPlatforms` is around 80% of a build, and under Vite it
 runs inside `server.listen()` — so without this the dev server refused
 connections for the length of a compile whether or not a token had changed.
@@ -438,6 +438,12 @@ Three things are compared: every file the configuration reads (its `source` and
 `include` matches, its own config file, and anything named by `watch`), every
 file it declares, and — for a configuration that is not a file — what the
 configuration looked like when those files were written.
+
+Once this process has compiled a configuration, the files it reads are compared
+against what that compile saw before it started reading. A token saved while a
+rebuild is compiling is newer than that, so the rebuild queued for it runs, even
+though the output the rebuild went on to write is newer still. Before then, the
+files it reads are compared against the files it declares.
 
 Two cases never skip, because neither can be settled from the filesystem:
 
@@ -765,8 +771,15 @@ export interface UnpluginStyleDictionaryOptions {
    * 4,000-token, two-platform configuration — and under Vite it runs inside
    * `server.listen()`, so the dev server does not accept a connection until
    * it finishes whether or not a token changed. A configuration is treated as
-   * up to date when every file it declares exists and is newer than every
-   * file it reads, its own config file included.
+   * up to date when every file it declares exists and nothing it reads, its
+   * own config file included, has changed since the compile that wrote them
+   * read it.
+   *
+   * Where this process ran that compile, "since" means since the moment it
+   * began reading, so a token saved while a rebuild is compiling is rebuilt
+   * rather than taken for part of the output the rebuild went on to write.
+   * Before this process has compiled a configuration, the files it reads are
+   * compared against the files it declares instead.
    *
    * Two things are never skipped, because neither can be told from the
    * filesystem:

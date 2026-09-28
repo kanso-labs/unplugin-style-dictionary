@@ -11,6 +11,7 @@ import type {
   StyleDictionaryConfigContext,
   UnpluginStyleDictionaryOptions,
 } from './types.js'
+import type { DestinationRecord } from './up-to-date.js'
 
 import { colourAllowed, paint } from './colour.js'
 import { runBuilds } from './compile.js'
@@ -387,6 +388,11 @@ const atomicVolume = Object.create(fs, {
 // filesystem cannot tell the two apart. Having built it here, the plugin can —
 // the fingerprint changes with the configuration.
 //
+// Beside the fingerprint sits the newest source that compile saw before it read
+// anything. That, rather than the output's own mtime, is what the next check
+// measures "changed since" against, so a save landing mid-compile is not
+// mistaken for one the compile read — see `isUpToDate`.
+//
 // Keyed by destination rather than kept as the set of everything ever built,
 // because the question is what the file on disk holds now. A set answered
 // "was this built at some point", which an edit that was then undone, or a
@@ -404,10 +410,11 @@ const atomicVolume = Object.create(fs, {
 // own.
 //
 // The fingerprint carries the root, so two projects in one process never share
-// one. A configuration given as a path is skipped without consulting this: its
-// own file is one of the sources the mtime comparison reads, so an edit to it
-// is visible across processes as well as within one.
-const destinationFingerprints = new Map<string, string>()
+// one. A configuration given as a path needs no fingerprint to be skipped: its
+// own file is one of the sources, so an edit to it is visible across processes
+// as well as within one. Where nothing is recorded — a process's first compile
+// — the check compares the sources against the output instead.
+const destinationRecords = new Map<string, DestinationRecord>()
 
 // A compile that is running right now, keyed by `buildKey`, so bundler
 // instances in one process wait on each other rather than each starting their
@@ -734,7 +741,7 @@ const unpluginFactory: UnpluginFactory<
   // are assigned after this runs — see `PluginInstance`.
   const instance: PluginInstance = {
     cache,
-    destinationFingerprints,
+    destinationRecords,
     failOnError,
     generatedDestinations,
     log,

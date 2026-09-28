@@ -16,6 +16,15 @@ import type { UnpluginStyleDictionaryOptions } from './types.js'
 
 import { expandPatterns, sourcePatternsOf } from './patterns.js'
 
+// What this process knows about the compile that last wrote one destination:
+// which configuration it was, and the newest source it saw before it read any
+// of them. `newestSource` is `null` where that compile did not look, which is
+// when `cache` was off or the sources could not be established.
+export interface DestinationRecord {
+  fingerprint: string
+  newestSource: null | number
+}
+
 // A stable identity for one resolved configuration, or `null` where it
 // cannot have one. Functions are serialised by source rather than dropped,
 // because an inline `format` or `transform` is exactly the edit a
@@ -82,29 +91,34 @@ export function declaredDestinations(
   return destinations
 }
 
-// Whether every file a configuration declares is already newer than every
-// file it reads, so its compile can be skipped.
+// Whether a configuration's compile can be skipped: every file it declares
+// exists, and nothing it reads has changed since the compile that wrote them.
+//
+// "Since" is measured against what that compile read wherever this process
+// ran it. Its record holds the newest source it saw before reading, and a
+// source newer than that is one it never read. Comparing against the output
+// instead, as a first compile still has to, lost a save that landed while a
+// rebuild ran: the rebuild wrote its output after the save, so the output was
+// newer than an edit it never read, and the follow-up the scheduler queued
+// for that save was skipped as up to date.
 //
 // Conservative in every direction it can be: anything it cannot establish —
 // a destination that is missing, a source it cannot stat, a configuration
 // declaring no destinations at all — is a reason to build rather than to
 // skip.
-export async function isUpToDate(
+export function isUpToDate(
   {
-    destinationFingerprints,
-    log,
+    destinationRecords,
     root,
-    watch,
   }: {
-    destinationFingerprints: ReadonlyMap<string, string>
-    log: Log
+    destinationRecords: ReadonlyMap<string, DestinationRecord>
     root: string
-    watch: UnpluginStyleDictionaryOptions['watch']
   },
   item: ResolvedConfig,
   configObj: Config,
+  newestSource: null | number,
   only?: string[],
-): Promise<boolean> {
+): boolean {
   // An action writes what no `destination` names, so there is nothing for
   // the comparison below to check and skipping would leave its work undone.
   const hasActions = Object.values(configObj.platforms ?? {}).some(
@@ -115,6 +129,64 @@ export async function isUpToDate(
   const destinations = declaredDestinations(configObj, only)
   if (destinations.length === 0) return false
 
+  if (newestSource === null) return false
+
+  const fingerprint = configFingerprint(root, item)
+
+  for (const destination of destinations) {
+    const stats = statOrNull(destination)
+    if (!stats) return false
+
+    const record = destinationRecords.get(destination)
+    const writtenByThis =
+      fingerprint !== null && record?.fingerprint === fingerprint
+
+    // A configuration given as a path has its own file among the sources, so
+    // an edit to it is accounted for and the skip holds across processes. One
+    // given as an object or a function has not, and only this process knows
+    // which configuration last wrote each destination — so it skips only over
+    // files this one wrote. Having built it at some point is not enough: an
+    // edit that was then undone left the edit's output standing, and so did a
+    // build of it that threw partway.
+    if (!item.file && !writtenByThis) return false
+
+    const lastRead = writtenByThis ? record.newestSource : null
+
+    if (
+      lastRead === null
+        ? stats.mtimeMs <= newestSource
+        : newestSource > lastRead
+    ) {
+      return false
+    }
+  }
+
+  return true
+}
+
+// The newest mtime among the files a configuration reads, or `null` where that
+// cannot be established: a source that cannot be stat'ed, or patterns that
+// matched no file at all.
+//
+// Asked before a compile reads anything, and recorded against what it writes,
+// so that the next `isUpToDate` compares against what the compile actually
+// read. A save that lands afterwards is newer than this, however much newer
+// the compile's own output turns out to be. Both sides of that comparison are
+// mtimes of the files themselves, so no clock is involved and nothing depends
+// on how finely the filesystem stamps a write.
+export async function newestSourceOf(
+  {
+    log,
+    root,
+    watch,
+  }: {
+    log: Log
+    root: string
+    watch: UnpluginStyleDictionaryOptions['watch']
+  },
+  item: ResolvedConfig,
+  configObj: Config,
+): Promise<null | number> {
   // `options.watch` belongs in here as much as `source` does. A consumer
   // names an extra file because something in the build reads it — a custom
   // format's own data file, most obviously — and leaving it out let a change
@@ -135,14 +207,14 @@ export async function isUpToDate(
   )
   if (item.file) sources.push(item.file.replace(/\\/g, '/'))
 
-  if (sources.length === 0) return false
+  if (sources.length === 0) return null
 
   let newestSource = -Infinity
   let sawFile = false
 
   for (const source of sources) {
     const stats = statOrNull(source)
-    if (!stats) return false
+    if (!stats) return null
 
     // Directories are in this list on purpose — `expandPatterns` registers
     // each pattern's static parent so a token file created later is
@@ -160,35 +232,7 @@ export async function isUpToDate(
   // Every pattern expanded to directories alone, so nothing was actually
   // read. Style Dictionary would build an empty dictionary from that, and a
   // skip would present the empty result as current.
-  if (!sawFile) return false
-
-  let oldestDestination = Infinity
-  for (const destination of destinations) {
-    const stats = statOrNull(destination)
-    if (!stats) return false
-    oldestDestination = Math.min(oldestDestination, stats.mtimeMs)
-  }
-
-  if (oldestDestination <= newestSource) return false
-
-  // A configuration given as a path has its own file among the sources
-  // above, so an edit to it has already been accounted for and the skip
-  // holds across processes.
-  if (item.file) return true
-
-  // One given as an object or a function has not. Only this process knows
-  // which configuration last wrote those destinations, so the skip holds only
-  // when every one of them was last written by this one. Having built it at
-  // some point is not enough: an edit that was then undone left the edit's
-  // output standing, and so did a build of it that threw partway.
-  const fingerprint = configFingerprint(root, item)
-
-  return (
-    fingerprint !== null &&
-    destinations.every(
-      (destination) => destinationFingerprints.get(destination) === fingerprint,
-    )
-  )
+  return sawFile ? newestSource : null
 }
 
 // Where Style Dictionary writes one file, as an absolute path.
