@@ -1,12 +1,13 @@
 // Whether a configuration's compile can be skipped, and the destinations that
 // question is asked about.
 //
-// Nothing here holds state — not even the fingerprints of what this process
-// has compiled, which are process-wide and live in `index.ts` beside
+// Nothing here holds state — not even the record of which configuration last
+// wrote each destination, which is process-wide and lives in `index.ts` beside
 // `compilesInFlight`. What a plugin instance owns is handed in on each call.
 
 import type { Config } from 'style-dictionary'
 
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -19,12 +20,17 @@ import { expandPatterns, sourcePatternsOf } from './patterns.js'
 // cannot have one. Functions are serialised by source rather than dropped,
 // because an inline `format` or `transform` is exactly the edit a
 // fingerprint has to notice, and `JSON.stringify` omits a function outright.
+//
+// A digest of that serialisation rather than the serialisation itself,
+// because it is held against every destination a build writes, and a
+// configuration carrying its tokens inline serialises to all of them.
 export function configFingerprint(
   root: string,
   item: ResolvedConfig,
 ): null | string {
+  let serialised: string
   try {
-    return JSON.stringify(
+    serialised = JSON.stringify(
       [root, item.file ?? item.config],
       (_key, value: unknown) =>
         typeof value === 'function' ? `[fn]${String(value)}` : value,
@@ -34,6 +40,8 @@ export function configFingerprint(
     // wrong one, so it compiles every time exactly as it did before.
     return null
   }
+
+  return createHash('sha256').update(serialised).digest('hex')
 }
 
 // Every absolute destination a configuration declares, read off the
@@ -83,12 +91,12 @@ export function declaredDestinations(
 // skip.
 export async function isUpToDate(
   {
-    compiledFingerprints,
+    destinationFingerprints,
     log,
     root,
     watch,
   }: {
-    compiledFingerprints: ReadonlySet<string>
+    destinationFingerprints: ReadonlyMap<string, string>
     log: Log
     root: string
     watch: UnpluginStyleDictionaryOptions['watch']
@@ -169,11 +177,18 @@ export async function isUpToDate(
   if (item.file) return true
 
   // One given as an object or a function has not. Only this process knows
-  // what it looked like when those destinations were written, so the skip
-  // holds only against a fingerprint recorded here.
+  // which configuration last wrote those destinations, so the skip holds only
+  // when every one of them was last written by this one. Having built it at
+  // some point is not enough: an edit that was then undone left the edit's
+  // output standing, and so did a build of it that threw partway.
   const fingerprint = configFingerprint(root, item)
 
-  return fingerprint !== null && compiledFingerprints.has(fingerprint)
+  return (
+    fingerprint !== null &&
+    destinations.every(
+      (destination) => destinationFingerprints.get(destination) === fingerprint,
+    )
+  )
 }
 
 // Where Style Dictionary writes one file, as an absolute path.
