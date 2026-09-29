@@ -1422,8 +1422,9 @@ This was recorded here as platform-dependent — inert on macOS, delivered on
 Linux — and told contributors not to assert either answer. It was the link. The
 fixture ran under `os.tmpdir()`, which on macOS is `/var/folders/…`, and the
 same fixture spelled by its realpath rebuilt on macOS before the fix. Linux's
-temp directory is not a link, which fits the other half. Windows was never
-measured either way.
+temp directory is not a link, which fits the other half. Windows was not part of
+that record; with the fix, `Test on Windows` runs both rolldown cases in
+`tests/targets.test.ts`, and both rebuild there.
 
 The fix has two halves, and neither works alone:
 
@@ -1444,8 +1445,8 @@ report one edit and `schedule` collapses the pair.
 path on macOS.** A case asserting an exact watch list therefore resolves its
 temporary directory with `fs.realpathSync`, and so does any case where the link
 under test has to be the only one on the path. The linked-package case under
-`rolldown.watch()` in `tests/targets.test.ts` can only fail on a Mac, since CI
-runs Linux and Windows; the cases under
+`rolldown.watch()` in `tests/targets.test.ts` has only been seen to fail on a
+Mac, and CI runs Linux and Windows; the cases under
 `a watch entry reached through a symbolic link` hold both halves on every
 platform.
 
