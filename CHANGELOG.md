@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.10.13](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.12...unplugin-style-dictionary-v0.10.13) (2026-09-29)
+
+
+### Bug Fixes
+
+* **build:** compare an object config against the one last built ([#450](https://github.com/kanso-labs/unplugin-style-dictionary/issues/450)) ([4674e08](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4674e087e9a9b00ca980de116e46762aec2a367f))
+* **build:** keep the up-to-date skip working when an output is unchanged ([#453](https://github.com/kanso-labs/unplugin-style-dictionary/issues/453)) ([8dea833](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8dea83333d2476db578526780baa648197190816))
+* **build:** rebuild when a hook the configuration names has changed ([#456](https://github.com/kanso-labs/unplugin-style-dictionary/issues/456)) ([f8142d2](https://github.com/kanso-labs/unplugin-style-dictionary/commit/f8142d24a3b76ede840cb466694d28fb1a764311))
+* **build:** stop the up-to-date check dropping a save made mid-compile ([#452](https://github.com/kanso-labs/unplugin-style-dictionary/issues/452)) ([8c237ed](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8c237edcdbc00c62502dbcc720d8f88a08f2ddc5))
+* **build:** track the files a build wrote, not every declared one ([#459](https://github.com/kanso-labs/unplugin-style-dictionary/issues/459)) ([ffe3a1c](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ffe3a1c09208e36739a2407b4d6031e81a709be5))
+* **vite:** compile on a dev-server restart after a file event ([#458](https://github.com/kanso-labs/unplugin-style-dictionary/issues/458)) ([522cc0b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/522cc0b9e7ce9b3a918ec2b87193bad64bd9d674))
+* **vite:** keep a null server.watch disabled for node_modules tokens ([#460](https://github.com/kanso-labs/unplugin-style-dictionary/issues/460)) ([a3d2dd4](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a3d2dd442bffb91ad0bbafffba148d41278957db))
+* **vite:** un-ignore node_modules token files under `vite build --watch` ([#461](https://github.com/kanso-labs/unplugin-style-dictionary/issues/461)) ([2931b3b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2931b3b9266540ca0c336d7903dbe071a3ed9e35))
+* **watch:** escape the project path before it becomes part of a glob ([#451](https://github.com/kanso-labs/unplugin-style-dictionary/issues/451)) ([d46d5d3](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d46d5d362cf779a86df3c801052809a8a06f33d1))
+
+
+### Dependencies
+
+* update actions/upload-code-coverage action to v1.4.3 ([#447](https://github.com/kanso-labs/unplugin-style-dictionary/issues/447)) ([3087f13](https://github.com/kanso-labs/unplugin-style-dictionary/commit/3087f1386bd87e36f39559a1d94a25a2367fcd5d))
+* update dependency @types/node to v26.6.3 ([#454](https://github.com/kanso-labs/unplugin-style-dictionary/issues/454)) ([e197189](https://github.com/kanso-labs/unplugin-style-dictionary/commit/e1971890f77757cf911aedcd6cda509ea7ee292c))
+* update dependency lint-staged to v17.6.0 ([#455](https://github.com/kanso-labs/unplugin-style-dictionary/issues/455)) ([04f879c](https://github.com/kanso-labs/unplugin-style-dictionary/commit/04f879c561787d90c0144a6c8de3979240510c36))
+* update vitest to v5.0.2 ([#448](https://github.com/kanso-labs/unplugin-style-dictionary/issues/448)) ([0005d3c](https://github.com/kanso-labs/unplugin-style-dictionary/commit/0005d3cbc4be5ca6b57c14d01e88d17a7bbddc43))
+
 ## [0.10.12](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.11...unplugin-style-dictionary-v0.10.12) (2026-09-28)
 
 
