@@ -272,11 +272,12 @@ function isRunning(pid: number): boolean {
 // rendering what was already there, and every later write for that
 // destination returns at the comparison.
 //
-// Only the files of writers that are gone. Another instance or platform in
-// this process, or another process, may be between its write and its rename,
-// and removing its file would make that rename fail — which is also why no
-// signal handler cleans up instead: a listener on `SIGINT` removes Node's
-// default exit and takes over the host's shutdown, and `SIGKILL` reaches none.
+// Only the files of writers that are gone, and this process is not one of
+// them: another instance or platform in it, or in another process, may be
+// between its write and its rename, and removing its file would make that
+// rename fail. That is also why no signal handler cleans up instead: a
+// listener on `SIGINT` removes Node's default exit and takes over the host's
+// shutdown, and `SIGKILL` reaches none.
 function sweepAbandonedTemporaries(destination: string): void {
   const directory = path.dirname(destination)
   const stem = path.basename(destination, path.extname(destination))
@@ -293,7 +294,7 @@ function sweepAbandonedTemporaries(destination: string): void {
 
   for (const name of names) {
     const writer = temporaryWriterOf(name, stem)
-    if (writer === undefined || writer === process.pid) continue
+    if (writer === undefined) continue
 
     const file = path.join(directory, name)
     if (isRunning(writer) && !isOlderThan(file, ABANDONED_TEMPORARY_AGE_MS)) {
