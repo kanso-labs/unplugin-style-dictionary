@@ -84,7 +84,7 @@
     "@commitlint/config-conventional": "21.2.3",
     "@eslint/js": "10.0.1",
     "@rspack/core": "2.2.7",
-    "@types/node": "26.6.2",
+    "@types/node": "26.6.3",
     "@types/picomatch": "4.0.3",
     "@types/semver": "7.8.0",
     "@vitest/coverage-v8": "5.0.2",
