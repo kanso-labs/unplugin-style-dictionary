@@ -1147,6 +1147,18 @@ const unpluginFactory: UnpluginFactory<
           startupResolved = await resolveConfigs()
           if (startupResolved.length === 0) return
 
+          // A watcher the consumer turned off stays off. Vite builds a real one
+          // for any value but a strict `null`, and appending the negation
+          // below spread that `null` into an object — so the setting stopped
+          // working exactly when a token came from a workspace package. By
+          // identity, not truthiness: an unset `server.watch` resolves to
+          // `undefined`, and almost nobody sets it, so a falsy check would drop
+          // the negation for nearly every consumer.
+          //
+          // Here rather than above the `command` return: `server.watch` is
+          // the dev server's, and says nothing about `vite build --watch`.
+          if (config.server.watch === null) return
+
           const { paths } = await getWatchTargets(startupResolved)
           const negations = nodeModulesNegations(paths)
           if (negations.length === 0) return
@@ -1207,7 +1219,15 @@ const unpluginFactory: UnpluginFactory<
         // longer needs rather than accumulating watchers for the session.
         const ownWatchers = new Map<string, fs.FSWatcher>()
 
+        // None of these either when the consumer turned Vite's watcher off.
+        // Kept running, they rebuilt a token resolved through `node_modules`
+        // while one in the root did not rebuild at all, which is not what a
+        // disabled watcher means.
+        const watcherDisabled = server.config.server.watch === null
+
         const watchNodeModules = (forPaths: string[]) => {
+          if (watcherDisabled) return
+
           const wanted = new Set(nodeModulesWatchDirectories(forPaths))
 
           for (const [directory, watcher] of ownWatchers) {

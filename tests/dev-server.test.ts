@@ -949,6 +949,101 @@ describe('under a real vite dev server', () => {
     )
   }, 30000)
 
+  // A token under `node_modules` in a directory of its own. A plain directory
+  // rather than a symlink: #307's 2x2 showed that `node_modules` is the
+  // variable and the symlink is not.
+  const nodeModulesToken = (name: string) => {
+    const app = path.join(tempDir, name)
+    const tokens = path.join(app, 'node_modules', '@acme', 'tokens', 'src')
+    fs.mkdirSync(tokens, { recursive: true })
+    fs.mkdirSync(path.join(app, 'generated'), { recursive: true })
+
+    const tokenSource = path.join(tokens, 'color.json')
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#123456' } } }),
+    )
+
+    const configFile = path.join(app, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: posix(path.join(app, 'generated')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(tokenSource)],
+      }),
+    )
+
+    return {
+      app,
+      configFile,
+      generated: path.join(app, 'generated', 'vars.css'),
+      tokenSource,
+    }
+  }
+
+  it('leaves a disabled watcher disabled when a token resolves inside node_modules', async () => {
+    // `server.watch: null` is how Vite turns its watcher off, and it builds a
+    // real one for any other value. Appending the negation spread that `null`
+    // into an object, so the setting stopped working exactly when tokens came
+    // from a workspace package. A disabled watcher now means what it says for
+    // every token: none of Vite's, and none of the plugin's own either.
+    const { app, configFile, generated } = nodeModulesToken('disabled-watcher')
+
+    const watchSpy = vi.spyOn(fs, 'watch')
+    try {
+      server = await createServer({
+        configFile: false,
+        logLevel: 'silent',
+        plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+        root: app,
+        server: { hmr: false, middlewareMode: true, watch: null },
+      })
+
+      // Built all the same: a disabled watcher stops rebuilds, not the build.
+      await waitUntil(() => fs.existsSync(generated), 10000)
+      expect(fs.existsSync(generated)).toBe(true)
+
+      expect(server.config.server.watch).toBeNull()
+
+      const intoNodeModules = watchSpy.mock.calls.filter(
+        ([watched]) =>
+          typeof watched === 'string' && watched.includes('node_modules'),
+      )
+      expect(intoNodeModules).toEqual([])
+    } finally {
+      watchSpy.mockRestore()
+    }
+  }, 30000)
+
+  it('still un-ignores the token when server.watch is left unset', async () => {
+    // The check above is by identity because an unset `server.watch` resolves
+    // to `undefined`, and almost nobody sets it: a falsy check would drop the
+    // negation for nearly every consumer. Nothing else would notice, because
+    // the plugin's own watcher keeps the rebuild case above passing without it.
+    const { app, configFile, generated, tokenSource } =
+      nodeModulesToken('unset-watcher')
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+      root: app,
+      server: { hmr: false, middlewareMode: true },
+    })
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    const ignored = server.config.server.watch?.ignored
+    expect(Array.isArray(ignored) ? ignored : [ignored]).toContain(
+      `!${posix(tokenSource)}`,
+    )
+  }, 30000)
+
   it('leaves the rest of node_modules ignored', async () => {
     // The negation names each file exactly, and that is the point:
     // `!**/node_modules/**` would hand the whole dependency tree back to the
