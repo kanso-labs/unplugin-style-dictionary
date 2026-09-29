@@ -6738,11 +6738,16 @@ describe('the atomic writer', () => {
     )
 
     // Alternated, as the marker is in the written-file case, so no rebuild
-    // is skipped as identical. Large enough that one copy takes long enough
-    // to be caught halfway.
-    const versions = ['a', 'b'].map((fill) =>
-      Buffer.alloc(2 * 1024 * 1024, fill),
-    )
+    // is skipped as identical.
+    //
+    // Sized like that case's output rather than like the audit's 2 MB, and
+    // Windows is why. A reader holding the file open makes Windows refuse the
+    // rename over it, and reading 2 MB in a loop held it for so much of the
+    // time that the retry budget ran out and the rebuild failed with `EPERM`.
+    // The size is not what catches the inherited `cp` anyway: it unlinks the
+    // destination before copying into it, and at 128 KB it still failed
+    // every run, with over 170 bad reads each.
+    const versions = ['a', 'b'].map((fill) => Buffer.alloc(128 * 1024, fill))
     const rebuilds = 20
 
     const failures: string[] = []
