@@ -5,6 +5,7 @@ import type { MockInstance } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import * as rollup from 'rollup'
 import StyleDictionary from 'style-dictionary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -6411,6 +6412,58 @@ describe('the atomic writer', () => {
 
     expect(fs.readFileSync(path.join(out, 'named.txt'), 'utf8')).toBe('hi')
     expect(fs.readFileSync(path.join(out, 'option.txt'), 'utf8')).toBe('hi')
+  }, 30000)
+
+  it('compares a stream once it is written, and leaves an identical one in place', async () => {
+    // A stream cannot be read ahead of the write without being consumed, so
+    // it is the one write that still goes through a temporary file when
+    // nothing changed. The comparison after it is what still spares the
+    // destination: replacing an identical file is an event a host rebuilds on.
+    const directory = writeFixture('stream')
+    const streamed = path.join(directory, 'out', 'streamed.txt')
+
+    StyleDictionary.registerAction({
+      do: async (_dictionary, platform, _options, vol) => {
+        await vol.promises.writeFile(
+          path.join(String(platform.buildPath), 'streamed.txt'),
+          Readable.from(['written as a stream\n']),
+        )
+      },
+      name: 'test/write-stream-through-volume',
+      undo: () => {},
+    })
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            actions: ['test/write-stream-through-volume'],
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+
+    const plugin = vitePlugin({
+      cache: false,
+      config: configFile,
+      silent: true,
+    })
+    await callBuildStart(plugin)
+    expect(fs.readFileSync(streamed, 'utf8')).toBe('written as a stream\n')
+
+    // A rename lands a different inode, so an unchanged one is a destination
+    // nothing replaced.
+    const inode = fs.statSync(streamed).ino
+    await callBuildStart(plugin)
+
+    expect(fs.statSync(streamed).ino).toBe(inode)
+    expect(temporaries(directory)).toEqual([])
   }, 30000)
 
   it.each([
