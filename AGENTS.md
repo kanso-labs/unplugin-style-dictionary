@@ -954,12 +954,20 @@ entry point that compiles without asking whether it should.
    what made every regenerate produce the next one. Under `rollup --watch` that
    was about ten bundles a second, forever.
 
-Underneath all three, a write whose bytes match the destination skips the
-`rename`, so a rebuild that renders what is already there emits no filesystem
-event at all. That is the backstop for the targets none of the three cover.
+Underneath all three, a write whose bytes match the destination touches nothing,
+so a rebuild that renders what is already there emits no filesystem event at
+all. That is the backstop for the targets none of the three cover.
 `tests/index.test.ts` pins each of these, the last one through a real
 `rollup.watch()` run rather than a hand-built plugin context. Do not "simplify"
 any of them.
+
+**The bytes are compared before any temporary file exists, and that is what
+makes "no event at all" true.** Comparing after writing one skipped only the
+`rename`: a raw directory watcher such as `node --watch-path` on the `buildPath`
+still saw the temporary file come and go, and each restart it caused rebuilt
+into the next. A stream or an iterable cannot be read without being consumed, so
+that case still writes its temporary file first. Style Dictionary only ever
+hands its volume a string.
 
 **Generated files go through a temporary file and a `rename` on purpose.** Style
 Dictionary writes each file straight to its destination, which truncates it
