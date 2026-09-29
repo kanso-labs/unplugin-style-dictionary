@@ -103,6 +103,18 @@ export async function patternsMatchingNothing({
   return barren
 }
 
+// Where `file` is once every symbolic link on its path is followed, spelled
+// with forward slashes like every other path handed to a watcher here.
+// `undefined` when nothing is there, which a literal is allowed to be: it is
+// registered whether or not it exists yet.
+export function realpathOf(file: string): string | undefined {
+  try {
+    return fs.realpathSync(file).replace(/\\/g, '/')
+  } catch {
+    return undefined
+  }
+}
+
 // The patterns one configuration reads, resolved the way the build resolves
 // them. The watch list, the up-to-date check and the empty-token-set message
 // all read a configuration's patterns through here, so they cannot disagree

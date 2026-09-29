@@ -5099,8 +5099,14 @@ describe('every supported config file format', () => {
 // default discovery, the `include` key and the `watch` option all worked and
 // nothing in the suite would have noticed if any of the three had stopped.
 describe('the watch list a build registers', () => {
-  const tempDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'unplugin-style-dictionary-watch-list-'),
+  // Resolved, because on macOS `os.tmpdir()` is reached through a symbolic
+  // link, and every path behind one is registered by its realpath as well.
+  // The lists below are exact, so they have to describe a project with no
+  // link on its path; the linked one has cases of its own below.
+  const tempDir = fs.realpathSync(
+    fs.mkdtempSync(
+      path.join(os.tmpdir(), 'unplugin-style-dictionary-watch-list-'),
+    ),
   )
 
   afterEach(() => {
@@ -5330,6 +5336,139 @@ describe('the watch list a build registers', () => {
     },
     30000,
   )
+})
+
+// A workspace package linked into `node_modules` is the common case, but a
+// link anywhere on the path counts, and on macOS `os.tmpdir()` is one. On
+// macOS rolldown's watcher drops the events for a path registered through a
+// link, so the realpath is registered beside it, and a change reported by the
+// realpath has to be turned back into the spelling the patterns use. The
+// rolldown case in `tests/targets.test.ts` can only fail on a Mac; these hold
+// the two halves on every platform.
+describe('a watch entry reached through a symbolic link', () => {
+  // Resolved, so the link each case makes is the only one on the path.
+  const tempDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'unplugin-style-dictionary-link-')),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  // `linked` leads to `real`, and the configuration names its tokens through
+  // the link, the way a workspace names a package in `node_modules`. A glob,
+  // so the directory is registered as well as the file it matches today.
+  const fixture = (name: string) => {
+    const directory = path.join(tempDir, name)
+    const real = path.join(directory, 'real')
+    const linked = path.join(directory, 'linked')
+    fs.mkdirSync(real, { recursive: true })
+    fs.symlinkSync(real, linked, 'dir')
+
+    fs.writeFileSync(
+      path.join(real, 'color.json'),
+      JSON.stringify({ color: { brand: { value: '#111111' } } }),
+    )
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: posix(directory) + '/',
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [posix(linked) + '/*.json'],
+      }),
+    )
+
+    return {
+      configFile,
+      generated: path.join(directory, 'tokens.js'),
+      linked,
+      real,
+    }
+  }
+
+  it('registers each path behind the link by its realpath as well', async () => {
+    const { configFile, linked, real } = fixture('registers')
+
+    const watched = await callBuildStart(
+      vitePlugin({ config: configFile, logLevel: 'warn' }),
+    )
+
+    expect(new Set(watched)).toEqual(
+      new Set([
+        posix(configFile),
+        posix(linked),
+        posix(path.join(linked, 'color.json')),
+        posix(path.join(real, 'color.json')),
+        posix(real),
+      ]),
+    )
+  }, 30000)
+
+  it('rebuilds for an edit reported by the realpath', async () => {
+    // Registering the realpath alone reaches rolldown's watcher and changes
+    // nothing else: the event arrives spelled by the realpath, matches none
+    // of the patterns, and is discarded as a file the plugin does not read.
+    const { configFile, generated, linked, real } = fixture('edit')
+    const plugin = vitePlugin({
+      cache: false,
+      config: configFile,
+      logLevel: 'warn',
+    })
+
+    await callBuildStart(plugin)
+    expect(fs.readFileSync(generated, 'utf-8')).toContain('#111111')
+
+    const tokenSource = path.join(real, 'color.json')
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#222222' } } }),
+    )
+
+    const watched = await callWatchChange(plugin, posix(tokenSource))
+
+    expect(fs.readFileSync(generated, 'utf-8')).toContain('#222222')
+
+    // What the rebuild registers afterwards carries both spellings too.
+    expect(watched).toEqual(
+      expect.arrayContaining([
+        posix(path.join(linked, 'color.json')),
+        posix(tokenSource),
+      ]),
+    )
+  }, 30000)
+
+  it('rebuilds for a file created later, reported under the realpath of its directory', async () => {
+    // Only the directory is registered for a file that does not exist yet, so
+    // only the directory's realpath is known — the report has to be matched
+    // on a parent rather than on the file.
+    const { configFile, generated, real } = fixture('create')
+    const plugin = vitePlugin({
+      cache: false,
+      config: configFile,
+      logLevel: 'warn',
+    })
+
+    await callBuildStart(plugin)
+    expect(fs.readFileSync(generated, 'utf-8')).not.toContain('ColorAccent')
+
+    const created = path.join(real, 'accent.json')
+    fs.writeFileSync(
+      created,
+      JSON.stringify({ color: { accent: { value: '#333333' } } }),
+    )
+
+    await callWatchChange(plugin, posix(created))
+
+    expect(fs.readFileSync(generated, 'utf-8')).toContain('ColorAccent')
+  }, 30000)
 })
 
 const buildAndCollect = async (

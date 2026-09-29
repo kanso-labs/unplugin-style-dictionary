@@ -1,3 +1,4 @@
+import path from 'node:path'
 import picomatch from 'picomatch'
 
 import type { WatchPatterns } from './patterns.js'
@@ -75,4 +76,32 @@ export function matchesWatchedFile(file: string, patterns: string[]): boolean {
       // as a glob, and still names itself.
       pattern === normalizedFile || picomatch.isMatch(normalizedFile, pattern),
   )
+}
+
+// The spelling the watch patterns use for `file`, which a host watching a
+// registered realpath reports by where a link leads rather than by the link.
+// `linkedPaths` maps each registered path that runs through a link from its
+// realpath back to the spelling it was registered under, and is the plugin
+// instance's, so it is handed in rather than held.
+//
+// The lookup walks up from `file` rather than asking about it alone, because
+// a pattern's static parent directory is registered so that a token file
+// created in it later is noticed — and that file arrives spelled under the
+// directory's realpath, which only the directory is a key for.
+export function registeredSpellingOf(
+  file: string,
+  linkedPaths: ReadonlyMap<string, string>,
+): string {
+  if (linkedPaths.size === 0) return file
+
+  const normalizedFile = file.replace(/\\/g, '/')
+
+  for (let real = normalizedFile; ; real = path.posix.dirname(real)) {
+    const registered = linkedPaths.get(real)
+    if (registered !== undefined) {
+      return registered + normalizedFile.slice(real.length)
+    }
+
+    if (path.posix.dirname(real) === real) return file
+  }
 }

@@ -18,9 +18,9 @@ import { colourAllowed, paint } from './colour.js'
 import { runBuilds } from './compile.js'
 import { resolveConfigOption } from './config.js'
 import { asError, errorMessage } from './errors.js'
-import { expandPatterns, watchPatternsOf } from './patterns.js'
+import { expandPatterns, realpathOf, watchPatternsOf } from './patterns.js'
 import { createScheduler } from './scheduler.js'
-import { isWatchedSource } from './watch-filter.js'
+import { isWatchedSource, registeredSpellingOf } from './watch-filter.js'
 
 export type * from './types.js'
 
@@ -639,6 +639,38 @@ const unpluginFactory: UnpluginFactory<
   // observable without a rebuild to observe it in.
   let cachedPatterns: undefined | WatchPatterns
 
+  // Every registered path that runs through a symbolic link, keyed by where
+  // the link leads. On macOS rolldown's watcher drops the events for a path
+  // registered through a link — a workspace package linked into
+  // `node_modules`, or any project under `/var` or `/tmp` — so a token edit
+  // there built once and never again, and said nothing. Registering the
+  // realpath beside the path is what reaches that watcher, and the event then
+  // arrives spelled by the realpath, which neither the patterns nor
+  // `generatedDestinations` use. `watchChange` turns it back through this map
+  // before asking either.
+  const linkedPaths = new Map<string, string>()
+
+  // Hands `paths` to the host's watcher, and beside each one reached through a
+  // link, the path the link leads to. Where the link already delivers events,
+  // as under rollup, both spellings report one edit and `schedule` collapses
+  // the pair. Only the `addWatchFile` sites come through here: the list
+  // `getWatchTargets` returns also feeds the dev server's watcher and its
+  // negations, which see through a link as they are.
+  const addWatchFiles = (
+    context: { addWatchFile: (id: string) => void },
+    paths: string[],
+  ): void => {
+    for (const file of paths) {
+      context.addWatchFile(file)
+
+      const real = realpathOf(file)
+      if (real === undefined || real === file) continue
+
+      linkedPaths.set(real, file)
+      context.addWatchFile(real)
+    }
+  }
+
   // Whether `watchChange` has fired since the last `buildStart`, and whether
   // anything has been compiled yet. Rollup, rolldown and webpack all run
   // `watchChange` for every changed file and only then re-enter `buildStart`
@@ -1048,9 +1080,7 @@ const unpluginFactory: UnpluginFactory<
       // block contributed after a close.
       if (!hostClosed) {
         const { paths } = await getWatchTargets(resolved)
-        for (const file of paths) {
-          this.addWatchFile(file)
-        }
+        addWatchFiles(this, paths)
       }
 
       // Registering the watch list is all this hook does on webpack, and it
@@ -1398,7 +1428,7 @@ const unpluginFactory: UnpluginFactory<
     // signature is the thing that is wrong, so the rule is silenced rather
     // than the hook made to lie about finishing.
     // oxlint-disable-next-line typescript/no-misused-promises
-    async watchChange(id) {
+    async watchChange(changed) {
       adoptHost(this)
       adoptWatchMode(this)
 
@@ -1407,9 +1437,13 @@ const unpluginFactory: UnpluginFactory<
       // into `buildStart` for a flag to describe.
       if (hostClosed) return
 
-      // Raised before any decision about `id`, because whatever this change
+      // Raised before any decision about the change, because whatever it
       // was, the host is now on its way back into `buildStart`.
       watchRebuild = true
+
+      // Spelled the way the patterns and `generatedDestinations` spell it,
+      // which a change reported through a registered realpath is not.
+      const id = registeredSpellingOf(changed, linkedPaths)
 
       // The cheap half of the decision, taken before anything is resolved.
       // Under Vite the scope this hook sees is the whole project root rather
@@ -1446,9 +1480,7 @@ const unpluginFactory: UnpluginFactory<
 
       // Expanded again after the build rather than reusing the list from
       // before it, so a token file the build itself produced is registered.
-      for (const file of await expandPatterns(patterns, log)) {
-        this.addWatchFile(file)
-      }
+      addWatchFiles(this, await expandPatterns(patterns, log))
     },
 
     webpack: adoptCompiler,

@@ -372,11 +372,9 @@ describe('every watching target rebuilds once and then settles', () => {
       fs.rmSync(tempDir, { force: true, recursive: true })
   })
 
-  // What rolldown does with a token edit is platform-dependent, so this case
-  // asserts nothing about it — see the note in AGENTS.md. What it does assert
-  // holds everywhere: an edit rolldown certainly sees, to a file in its own
-  // module graph, rebuilds and then stops. The generated file is in that graph
-  // too, which is the shape a rebuild loop closes through.
+  // A token edit, and then an edit to a file in rolldown's own module graph,
+  // each rebuilds and then stops. The generated file is in that graph too,
+  // which is the shape a rebuild loop closes through.
   it('under a real rolldown watcher', async () => {
     const directory = path.join(tempDir, 'rolldown')
     const { configFile, entry, generated, tokenSource } =
@@ -408,16 +406,24 @@ describe('every watching target rebuilds once and then settles', () => {
       // by the plugin.
       await settle(500)
 
-      // Edited, and then deliberately not asserted on either way. Whether this
-      // reaches a rebuild depends on the platform's watch backend: measured
-      // inert on macOS and delivered on Linux. It is here so the entry edit
-      // below lands on a plugin that has already had a token change to react
-      // to, which is the busier of the two states.
+      // On macOS this fixture's path runs through `/var`, a symbolic link, so
+      // the edit reaches rolldown only through the realpath the plugin
+      // registers beside it. That is why this used to read as inert on macOS
+      // and delivered on Linux — see AGENTS.md.
       fs.writeFileSync(
         tokenSource,
         JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
       )
-      await settle(1500)
+
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
+        20000,
+      )
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#ff0000')
+
+      // Settled before the entry edit, so the count it is measured against
+      // is not still climbing from this one.
+      expect(await settledCount(() => bundles, 1500, 20000)).not.toBeNull()
 
       // An edit rolldown certainly sees, because the entry is in its module
       // graph. Every rebuild re-enters `buildStart`, and a `buildStart` that
@@ -593,4 +599,100 @@ describe('vite build --watch', () => {
     expect(ignored).toEqual(['**/consumer-entry/**', `!${viaNodeModules}`])
     expect(toldWatch).toBe(true)
   })
+})
+
+describe('a token package linked into node_modules', () => {
+  // Resolved, because on macOS `os.tmpdir()` is itself reached through a
+  // symlink, and the link under test has to be the only one on the path.
+  const tempDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'unplugin-style-dictionary-linked-')),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  it('rebuilds on an edit under a real rolldown watcher', async () => {
+    // The workspace shape: the token package lives in `packages/` and is
+    // linked into the app's `node_modules`. The plugin registered each path
+    // only as its pattern spells it, through the link, and on macOS rolldown's
+    // watcher reports nothing for a path that runs through a symlink — so the
+    // first build was right and every edit after it was ignored, silently.
+    const app = path.join(tempDir, 'app')
+    const pkg = path.join(tempDir, 'packages', 'tokens')
+    fs.mkdirSync(path.join(pkg, 'src'), { recursive: true })
+    fs.mkdirSync(path.join(app, 'node_modules', '@acme'), { recursive: true })
+    fs.mkdirSync(path.join(app, 'generated'), { recursive: true })
+
+    const tokenSource = path.join(pkg, 'src', 'color.json')
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#111111' } } }),
+    )
+    fs.symlinkSync(
+      pkg,
+      path.join(app, 'node_modules', '@acme', 'tokens'),
+      'dir',
+    )
+
+    const configFile = path.join(app, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: posix(path.join(app, 'generated')) + '/',
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [
+          posix(path.join(app, 'node_modules', '@acme', 'tokens', 'src')) +
+            '/*.json',
+        ],
+      }),
+    )
+
+    const entry = path.join(app, 'entry.js')
+    fs.writeFileSync(
+      entry,
+      [
+        "import { ColorBrand } from './generated/tokens.js'",
+        'export const brand = ColorBrand',
+        '',
+      ].join('\n'),
+    )
+
+    const generated = path.join(app, 'generated', 'tokens.js')
+    const current = () =>
+      fs.existsSync(generated) ? fs.readFileSync(generated, 'utf-8') : ''
+
+    const watcher = rolldown.watch({
+      input: entry,
+      output: { dir: path.join(app, 'dist'), format: 'es' },
+      plugins: [
+        rolldownPlugin({ cache: false, config: configFile, silent: true }),
+      ],
+    })
+
+    try {
+      await waitUntil(() => current().includes('#111111'), 20000)
+      expect(current()).toContain('#111111')
+
+      // The watcher reports nothing for a moment after it is built.
+      await settle(500)
+
+      // The real file, as an editor working in `packages/tokens` saves it.
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#222222' } } }),
+      )
+
+      await waitUntil(() => current().includes('#222222'), 20000)
+      expect(current()).toContain('#222222')
+    } finally {
+      await watcher.close()
+    }
+  }, 60000)
 })
