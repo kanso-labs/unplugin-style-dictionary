@@ -4338,23 +4338,23 @@ const waitUntil = async (satisfied: () => boolean, timeoutMs: number) => {
 }
 
 // A gate on a rollup watcher's own signals, for the cases below to wait on
-// before they touch the fixture again.
+// before they touch the fixture again or close the watcher.
 //
-// Rollup records a changed file in `invalidatedIds`, and one `buildDelay`
-// later runs a callback that awaits its `change` emission — which is where
-// `watchChange` runs, and so where this plugin does an entire compile — then
-// clears the map, then builds (rollup 4.63.3, `dist/shared/watch.js:133-166`).
-// An invalidation recorded while that emission is being awaited is therefore
-// discarded by the clear, while the timeout it scheduled still fires, on an
-// empty map. Nothing is told, and nothing rebuilds: a write landing in that
-// window is a lost change rather than a slow one, and no deadline recovers it.
+// Through rollup 4.63.4, a change recorded while a `change` emission was being
+// awaited — which is where `watchChange` runs, and so where this plugin does an
+// entire compile — could be dropped: the map was cleared after the emission,
+// and a timer still pending then fired on an empty map. The window was
+// `buildDelay` wide, and these cases run at 50. Rollup 4.63.5 clears the map
+// before emitting and turns such a change into a rerun, so nothing is dropped
+// now (#429). The gate stays because `close()` does not wait for a build
+// either — see AGENTS.md.
 //
 // Idle here is "rollup has recorded nothing, is building nothing, and has said
-// nothing for a moment", which excludes the whole of that window: an emission
-// always begins with at least one recorded invalidation and ends at `restart`,
-// which rollup emits immediately after the clear. The quiet period covers the
-// rest — a watcher with an undelivered filesystem event to come looks idle
-// until it arrives, and arriving is itself activity.
+// nothing for a moment". An emission always begins with at least one recorded
+// invalidation and ends at `restart`, which rollup emits once the map is
+// empty. The quiet period covers the rest — a watcher with an undelivered
+// filesystem event to come looks idle until it arrives, and arriving is itself
+// activity.
 const watcherIdle = () => {
   let building = false
   let lastActivity = Date.now()
