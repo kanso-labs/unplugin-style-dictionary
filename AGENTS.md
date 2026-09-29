@@ -973,14 +973,26 @@ hands its volume a string.
 Dictionary writes each file straight to its destination, which truncates it
 first, so anything importing a generated file mid-rebuild — a consuming test
 run, a dev-server request — reads a partial file and fails to parse it.
-`runBuilds` therefore hands the instance an `atomicVolume`: `node:fs` with both
-write entry points swapped for versions that write a sibling temporary file and
-rename it over the destination, `rename` being atomic within a filesystem. It is
-assigned onto the instance rather than passed as Style Dictionary's `volume`
-constructor option, because that option also marks the volume as a custom
-filesystem shim and turns path resolution off for every read.
-`tests/index.test.ts` pins this with a concurrent reader; a single clean build
-proves nothing, since the window is only tens of milliseconds wide.
+`runBuilds` therefore hands the instance an `atomicVolume`: `node:fs` with its
+write and copy entry points — `promises.writeFile`, `writeFileSync`,
+`promises.copyFile`, `copyFileSync` and `promises.cp` — swapped for versions
+that write a sibling temporary file and rename it over the destination, `rename`
+being atomic within a filesystem. It is assigned onto the instance rather than
+passed as Style Dictionary's `volume` constructor option, because that option
+also marks the volume as a custom filesystem shim and turns path resolution off
+for every read. `tests/index.test.ts` pins this with a concurrent reader of a
+written file and of a copied one; a single clean build proves nothing, since the
+window is only tens of milliseconds wide.
+
+**The copies were inherited from `node:fs` until #390, and `cp` in place is
+worse than a write.** `copy_assets` goes through `promises.cp`, which unlinks
+the destination and copies into a fresh file, so a reader polling a 2 MB asset
+across 20 rebuilds read a partial file 1352 times in 3752. `cpAtomic` walks the
+source and sends each regular file through `copyFileAtomic`, and only for the
+call `copy_assets` makes: an option the walk does not honour, a destination
+inside its own source, and any entry that is neither a file nor a directory go
+to the inherited `cp`, which copies or refuses as it always has. The cases
+beside the concurrent reader pin each of those hand-offs.
 
 **The `configureServer` escape hatch is redundancy, deliberately kept.** It used
 to be justified by Vite not reliably invoking `watchChange` while serving. That
