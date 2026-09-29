@@ -615,7 +615,9 @@ const unpluginFactory: UnpluginFactory<
   // `watchChange` for every changed file and only then re-enter `buildStart`
   // — unplugin's webpack adapter awaits both in one `make` tap — so a flag
   // raised in the first is still standing in the second, and is what tells it
-  // this is a watch rebuild rather than the first build of the process.
+  // this is a watch rebuild rather than the first build of the process. Vite's
+  // dev server runs `watchChange` too and never re-enters, which is why
+  // `buildStart` ignores the flag there.
   let watchRebuild = false
   let hasCompiled = false
 
@@ -1041,10 +1043,17 @@ const unpluginFactory: UnpluginFactory<
       // `watchChange` without ever re-entering here would otherwise leave the
       // flag standing, and no first compile of a process may ever be skipped —
       // the tokens have to exist before the build that consumes them.
-      if (watchRebuild && hasCompiled) {
-        watchRebuild = false
-        return
-      }
+      //
+      // Vite's dev server is that host, and more than a first compile is at
+      // stake there. It calls this hook once per server, at start and on each
+      // restart, and never after a change — so a flag some earlier file event
+      // raised says nothing about this call. Honouring it made a restart after
+      // any event in the session build nothing, including the restart Vite
+      // performs when `vite.config.ts` changes. Cleared either way, so the
+      // next call starts from what happens after this one.
+      const reentry = watchRebuild && hasCompiled && hostCommand !== 'serve'
+      watchRebuild = false
+      if (reentry) return
 
       await compileOnceAcrossInstances(resolved)
       hasCompiled = true
