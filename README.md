@@ -25,8 +25,9 @@ them.
   bullet follows it rather than standing beside it.
 - **Automatic watching**: Reads the `source` and `include` patterns from your
   Style Dictionary configurations and watches the files they match, including a
-  token package resolved through `node_modules` in a workspace. What a change
-  then triggers depends on the target — see
+  token package resolved through `node_modules` in a workspace — except under
+  `vite build --watch` on Vite 8, whose build watcher is rolldown's. What a
+  change then triggers depends on the target — see
   [Watching, per target](#watching-per-target).
 - **Config flexibility**: Supports file paths (JSON, JSON5, JSONC, JS, MJS, TS),
   configuration objects, or functions — including registering custom formats at
@@ -335,13 +336,14 @@ Every target compiles tokens before the build that consumes them. What a later
 change to a token file triggers is not the same everywhere, because it depends
 on what the host bundler does with the watch list the plugin registers.
 
-| Target       | Compiles before the build | Rebuilds on a token change     | Safe from rebuild loops |
-| ------------ | ------------------------- | ------------------------------ | ----------------------- |
-| **Vite**     | yes                       | yes, under the dev server      | yes                     |
-| **Rollup**   | yes                       | yes, under `rollup --watch`    | yes                     |
-| **Webpack**  | yes                       | yes, under `webpack --watch`   | yes                     |
-| **Rspack**   | yes                       | yes, under `rspack --watch`    | yes                     |
-| **Rolldown** | yes                       | platform-dependent — see below | yes                     |
+| Target                    | Compiles before the build | Rebuilds on a token change        | Safe from rebuild loops |
+| ------------------------- | ------------------------- | --------------------------------- | ----------------------- |
+| **Vite**                  | yes                       | yes, under the dev server         | yes                     |
+| **Vite**, `build --watch` | yes                       | yes on 6 and 7; on 8, as Rolldown | yes                     |
+| **Rollup**                | yes                       | yes, under `rollup --watch`       | yes                     |
+| **Webpack**               | yes                       | yes, under `webpack --watch`      | yes                     |
+| **Rspack**                | yes                       | yes, under `rspack --watch`       | yes                     |
+| **Rolldown**              | yes                       | platform-dependent — see below    | yes                     |
 
 Patterns and literal paths behave the same way wherever rebuilds happen at all.
 A `source` of `tokens/**/*.json` matches a file sitting directly in `tokens/` as
@@ -365,9 +367,15 @@ the files it registers, by name, on Vite 6, 7 and 8. The rest of `node_modules`
 stays ignored, which matters: handing the whole dependency tree to the watcher
 is thousands of files no token build reads.
 
+`vite build --watch` had the same problem and gets the same fix on Vite 6 and 7,
+which build on rollup's watcher and its chokidar ignore list: the plugin appends
+the same negations to `build.watch.chokidar.ignored`. Vite 8 builds with
+rolldown, which takes no ignore list from there, so what the Rolldown note above
+says holds for it too.
+
 Nothing is needed from you for that. If you had worked around it with a
-`server.watch.ignored` negation of your own, it still works — the plugin appends
-to your list rather than replacing it.
+`server.watch.ignored` or `build.watch.chokidar.ignored` negation of your own,
+it still works — the plugin appends to your list rather than replacing it.
 
 "Safe from rebuild loops" is worth stating because consuming code imports the
 generated file, so every regenerate is itself a change the host reacts to. The
@@ -769,8 +777,8 @@ export interface StyleDictionaryConfigContext {
   /**
    * Whether the host will keep rebuilding.
    *
-   * `true` under Vite's dev server, `rollup --watch`, `rolldown.watch()` and
-   * `webpack --watch`; `false` for a one-shot build. It is read from the
+   * `true` under Vite's dev server and `vite build --watch`, `rollup --watch`,
+   * `rolldown.watch()` and `webpack --watch`; `false` for a one-shot build. It is read from the
    * host — the plugin context's `meta.watchMode` on the three rollup-shaped
    * targets, and `compiler.watchMode` on webpack — rather than inferred from
    * `command`, because `rollup --watch` both watches and builds.

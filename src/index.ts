@@ -45,6 +45,33 @@ interface HostMessenger {
   info?: (message: string) => void
 }
 
+// Appends `negations` to a Vite build watcher's `chokidar.ignored`, after
+// whatever the consumer put there, exactly as the dev server's list is amended.
+//
+// Reached structurally, because the types disagree about where it lives. Vite 6
+// and 7 type `build.watch` as rollup's options, which carry `chokidar`; Vite 8
+// types it as rolldown's, which do not, and this package compiles against 8.
+// On 8 the write reaches nothing — Vite forwards only its polling settings to
+// rolldown's watcher — and is harmless there.
+function appendChokidarIgnored(watch: object, negations: string[]): void {
+  if (negations.length === 0) return
+
+  const chokidar: unknown = Reflect.get(watch, 'chokidar')
+  const options: object =
+    typeof chokidar === 'object' && chokidar !== null ? chokidar : {}
+  const existing: unknown = Reflect.get(options, 'ignored')
+  const previous: unknown[] = Array.isArray(existing)
+    ? existing
+    : existing === undefined
+      ? []
+      : [existing]
+
+  Reflect.set(watch, 'chokidar', {
+    ...options,
+    ignored: [...previous, ...negations],
+  })
+}
+
 // Best-effort cleanup of a temporary file whose write or rename failed. The
 // original failure is what the caller reports, so nothing here may throw.
 function discardTemporaryFile(temporary: string): void {
@@ -1122,9 +1149,38 @@ const unpluginFactory: UnpluginFactory<
           },
         }
 
-        // Nothing below concerns a build: only the dev server has a watcher,
-        // and only its ignore list needs amending.
-        if (config.command !== 'serve') return
+        // A build has a watcher too under `vite build --watch`. On Vite 6 and 7
+        // it is rollup's, whose chokidar ignore list always starts with
+        // `**/node_modules/**`, so a token package resolved through
+        // `node_modules` built once and never rebuilt — the dev server's fix
+        // below never reached this mode. Everything after this block is the
+        // dev server's.
+        if (config.command !== 'serve') {
+          if (config.build.watch) {
+            // Before the resolution, so the `config` function it calls is told
+            // it is being watched, as every later call will be.
+            isWatching = true
+
+            try {
+              const resolved = await resolveConfigs()
+              if (resolved.length > 0) {
+                const { paths } = await getWatchTargets(resolved)
+                appendChokidarIgnored(
+                  config.build.watch,
+                  nodeModulesNegations(paths),
+                )
+              }
+            } catch (err) {
+              // The build reports it itself when `buildStart` resolves again,
+              // as the dev server's branch below explains.
+              log(
+                `Could not read the configuration while preparing the watch list: ${errorMessage(err)}`,
+                'error',
+              )
+            }
+          }
+          return
+        }
 
         // Ahead of the resolution below, so the `config` function a consumer
         // wrote is told `watch: true` on this call as well as on every later
