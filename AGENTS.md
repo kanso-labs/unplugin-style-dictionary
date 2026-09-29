@@ -1070,7 +1070,12 @@ dropping it would let a watcher treat it as a token source and rebuild forever.
 And the whole selection is validated before anything is built, because Style
 Dictionary's `buildPlatform` rejects an unknown name only when it reaches it —
 measured: with the check removed, `css` is on disk when the throw for `nope`
-arrives.
+arrives. It is validated before the up-to-date check too, since that check
+judges a selection by the destinations declared for it and cannot see a name the
+configuration does not define: until #392, `['css', 'nope']` with `css` current
+was skipped as up to date and the typo said nothing until a source changed. The
+check runs in both places through one `checkSelection`, because a build with
+`cache: false` never reaches the first.
 
 The per-platform loop is sequential, matching the configuration loop it sits
 inside. `buildAllPlatforms` fanning its own platforms out with `Promise.all` is

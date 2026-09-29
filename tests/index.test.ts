@@ -4219,6 +4219,39 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     })
 
+    it('rejects a wrong name beside a platform that is already current', async () => {
+      // The two cases above build into a fresh directory, so neither reaches
+      // the up-to-date check with anything current. That check judges a
+      // selection by the destinations the configuration declares for it,
+      // which cannot include a name it does not define — so `['css', 'nope']`
+      // was judged on `css` alone, and with `css` current the build was
+      // skipped and the typo went unreported until a source changed.
+      const { configFile: scoped } = threePlatforms(
+        path.join(tempDir, 'scoped-typo-current'),
+      )
+      await callBuildStart(
+        vitePlugin({ config: scoped, logLevel: 'silent', platforms: ['css'] }),
+      )
+
+      const errors = await collectErrors(async () => {
+        await expect(
+          callBuildStart(
+            vitePlugin({
+              config: scoped,
+              logLevel: 'silent',
+              platforms: ['css', 'nope'],
+            }),
+          ),
+        ).rejects.toThrow('does not define the platform(s) nope')
+      })
+
+      expect(
+        errors.some((line) =>
+          line.includes('does not define the platform(s) nope'),
+        ),
+      ).toBe(true)
+    })
+
     it('lets the up-to-date check skip a scoped build', async () => {
       // The up-to-date check requires every declared destination to exist and
       // be newer than the sources. A scoped build never writes the platforms it
