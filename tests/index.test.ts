@@ -1511,6 +1511,179 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fixture.counter.calls).toBe(2)
   })
 
+  // One file whose filter matches the fixture's token and one whose filter
+  // matches nothing. Style Dictionary declines to write the second — `No
+  // tokens for shadows.txt. File not created.` — so it is declared and never
+  // on disk.
+  const unwrittenFileFixture = (name: string) => {
+    const fixture = freshnessFixture(name)
+    StyleDictionary.registerFilter({
+      filter: (token) => token.path[0] === 'color',
+      name: 'custom/only-colors',
+    })
+    StyleDictionary.registerFilter({
+      filter: (token) => token.path[0] === 'shadow',
+      name: 'custom/only-shadows',
+    })
+
+    fs.writeFileSync(
+      fixture.configPath,
+      JSON.stringify({
+        platforms: {
+          text: {
+            buildPath: fixture.directory.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'colors.txt',
+                filter: 'custom/only-colors',
+                format: fixture.format,
+              },
+              {
+                destination: 'shadows.txt',
+                filter: 'custom/only-shadows',
+                format: fixture.format,
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [fixture.source.replace(/\\/g, '/')],
+      }),
+    )
+
+    return {
+      ...fixture,
+      colors: path.join(fixture.directory, 'colors.txt'),
+      shadows: path.join(fixture.directory, 'shadows.txt'),
+    }
+  }
+
+  it('skips a configuration that declares a file Style Dictionary does not write', async () => {
+    // Asking whether every declared file exists, the check never skipped this
+    // configuration: the file its empty filter leaves unwritten is missing on
+    // every build, by design. It asks about the files the last compile wrote.
+    const fixture = unwrittenFileFixture('unwritten-skip')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(1)
+    expect(fs.existsSync(fixture.shadows)).toBe(false)
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const messages = await (async () => {
+      try {
+        await callBuildStart(vitePlugin({ config: fixture.configPath }))
+        return logSpy.mock.calls.map((call) => String(call[0]))
+      } finally {
+        logSpy.mockRestore()
+      }
+    })()
+
+    expect(fixture.counter.calls).toBe(1)
+    expect(
+      messages.some((message) =>
+        message.includes('Design tokens are already up to date'),
+      ),
+    ).toBe(true)
+  })
+
+  it('still skips it after a restart', async () => {
+    // The dev-server start is where the cost fell, so what the last compile
+    // left unwritten has to survive the process like the rest of its record.
+    const fixture = unwrittenFileFixture('unwritten-restart')
+    const options = {
+      config: fixture.configPath,
+      root: fixture.directory,
+      silent: true,
+    }
+
+    await callBuildStart(vitePlugin(options))
+    const restarted = await restartedVitePlugin()
+    await callBuildStart(restarted(options))
+
+    expect(fixture.counter.calls).toBe(1)
+  })
+
+  it('compiles once an edit gives an unwritten file something to write', async () => {
+    // The unwritten file is the configuration's only one, so nothing else it
+    // declares can force the compile: only what it reads having changed can.
+    const fixture = unwrittenFileFixture('unwritten-then-written')
+    fs.writeFileSync(
+      fixture.configPath,
+      JSON.stringify({
+        platforms: {
+          text: {
+            buildPath: fixture.directory.replace(/\\/g, '/') + '/',
+            files: [
+              {
+                destination: 'shadows.txt',
+                filter: 'custom/only-shadows',
+                format: fixture.format,
+              },
+            ],
+            transformGroup: 'css',
+          },
+        },
+        source: [fixture.source.replace(/\\/g, '/')],
+      }),
+    )
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    expect(fs.existsSync(fixture.shadows)).toBe(false)
+
+    fs.writeFileSync(
+      fixture.source,
+      JSON.stringify({
+        color: { primary: { value: '#0070f3' } },
+        shadow: { soft: { value: '0 1px 2px #0003' } },
+      }),
+    )
+    const later = new Date(Date.now() + 1000)
+    fs.utimesSync(fixture.source, later, later)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fs.existsSync(fixture.shadows)).toBe(true)
+  })
+
+  it('writes back a file the last compile wrote and that has since been deleted', async () => {
+    const fixture = unwrittenFileFixture('unwritten-deleted')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    fs.rmSync(fixture.colors)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(2)
+    expect(fs.existsSync(fixture.colors)).toBe(true)
+  })
+
+  it('hands onBuildEnd only the declared files that are on disk', async () => {
+    const fixture = unwrittenFileFixture('unwritten-build-end')
+    let handed: string[] = []
+
+    await callBuildStart(
+      vitePlugin({
+        config: fixture.configPath,
+        onBuildEnd: (files) => {
+          handed = files
+        },
+        silent: true,
+      }),
+    )
+
+    expect(handed).toEqual([fixture.colors])
+  })
+
   it('still skips when a hook the configuration does not name changes', async () => {
     // The registry is shared by the whole process, so a configuration is
     // fingerprinted with the hooks it names and nothing else. Every other

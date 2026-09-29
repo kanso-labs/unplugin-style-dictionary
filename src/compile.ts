@@ -7,8 +7,8 @@
 // callback — are reached through it when a compile runs rather than copied
 // when it was built.
 
-import type fs from 'node:fs'
-
+import fs from 'node:fs'
+import path from 'node:path'
 import StyleDictionary from 'style-dictionary'
 
 import type { ResolvedConfig } from './config.js'
@@ -259,8 +259,11 @@ export async function runBuilds(
 
       // Swap in the atomic volume only now that the instance has finished
       // reading its configs and token sources, so every write below lands
-      // through `rename` while the read path stays exactly as it was.
-      sd.volume = volume
+      // through `rename` while the read path stays exactly as it was. Seen
+      // through a layer that notes what this build writes, which the record
+      // below needs: a declared file is not necessarily a written one.
+      const wrote = new Set<string>()
+      sd.volume = notingWrites(volume, wrote)
 
       // The files this compile is about to write, named exactly as the
       // up-to-date check names them, and only the selected platforms' — a
@@ -340,15 +343,21 @@ export async function runBuilds(
       // than it, and the rebuild queued for that save is not skipped. So does
       // each file's mtime as this compile left it, byte-identical skip and
       // all: a later check trusts the record only while the file still has
-      // it. A file that was never written gets no record, so it is compiled
-      // next time rather than vouched for.
+      // it. A file Style Dictionary declined to write is recorded as such, so
+      // a later check does not go looking for it; one it wrote and that is
+      // already gone gets no record, so the next build compiles.
       //
       // Only a compile with `cache` on has a fingerprint to record. One with it
       // off has still forgotten what it rewrote, above, which is what keeps
       // every other instance from vouching for its output.
       if (fingerprint !== null) {
         for (const destination of writing) {
-          const record = recordOf(destination, fingerprint, newestSource)
+          const record = recordOf(
+            destination,
+            fingerprint,
+            newestSource,
+            wrote.has(destination),
+          )
           if (record) {
             destinationRecords.set(destination, record)
             recorded.set(destination, record)
@@ -421,16 +430,19 @@ export async function runBuilds(
   // in practice and guaranteed by nothing. The paths stay platform-native:
   // this is a list a consumer is going to open files with, not one the
   // watcher compares against.
+  //
+  // Only the declared files that are on disk. One whose filter matched no
+  // tokens is declared and never written, and a hook opening it got an ENOENT.
   if (onBuildEnd) {
     // `toSorted` is what the linter asks for and what this cannot use:
     // `lib` is ES2022 here and `toSorted` is ES2023, so it types as an error
     // even though every Node this package supports has it. The rule guards
     // against mutating an array someone else holds, and this one was built
     // from the set on the line it appears on.
-    // oxlint-disable-next-line unicorn/no-array-sort
-    const files = Array.from(generatedFiles).sort((left, right) =>
-      left.localeCompare(right),
-    )
+    const files = Array.from(generatedFiles)
+      .filter((file) => fs.existsSync(file))
+      // oxlint-disable-next-line unicorn/no-array-sort
+      .sort((left, right) => left.localeCompare(right))
     callHook(log, 'onBuildEnd', onBuildEnd, files, duration)
   }
 
@@ -552,6 +564,39 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     'then' in value &&
     typeof value.then === 'function'
   )
+}
+
+// `volume`, with every path Style Dictionary writes through it noted in
+// `into`, resolved as `writtenDestination` resolves a declared one. Each file
+// a build writes reaches `promises.writeFile` (`buildPlatform` in
+// `lib/StyleDictionary.js`) — a byte-identical one included, since the atomic
+// writer decides to skip the rename only once it has been handed the file — so
+// `into` ends up holding exactly what the build wrote, and a file it declined
+// to write never appears in it. Built per compile, over the atomic volume
+// rather than in place of it.
+//
+// The sync writer is inherited untouched. Only an action reaches it, a
+// configuration with actions is never skipped, and `tests/index.test.ts`
+// checks that an action is handed the atomic writer itself.
+function notingWrites(volume: typeof fs, into: Set<string>): typeof fs {
+  const note = (file: unknown) => {
+    if (typeof file === 'string') into.add(path.resolve(file))
+  }
+
+  /* oxlint-disable typescript/no-unsafe-type-assertion */
+  return Object.create(volume, {
+    promises: {
+      value: Object.create(volume.promises, {
+        writeFile: {
+          value: async (...args: Parameters<typeof fs.promises.writeFile>) => {
+            note(args[0])
+            await volume.promises.writeFile(...args)
+          },
+        },
+      }) as typeof fs.promises,
+    },
+  }) as typeof fs
+  /* oxlint-enable typescript/no-unsafe-type-assertion */
 }
 
 // Which platforms this compile covers, or `undefined` for all of them.

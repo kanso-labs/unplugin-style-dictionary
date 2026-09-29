@@ -23,23 +23,27 @@ import {
   watchOptionPatterns,
 } from './patterns.js'
 
-// What is known about the compile that last wrote one destination: which
+// What is known about the compile that last built one destination: which
 // configuration it was, the newest source it saw before it read any of them,
 // and the file's mtime once it was done. `newestSource` is `null` where that
 // compile did not look, which is when `cache` was off or the sources could not
-// be established. `persisted` marks a record an earlier process left.
+// be established. `written` is `null` where the compile declared the file and
+// Style Dictionary declined to write it — a filter matching no tokens — so
+// there is nothing on disk for it to vouch for. `persisted` marks a record an
+// earlier process left.
 export interface DestinationRecord {
   fingerprint: string
   newestSource: null | number
   persisted?: true
-  written: number
+  written: null | number
 }
 
 // Bumped whenever what a record or a fingerprint means changes, so a file an
 // older version of the plugin wrote is ignored rather than misread. 2 added
 // the hooks a configuration names and the Style Dictionary version to the
 // fingerprint, and started comparing it for a configuration given as a path.
-const RECORDS_VERSION = 2
+// 3 records a declared file the compile did not write, with `written: null`.
+const RECORDS_VERSION = 3
 
 // A stable identity for one resolved configuration, or `null` where it
 // cannot have one. Functions are serialised by source rather than dropped,
@@ -90,8 +94,9 @@ export function configFingerprint(
 // is what the skip exists to avoid.
 //
 // Each one is named by `writtenDestination`, which `runBuilds` asks as well,
-// so the up-to-date check and the record of what was built name the same
-// files — the ones Style Dictionary actually wrote.
+// so the up-to-date check and the record of what was built name each file
+// where Style Dictionary writes it. Whether it did is the record's to say: a
+// file whose filter matches no tokens is declared and never written.
 //
 // `only` narrows this to named platforms, and exactly one caller wants that:
 // the up-to-date check, which asks whether the work *this* compile would do
@@ -122,8 +127,11 @@ export function declaredDestinations(
   return destinations
 }
 
-// Whether a configuration's compile can be skipped: every file it declares
-// exists, and nothing it reads has changed since the compile that wrote them.
+// Whether a configuration's compile can be skipped: every file its last compile
+// wrote still exists as it was left, and nothing it reads has changed since
+// that compile read it. A declared file Style Dictionary declined to write is
+// not asked about, because it was never going to be on disk — asking made a
+// configuration with an empty filter compile on every build.
 //
 // "Since" is measured against what that compile read wherever it left a
 // record, in this process or persisted by an earlier one. The record holds the
@@ -166,9 +174,6 @@ export function isUpToDate(
   if (newestSource === null) return false
 
   for (const destination of destinations) {
-    const stats = statOrNull(destination)
-    if (!stats) return false
-
     const record = destinationRecords.get(destination)
     const writtenByThis =
       fingerprint !== null && record?.fingerprint === fingerprint
@@ -179,12 +184,6 @@ export function isUpToDate(
     // reads can say so — which is why a configuration given as a path is
     // held to this as much as one given as an object.
     if (record !== undefined && !writtenByThis) return false
-
-    // The file has moved since this configuration wrote it, so something
-    // wrote it afterwards and nothing here can say what it holds. Its mtime
-    // is no evidence either way: an edit to generated output is newer than
-    // every source, and would have been kept.
-    if (writtenByThis && record.written !== stats.mtimeMs) return false
 
     // A configuration given as a path has its own file among the sources, so
     // an edit to it is accounted for and the skip holds across processes. One
@@ -198,6 +197,24 @@ export function isUpToDate(
     if (!item.file && (!writtenByThis || record.persisted === true)) {
       return false
     }
+
+    // Declared and left unwritten by this configuration's last compile. There
+    // is no file to stat, so all that can have changed is what it reads.
+    if (writtenByThis && record.written === null) {
+      if (record.newestSource === null || newestSource > record.newestSource) {
+        return false
+      }
+      continue
+    }
+
+    const stats = statOrNull(destination)
+    if (!stats) return false
+
+    // The file has moved since this configuration wrote it, so something
+    // wrote it afterwards and nothing here can say what it holds. Its mtime
+    // is no evidence either way: an edit to generated output is newer than
+    // every source, and would have been kept.
+    if (writtenByThis && record.written !== stats.mtimeMs) return false
 
     const lastRead = writtenByThis ? record.newestSource : null
 
@@ -319,7 +336,7 @@ export function readPersistedRecords(
       'newestSource' in value &&
       (value.newestSource === null || typeof value.newestSource === 'number') &&
       'written' in value &&
-      typeof value.written === 'number'
+      (value.written === null || typeof value.written === 'number')
     ) {
       records.set(destination, {
         fingerprint: value.fingerprint,
@@ -333,13 +350,18 @@ export function readPersistedRecords(
   return records
 }
 
-// The record a compile leaves for one destination it wrote, or `null` where
-// the file is not there to vouch for.
+// The record a compile leaves for one destination it declared. One it wrote
+// is recorded with the file's mtime, and one Style Dictionary declined to write
+// with `written: null`. `null` comes back where a file it wrote is not there
+// to vouch for, so nothing is recorded for it and the next build compiles.
 export function recordOf(
   destination: string,
   fingerprint: string,
   newestSource: null | number,
+  wrote: boolean,
 ): DestinationRecord | null {
+  if (!wrote) return { fingerprint, newestSource, written: null }
+
   const stats = statOrNull(destination)
   return stats ? { fingerprint, newestSource, written: stats.mtimeMs } : null
 }
@@ -376,8 +398,9 @@ export function recordsFileFor(root: string): string {
 // record another process added since is kept. Two processes writing at once
 // can still lose one's entries, and that only costs a compile on the next
 // start. An entry whose destination is gone is dropped, which bounds the file
-// by the files that exist. Written through a temporary file and a rename, so
-// a reader never sees half of it.
+// by the files that exist — and for a file the compile left unwritten, which is
+// never there, by the directory it would have been written into. Written
+// through a temporary file and a rename, so a reader never sees half of it.
 export function writePersistedRecords(
   file: string,
   recorded: ReadonlyMap<string, DestinationRecord>,
@@ -387,7 +410,11 @@ export function writePersistedRecords(
 
   const records: Record<string, Omit<DestinationRecord, 'persisted'>> = {}
   for (const [destination, { fingerprint, newestSource, written }] of merged) {
-    if (statOrNull(destination)) {
+    const stillThere =
+      written === null
+        ? statOrNull(path.dirname(destination))
+        : statOrNull(destination)
+    if (stillThere) {
       records[destination] = { fingerprint, newestSource, written }
     }
   }
