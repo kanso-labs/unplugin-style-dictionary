@@ -5398,7 +5398,7 @@ describe('a watch entry reached through a symbolic link', () => {
     const { configFile, linked, real } = fixture('registers')
 
     const watched = await callBuildStart(
-      vitePlugin({ config: configFile, logLevel: 'warn' }),
+      vitePlugin({ config: configFile, silent: true }),
     )
 
     expect(new Set(watched)).toEqual(
@@ -5420,7 +5420,7 @@ describe('a watch entry reached through a symbolic link', () => {
     const plugin = vitePlugin({
       cache: false,
       config: configFile,
-      logLevel: 'warn',
+      silent: true,
     })
 
     await callBuildStart(plugin)
@@ -5453,7 +5453,7 @@ describe('a watch entry reached through a symbolic link', () => {
     const plugin = vitePlugin({
       cache: false,
       config: configFile,
-      logLevel: 'warn',
+      silent: true,
     })
 
     await callBuildStart(plugin)
