@@ -2,6 +2,7 @@ import type { Config } from 'style-dictionary'
 import type { Plugin } from 'vite'
 import type { MockInstance } from 'vitest'
 
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6463,6 +6464,154 @@ describe('the atomic writer', () => {
 
     return directory
   }
+
+  // A css platform writing `out/vars.css`, and a build of it, so the cases
+  // below have a destination beside which to plant temporary files.
+  const buildVars = async (name: string) => {
+    const directory = writeFixture(name)
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+    await callBuildStart(vitePlugin({ config: configFile, silent: true }))
+
+    const plant = (file: string, ageMs = 0) => {
+      const planted = path.join(directory, 'out', file)
+      fs.writeFileSync(planted, 'partial')
+      const modified = new Date(Date.now() - ageMs)
+      fs.utimesSync(planted, modified, modified)
+    }
+
+    // A module imported afresh has swept nothing yet, as a new process has
+    // not. The build renders what is already there, so the writer returns
+    // before creating anything — the sweep has to come first to run at all.
+    const rebuildInNewProcess = async () => {
+      const restarted = await restartedVitePlugin()
+      await callBuildStart(
+        restarted({ cache: false, config: configFile, silent: true }),
+      )
+    }
+
+    return { directory, plant, rebuildInNewProcess }
+  }
+
+  it('sweeps the temporary files a dead writer left, and only those', async () => {
+    // A build killed between a write and its rename — `SIGINT` under Node's
+    // default handler, `SIGKILL`, an OOM kill — leaves its temporary file,
+    // and nothing removed it: each name carries its writer's pid, so no later
+    // run reuses one. Measured, `npm pack` of the build directory shipped it.
+    const { directory, plant, rebuildInNewProcess } =
+      await buildVars('sweep-dead')
+
+    // A child that has already exited, so its pid is certainly gone, and the
+    // runner that started this worker, which is certainly not.
+    const dead = spawnSync(process.execPath, ['--version']).pid
+    const live = process.ppid
+
+    plant(`.vars.${dead}.0.tmp`)
+    plant(`.vars.${live}.1.tmp`, 2 * 60 * 60 * 1000)
+    plant(`.vars.${live}.0.tmp`)
+    plant(`.vars.${process.pid}.999.tmp`)
+    plant(`.other.${dead}.0.tmp`)
+
+    await rebuildInNewProcess()
+
+    // A dead writer's file goes, and so does one older than any write takes,
+    // whose pid may since have gone to another process. A live writer's may
+    // be between its write and its rename, this process's own included, and
+    // a name for no destination this build writes is not the build's to take.
+    expect(temporaries(directory).toSorted()).toEqual(
+      [
+        `.other.${dead}.0.tmp`,
+        `.vars.${live}.0.tmp`,
+        `.vars.${process.pid}.999.tmp`,
+      ].toSorted(),
+    )
+  }, 30000)
+
+  it.each([
+    {
+      action: 'test/write-fixed-for-sweep',
+      entry: 'writeFileSync',
+      written: path.join('out', 'from-action.txt'),
+    },
+    {
+      action: 'test/copy-file-through-volume',
+      entry: 'promises.copyFile',
+      written: path.join('out', 'assets', 'logo.svg'),
+    },
+    {
+      action: 'test/copy-file-sync-through-volume',
+      entry: 'copyFileSync',
+      written: path.join('out', 'assets', 'logo.svg'),
+    },
+  ])(
+    "sweeps a dead writer's temporary file beside what $entry writes",
+    async ({ action, written }) => {
+      // Every entry point that writes through a temporary file sweeps first,
+      // since each leaves one behind the same way when it is killed.
+      registerCopyActions()
+      StyleDictionary.registerAction({
+        do: (_dictionary, platform, _options, vol: typeof fs) => {
+          vol.writeFileSync(
+            path.join(String(platform.buildPath), 'from-action.txt'),
+            'written by a custom action\n',
+          )
+        },
+        name: 'test/write-fixed-for-sweep',
+        undo: () => {},
+      })
+
+      const { configFile, directory } = copyFixture(
+        `sweep-${action.replace(/\W/g, '-')}`,
+        action,
+      )
+      const target = path.join(directory, written)
+      const dead = spawnSync(process.execPath, ['--version']).pid
+      const leftover = path.join(
+        path.dirname(target),
+        `.${path.basename(target, path.extname(target))}.${dead}.0.tmp`,
+      )
+
+      await fromDirectory(directory, async () => {
+        await callBuildStart(vitePlugin({ config: configFile, silent: true }))
+        fs.writeFileSync(leftover, 'partial')
+
+        const restarted = await restartedVitePlugin()
+        await callBuildStart(restarted({ config: configFile, silent: true }))
+      })
+
+      expect(fs.existsSync(leftover)).toBe(false)
+    },
+    30000,
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'keeps a temporary file whose writer another user owns',
+    async () => {
+      // `process.kill(pid, 0)` answers `EPERM` for a live process this one
+      // may not signal, which is still a live writer. pid 1 is the system's
+      // init process everywhere this runs.
+      const { directory, plant, rebuildInNewProcess } =
+        await buildVars('sweep-other-user')
+      plant('.vars.1.0.tmp')
+
+      await rebuildInNewProcess()
+
+      expect(temporaries(directory)).toEqual(['.vars.1.0.tmp'])
+    },
+    30000,
+  )
 
   it('reaches Style Dictionary custom actions as the sync writer', async () => {
     const directory = writeFixture('sync-writer')

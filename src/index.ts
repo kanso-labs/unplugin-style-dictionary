@@ -171,12 +171,24 @@ function nodeModulesWatchDirectories(paths: string[]): string[] {
 // unanchored, where a leftover `vars.css.tmp` matched a `*.css` watch; it is
 // belt-and-braces now that the matcher anchors and, like the globber Style
 // Dictionary reads sources with, does not match the leading dot this name
-// already starts with. Both stay, because a temporary file only outlives its
-// rename when a write failed, and hiding one costs a string. The pid and
-// counter make the name unique, so two writes of the same destination —
-// parallel platforms in one build, or two builds overlapping — never share a
-// temporary file.
+// already starts with. Both stay, because a temporary file does outlive its
+// rename — when a write fails, and when the process is killed between the two:
+// `SIGINT` under Node's default handler, `SIGKILL`, an OOM kill — and hiding
+// one costs a string. The pid and counter make the name unique, so two writes
+// of the same destination — parallel platforms in one build, or two builds
+// overlapping — never share a temporary file.
 let temporaryFileCounter = 0
+
+// The destinations this process has swept beside, as the prefix their
+// temporary names share. Module scope, beside the counter, because the volume
+// is module-level too.
+const sweptTemporaryPrefixes = new Set<string>()
+
+// How old a temporary file has to be before its writer's pid stops vouching
+// for it. A write takes milliseconds, so an hour is generous — and a pid can
+// outlive the process that wrote the file, once the system hands it to an
+// unrelated one.
+const ABANDONED_TEMPORARY_AGE_MS = 60 * 60 * 1000
 
 // Whether `destination` already holds exactly `rendered`. A rebuild whose
 // inputs did not change renders byte-identical output, and writing that over
@@ -226,6 +238,73 @@ function bytesToWrite(
   return Buffer.from(data, encoding ?? 'utf8')
 }
 
+function isOlderThan(file: string, ageMs: number): boolean {
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs > ageMs
+  } catch {
+    return false
+  }
+}
+
+// Signal 0 tests for a process without touching it. Only `ESRCH` says it is
+// gone: `EPERM` is a live process another user owns.
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return !(
+      typeof err === 'object' &&
+      err !== null &&
+      'code' in err &&
+      err.code === 'ESRCH'
+    )
+  }
+}
+
+// Removes the temporary files a killed process left beside `destination`, on
+// this process's first write for it. Nothing else ever would: each name
+// carries its writer's pid, so no later run reuses one, and a build directory
+// that is published — a package whose `files` includes it — shipped them.
+//
+// Called ahead of the byte comparison, so it runs whether or not the write
+// changes anything: the killed builds that were measured leaving files were
+// rendering what was already there, and every later write for that
+// destination returns at the comparison.
+//
+// Only the files of writers that are gone, and this process is not one of
+// them: another instance or platform in it, or in another process, may be
+// between its write and its rename, and removing its file would make that
+// rename fail. That is also why no signal handler cleans up instead: a
+// listener on `SIGINT` removes Node's default exit and takes over the host's
+// shutdown, and `SIGKILL` reaches none.
+function sweepAbandonedTemporaries(destination: string): void {
+  const directory = path.dirname(destination)
+  const stem = path.basename(destination, path.extname(destination))
+  const prefix = path.join(directory, `.${stem}.`)
+  if (sweptTemporaryPrefixes.has(prefix)) return
+  sweptTemporaryPrefixes.add(prefix)
+
+  let names: string[]
+  try {
+    names = fs.readdirSync(directory)
+  } catch {
+    return
+  }
+
+  for (const name of names) {
+    const writer = temporaryWriterOf(name, stem)
+    if (writer === undefined) continue
+
+    const file = path.join(directory, name)
+    if (isRunning(writer) && !isOlderThan(file, ABANDONED_TEMPORARY_AGE_MS)) {
+      continue
+    }
+
+    discardTemporaryFile(file)
+  }
+}
+
 function temporaryPathFor(destination: string): string {
   const extension = path.extname(destination)
 
@@ -233,6 +312,16 @@ function temporaryPathFor(destination: string): string {
     path.dirname(destination),
     `.${path.basename(destination, extension)}.${process.pid}.${temporaryFileCounter++}.tmp`,
   )
+}
+
+// The pid in `name` when it is a temporary file for a destination named
+// `stem`, as `temporaryPathFor` spells one: `.<stem>.<pid>.<counter>.tmp`.
+function temporaryWriterOf(name: string, stem: string): number | undefined {
+  if (!name.startsWith(`.${stem}.`) || !name.endsWith('.tmp')) return undefined
+
+  const numbers = /^(\d+)\.\d+$/.exec(name.slice(stem.length + 2, -4))
+
+  return numbers ? Number(numbers[1]) : undefined
 }
 
 // Windows refuses a rename over a destination another process holds open, and
@@ -355,6 +444,7 @@ const writeFileAtomic: typeof fs.promises.writeFile = async (
   // `node --watch-path` reports. A write that does change the destination
   // still goes through a temporary file and a rename, so a concurrent reader
   // still never sees a partial file.
+  sweepAbandonedTemporaries(file)
   const bytes = bytesToWrite(data, options)
   if (bytes && (await alreadyHolds(file, bytes))) return
 
@@ -389,6 +479,7 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
 
   // `writeFileSync` takes only a string or a buffer, so every write it is
   // given can be compared before anything is created.
+  sweepAbandonedTemporaries(file)
   const bytes = bytesToWrite(data, options)
   if (bytes && alreadyHoldsSync(file, bytes)) return
 
@@ -424,6 +515,7 @@ const copyFileAtomic: typeof fs.promises.copyFile = async (
     return fs.promises.copyFile(source, destination, mode)
   }
 
+  sweepAbandonedTemporaries(destination)
   if (await alreadyHolds(destination, await fs.promises.readFile(source))) {
     return
   }
@@ -449,6 +541,7 @@ const copyFileSyncAtomic: typeof fs.copyFileSync = (
     return
   }
 
+  sweepAbandonedTemporaries(destination)
   if (alreadyHoldsSync(destination, fs.readFileSync(source))) return
 
   const temporary = temporaryPathFor(destination)
