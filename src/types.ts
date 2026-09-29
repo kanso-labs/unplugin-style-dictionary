@@ -68,8 +68,8 @@ export interface StyleDictionaryConfigContext {
   /**
    * Whether the host will keep rebuilding.
    *
-   * `true` under Vite's dev server, `rollup --watch`, `rolldown.watch()` and
-   * `webpack --watch`; `false` for a one-shot build. It is read from the
+   * `true` under Vite's dev server and `vite build --watch`, `rollup --watch`,
+   * `rolldown.watch()` and `webpack --watch`; `false` for a one-shot build. It is read from the
    * host — the plugin context's `meta.watchMode` on the three rollup-shaped
    * targets, and `compiler.watchMode` on webpack — rather than inferred from
    * `command`, because `rollup --watch` both watches and builds.

@@ -505,3 +505,92 @@ describe('every watching target rebuilds once and then settles', () => {
     }
   }, 60000)
 })
+
+describe('vite build --watch', () => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'unplugin-style-dictionary-build-watch-'),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  it('un-ignores a token package resolved through node_modules', async () => {
+    // Vite 6 and 7 run `vite build --watch` on rollup's watcher, whose chokidar
+    // ignore list always starts with `**/node_modules/**`, so a workspace token
+    // package built once and never rebuilt. The dev server's fix never reached
+    // this mode. The suite runs Vite 8, whose build watcher is rolldown's and
+    // takes nothing from `chokidar`, so this asks the hook what it wrote rather
+    // than watching; the rebuild itself was checked by hand on 6.4.3 and 7.3.6.
+    const base = path.join(tempDir, 'workspace')
+    const app = path.join(base, 'app')
+    const pkg = path.join(base, 'packages', 'tokens')
+    fs.mkdirSync(path.join(pkg, 'src'), { recursive: true })
+    fs.mkdirSync(path.join(app, 'node_modules', '@acme'), { recursive: true })
+    fs.writeFileSync(
+      path.join(pkg, 'src', 'color.json'),
+      JSON.stringify({ color: { brand: { value: '#111111' } } }),
+    )
+    fs.symlinkSync(
+      pkg,
+      path.join(app, 'node_modules', '@acme', 'tokens'),
+      'dir',
+    )
+
+    const viaNodeModules = posix(
+      path.join(app, 'node_modules', '@acme', 'tokens', 'src', 'color.json'),
+    )
+
+    // A consumer's own entry, which the negation goes after rather than
+    // replacing. Vite 8 types `build.watch` as rolldown's options, which have
+    // no `chokidar`, hence the variable rather than an inline literal.
+    const watch = {
+      buildDelay: 0,
+      chokidar: { ignored: ['**/consumer-entry/**'] },
+    }
+
+    let toldWatch: boolean | undefined
+    const resolved = await vite.resolveConfig(
+      {
+        build: { watch },
+        configFile: false,
+        logLevel: 'silent',
+        plugins: [
+          vitePlugin({
+            config: (context) => {
+              toldWatch = context.watch
+              return {
+                platforms: {
+                  css: {
+                    buildPath: posix(path.join(app, 'generated')) + '/',
+                    files: [
+                      { destination: 'vars.css', format: 'css/variables' },
+                    ],
+                    transformGroup: 'css',
+                  },
+                },
+                source: [viaNodeModules],
+              }
+            },
+            logLevel: 'silent',
+          }),
+        ],
+        root: app,
+      },
+      'build',
+    )
+
+    const chokidar: unknown = Reflect.get(
+      resolved.build.watch ?? {},
+      'chokidar',
+    )
+    const ignored: unknown =
+      typeof chokidar === 'object' && chokidar !== null
+        ? Reflect.get(chokidar, 'ignored')
+        : undefined
+
+    expect(ignored).toEqual(['**/consumer-entry/**', `!${viaNodeModules}`])
+    expect(toldWatch).toBe(true)
+  })
+})

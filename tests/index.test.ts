@@ -256,7 +256,10 @@ describe('unplugin-style-dictionary (vite target)', () => {
     // Simulate configResolved hook
     if (isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
       const context: BuildContext = { addWatchFile: () => {} }
-      await plugin.configResolved.call(context, { root: process.cwd() })
+      await plugin.configResolved.call(context, {
+        build: { watch: null },
+        root: process.cwd(),
+      })
     }
 
     await callBuildStart(plugin)
@@ -3798,7 +3801,13 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
       await plugin.configResolved.call(
         { addWatchFile: () => {} },
-        { command: 'build', logger, mode: 'production', root: directory },
+        {
+          build: { watch: null },
+          command: 'build',
+          logger,
+          mode: 'production',
+          root: directory,
+        },
       )
 
       await callBuildStart(plugin)
@@ -5469,7 +5478,13 @@ const buildUnderViteRoot = async (
   }
   await plugin.configResolved.call(
     { addWatchFile: () => {} },
-    { command: 'build', logger, mode: 'production', root },
+    {
+      build: { watch: null },
+      command: 'build',
+      logger,
+      mode: 'production',
+      root,
+    },
   )
 
   await callBuildStart(plugin)
@@ -5636,7 +5651,13 @@ const buildAtRoot = async (root: string) => {
   }
   await plugin.configResolved.call(
     { addWatchFile: () => {} },
-    { command: 'build', logger, mode: 'production', root },
+    {
+      build: { watch: null },
+      command: 'build',
+      logger,
+      mode: 'production',
+      root,
+    },
   )
 
   const watched = await callBuildStart(plugin)
