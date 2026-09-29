@@ -1410,22 +1410,45 @@ the only configuration where it matters.
 persistent watch mode — `rolldown build` or `tsdown` with no `--watch` — gets no
 rebuild-on-change, and that is expected rather than a bug to fix.
 
-**What rolldown does with a token edit depends on the platform, so neither
-answer can be relied on.** `this.addWatchFile()` is accepted by rolldown 1.2.9
-either way, but what happens next is not the same everywhere: on macOS a file
-registered through it is watched by nothing, so a token edit reaches no hook at
-all, while on the Linux CI runner the same edit reached a rebuild and updated
-the generated file. Both were measured on this repository's own fixture — the
-macOS half with a bare probe plugin that saw no `watchChange` and no second
-`buildStart` for a file outside the module graph, and the Linux half as a CI
-failure of a test that had asserted the macOS behaviour.
+**On macOS rolldown drops the events for a path registered through a symbolic
+link, so each such path is registered by its realpath as well.** A workspace
+package linked into `node_modules` is the common case, but a link anywhere on
+the path counts, and `/var` and `/tmp` are both links on macOS. Such a token
+built once and never again, with nothing printed, and Vite 8's
+`vite build --watch` failed the same way because it builds on rolldown's
+watcher.
 
-So do not write a test that asserts a token edit under `rolldown.watch()` either
-arrives or does not, and do not tell a consumer that rolldown watches tokens.
-What holds on both platforms is the module graph: the generated file is in it,
-so every regenerate is a change rolldown reacts to, and the guards that matter
-there are the ones stopping that from becoming a loop. `tests/targets.test.ts`
-asserts only that — an entry edit rebuilds and then settles.
+This was recorded here as platform-dependent — inert on macOS, delivered on
+Linux — and told contributors not to assert either answer. It was the link. The
+fixture ran under `os.tmpdir()`, which on macOS is `/var/folders/…`, and the
+same fixture spelled by its realpath rebuilt on macOS before the fix. Linux's
+temp directory is not a link, which fits the other half. Windows was not part of
+that record; with the fix, `Test on Windows` runs both rolldown cases in
+`tests/targets.test.ts`, and both rebuild there.
+
+The fix has two halves, and neither works alone:
+
+- `addWatchFiles` registers `fs.realpathSync(p)` beside each path whose realpath
+  differs, static parent directories included.
+- The event then arrives spelled by the realpath, which neither the patterns nor
+  `generatedDestinations` use, so `watchChange` turns it back through
+  `linkedPaths` before asking either. Registering the realpath alone was
+  measured to change nothing. The lookup walks up the parents, because a file
+  created after the build is known only through its directory.
+
+Only the two `addWatchFile` sites do this. The list `getWatchTargets` returns
+also feeds the dev server's watcher and its negations, which see through a link
+as they are. Where a link already delivers, as under rollup, both spellings
+report one edit and `schedule` collapses the pair.
+
+**A fixture under an unresolved `os.tmpdir()` registers two spellings of every
+path on macOS.** A case asserting an exact watch list therefore resolves its
+temporary directory with `fs.realpathSync`, and so does any case where the link
+under test has to be the only one on the path. The linked-package case under
+`rolldown.watch()` in `tests/targets.test.ts` has only been seen to fail on a
+Mac, and CI runs Linux and Windows; the cases under
+`a watch entry reached through a symbolic link` hold both halves on every
+platform.
 
 **Rollup drops a file change that arrives while it is awaiting `watchChange`,
 and that makes the moment a test writes a file load-bearing.** Its watcher
