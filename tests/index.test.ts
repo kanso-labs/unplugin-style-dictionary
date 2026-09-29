@@ -4191,18 +4191,57 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     })
 
-    it('writes nothing when one of several names is wrong', async () => {
-      // Style Dictionary rejects an unknown platform itself — `Please supply a
-      // valid platform, "nope" does not exist` — but only when it reaches it,
-      // after building the names ahead of it. Verified: with the check removed,
-      // `css` is on disk when the throw arrives. Validating the whole selection
-      // first is what makes a typo write nothing, which is the same choice as
-      // failing an empty token set before the build rather than after.
-      const directory = path.join(tempDir, 'scoped-partial')
-      const { configFile: scoped, wrote } = threePlatforms(directory)
+    // With `cache` on the selection is checked ahead of the up-to-date skip,
+    // and with it off on the build path, which is the only check such a build
+    // reaches.
+    it.each([true, false])(
+      'writes nothing when one of several names is wrong, with cache %s',
+      async (cache) => {
+        // Style Dictionary rejects an unknown platform itself — `Please supply
+        // a valid platform, "nope" does not exist` — but only when it reaches
+        // it, after building the names ahead of it. Verified: with the check
+        // removed, `css` is on disk when the throw arrives. Validating the
+        // whole selection first is what makes a typo write nothing, which is
+        // the same choice as failing an empty token set before the build
+        // rather than after.
+        const directory = path.join(tempDir, `scoped-partial-${String(cache)}`)
+        const { configFile: scoped, wrote } = threePlatforms(directory)
 
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        try {
+          await expect(
+            callBuildStart(
+              vitePlugin({
+                cache,
+                config: scoped,
+                logLevel: 'silent',
+                platforms: ['css', 'nope'],
+              }),
+            ),
+          ).rejects.toThrow('does not define the platform(s) nope')
+
+          expect(wrote('css', 'vars.css')).toBe(false)
+        } finally {
+          errorSpy.mockRestore()
+        }
+      },
+    )
+
+    it('rejects a wrong name beside a platform that is already current', async () => {
+      // The two cases above build into a fresh directory, so neither reaches
+      // the up-to-date check with anything current. That check judges a
+      // selection by the destinations the configuration declares for it,
+      // which cannot include a name it does not define — so `['css', 'nope']`
+      // was judged on `css` alone, and with `css` current the build was
+      // skipped and the typo went unreported until a source changed.
+      const { configFile: scoped } = threePlatforms(
+        path.join(tempDir, 'scoped-typo-current'),
+      )
+      await callBuildStart(
+        vitePlugin({ config: scoped, logLevel: 'silent', platforms: ['css'] }),
+      )
+
+      const errors = await collectErrors(async () => {
         await expect(
           callBuildStart(
             vitePlugin({
@@ -4212,11 +4251,13 @@ describe('unplugin-style-dictionary (vite target)', () => {
             }),
           ),
         ).rejects.toThrow('does not define the platform(s) nope')
+      })
 
-        expect(wrote('css', 'vars.css')).toBe(false)
-      } finally {
-        errorSpy.mockRestore()
-      }
+      expect(
+        errors.some((line) =>
+          line.includes('does not define the platform(s) nope'),
+        ),
+      ).toBe(true)
     })
 
     it('lets the up-to-date check skip a scoped build', async () => {

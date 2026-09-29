@@ -147,6 +147,16 @@ export async function runBuilds(
       const declared = cache ? await readConfigObject(item) : null
       const selectedPlatforms = platformsFor(platformsOption, context)
 
+      // Ahead of the up-to-date check, which judges a selection by the
+      // destinations the configuration declares for it and so cannot see a
+      // name it does not define: `['css', 'andriod']` was judged on `css`
+      // alone, and with `css` current the whole build was skipped and the typo
+      // went unreported until a source changed. The build path checks again
+      // below, for the builds that reach it without `declared`.
+      if (declared) {
+        checkSelection(item, index, selectedPlatforms, declared.platforms)
+      }
+
       // What this configuration reads, as it stands before the compile below
       // reads any of it. The up-to-date check needs it now, and the record
       // needs it afterwards: it is what the next check measures "changed
@@ -284,18 +294,9 @@ export async function runBuilds(
       if (selectedPlatforms === undefined) {
         await sd.buildAllPlatforms()
       } else {
-        // Named, so a typo is an error rather than a platform silently not
-        // built — which is what Style Dictionary's own CLI means by "Must be
-        // defined in the config".
-        const defined = Object.keys(sd.platforms)
-        const unknown = selectedPlatforms.filter(
-          (name) => !defined.includes(name),
-        )
-        if (unknown.length > 0) {
-          throw new Error(
-            `${describeConfig(item, index)} does not define the platform(s) ${unknown.join(', ')}. It defines ${defined.join(', ')}.`,
-          )
-        }
+        // `cache: false`, and a configuration that would not parse ahead of
+        // `extend`, arrive here without the check above having run.
+        checkSelection(item, index, selectedPlatforms, sd.platforms)
 
         // One after another, matching the loop this sits inside: two
         // platforms may name the same destination, and `buildAllPlatforms`
@@ -538,6 +539,28 @@ function callHook<A extends unknown[]>(
   void Promise.resolve(result).catch((err: unknown) => {
     log(`The ${name} hook rejected: ${errorMessage(err)}`, 'error')
   })
+}
+
+// Throws when `selected` names a platform that `platforms` does not define.
+// Named, so a typo is an error rather than a platform silently not built —
+// which is what Style Dictionary's own CLI means by "Must be defined in the
+// config" — and one function, so the check ahead of the up-to-date skip and
+// the one on the build path say exactly the same thing.
+function checkSelection(
+  item: ResolvedConfig,
+  index: number,
+  selected: string[] | undefined,
+  platforms: Record<string, unknown> | undefined,
+): void {
+  if (selected === undefined) return
+
+  const defined = Object.keys(platforms ?? {})
+  const unknown = selected.filter((name) => !defined.includes(name))
+  if (unknown.length > 0) {
+    throw new Error(
+      `${describeConfig(item, index)} does not define the platform(s) ${unknown.join(', ')}. It defines ${defined.join(', ')}.`,
+    )
+  }
 }
 
 // Whether a failure in this compile should be thrown rather than only
