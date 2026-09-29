@@ -6727,71 +6727,67 @@ describe('the atomic writer', () => {
     }
   }
 
-  it(
-    'never exposes a partially copied asset to a concurrent reader',
-    { repeats: 40, timeout: 600000 },
-    async () => {
-      // `copy_assets` copies with `promises.cp`, and `node:fs`'s own unlinks
-      // the destination and copies into a fresh file in place, so a reader
-      // polling the asset mid-rebuild read part of it — measured, 1352 of 3752
-      // reads across 20 rebuilds of a 2 MB asset.
-      const { asset, configFile, copied, directory } = copyFixture(
-        'copied-asset',
-        'copy_assets',
-      )
+  it('never exposes a partially copied asset to a concurrent reader', async () => {
+    // `copy_assets` copies with `promises.cp`, and `node:fs`'s own unlinks
+    // the destination and copies into a fresh file in place, so a reader
+    // polling the asset mid-rebuild read part of it — measured, 1352 of 3752
+    // reads across 20 rebuilds of a 2 MB asset.
+    const { asset, configFile, copied, directory } = copyFixture(
+      'copied-asset',
+      'copy_assets',
+    )
 
-      // Alternated, as the marker is in the written-file case, so no rebuild
-      // is skipped as identical.
-      //
-      // Sized like that case's output rather than like the audit's 2 MB, and
-      // Windows is why. A reader holding the file open makes Windows refuse the
-      // rename over it, and reading 2 MB in a loop held it for so much of the
-      // time that the retry budget ran out and the rebuild failed with `EPERM`.
-      // The size is not what catches the inherited `cp` anyway: it unlinks the
-      // destination before copying into it, and at 128 KB it still failed
-      // every run, with over 170 bad reads each.
-      const versions = ['a', 'b'].map((fill) => Buffer.alloc(128 * 1024, fill))
-      const rebuilds = 20
+    // Alternated, as the marker is in the written-file case, so no rebuild
+    // is skipped as identical.
+    //
+    // Sized like that case's output rather than like the audit's 2 MB, and
+    // Windows is why. A reader holding the file open makes Windows refuse the
+    // rename over it, and reading 2 MB in a loop held it for so much of the
+    // time that the retry budget ran out and the rebuild failed with `EPERM`.
+    // The size is not what catches the inherited `cp` anyway: it unlinks the
+    // destination before copying into it, and at 128 KB it still failed
+    // every run, with over 170 bad reads each.
+    const versions = ['a', 'b'].map((fill) => Buffer.alloc(128 * 1024, fill))
+    const rebuilds = 20
 
-      const failures: string[] = []
-      let reads = 0
+    const failures: string[] = []
+    let reads = 0
 
-      await fromDirectory(directory, async () => {
-        const plugin = vitePlugin({ config: configFile, silent: true })
-        fs.writeFileSync(asset, versions[0])
-        await callBuildStart(plugin)
+    await fromDirectory(directory, async () => {
+      const plugin = vitePlugin({ config: configFile, silent: true })
+      fs.writeFileSync(asset, versions[0])
+      await callBuildStart(plugin)
 
-        const state = { building: true }
-        const reader = (async () => {
-          while (state.building) {
-            reads++
-            try {
-              const content = fs.readFileSync(copied)
-              if (!versions.some((version) => version.equals(content))) {
-                failures.push(`partial: read ${content.length} bytes`)
-              }
-            } catch (err) {
-              failures.push(
-                `read failed: ${err instanceof Error ? err.message : String(err)}`,
-              )
+      const state = { building: true }
+      const reader = (async () => {
+        while (state.building) {
+          reads++
+          try {
+            const content = fs.readFileSync(copied)
+            if (!versions.some((version) => version.equals(content))) {
+              failures.push(`partial: read ${content.length} bytes`)
             }
-
-            await new Promise((resolve) => setImmediate(resolve))
+          } catch (err) {
+            failures.push(
+              `read failed: ${err instanceof Error ? err.message : String(err)}`,
+            )
           }
-        })()
 
-        for (let index = 1; index <= rebuilds; index++) {
-          fs.writeFileSync(asset, versions[index % versions.length])
-          await callBuildStart(plugin)
+          await new Promise((resolve) => setImmediate(resolve))
         }
-        state.building = false
-        await reader
-      })
+      })()
 
-      expect(failures).toEqual([])
-      expect(reads).toBeGreaterThan(rebuilds)
-    },
-  )
+      for (let index = 1; index <= rebuilds; index++) {
+        fs.writeFileSync(asset, versions[index % versions.length])
+        await callBuildStart(plugin)
+      }
+      state.building = false
+      await reader
+    })
+
+    expect(failures).toEqual([])
+    expect(reads).toBeGreaterThan(rebuilds)
+  }, 30000)
 
   it.each([
     { action: 'copy_assets', entry: 'promises.cp' },
