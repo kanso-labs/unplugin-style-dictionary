@@ -1048,6 +1048,18 @@ otherwise identical configurations apart. It returns `null` for a configuration
 that will not serialise, which opts that one out of sharing rather than giving
 it a wrong identity.
 
+**The key carries the instance's settings as well as its configurations.** A
+waiter returns without running `runBuilds`, so anything `runBuilds` reads from
+the instance is only honoured for the first one. Until #391 that dropped a
+second instance's `platforms`, `cache`, `watch` and `onBuild*` hooks without a
+word — and its `failOnError`, which is decided inside `runBuilds`: a waiter
+asking for the default behind a `failOnError: false` instance exited 0 with
+nothing written, and one asking for `false` behind a default instance threw.
+Every setting that changes what a compile writes or whether it fails is in the
+key now, so such instances compile side by side, as every instance did before
+the sharing existed. `logLevel`, `report` and `silent` stay out: a waiter
+printing nothing is part of sharing, not a setting it lost.
+
 **`platforms` narrows the build, and three things move with it.** The up-to-date
 check asks about the _selected_ platforms only — a scoped build never writes the
 ones it skipped, so asking about all of them means the answer is always "not up

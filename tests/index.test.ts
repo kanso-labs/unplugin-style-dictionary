@@ -695,6 +695,90 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.existsSync(second.output)).toBe(true)
   })
 
+  it('builds each selection when instances on one config ask for different platforms', async () => {
+    // One configuration and one hook, so `platforms` is the only difference.
+    // A waiter used to await the first instance's compile and return, so its
+    // own selection was never built and its `onBuildEnd` never ran.
+    const config = {
+      platforms: {
+        css: {
+          buildPath: tempDir.replace(/\\/g, '/') + '/',
+          files: [{ destination: 'selected.css', format: 'css/variables' }],
+          transformGroup: 'css',
+        },
+        js: {
+          buildPath: tempDir.replace(/\\/g, '/') + '/',
+          files: [{ destination: 'selected.js', format: 'javascript/es6' }],
+          transformGroup: 'js',
+        },
+      },
+      source: [tokenFile.replace(/\\/g, '/')],
+    }
+
+    // What each hook is handed is every declared file on disk, the other
+    // selection's included, so what is counted is that each one ran.
+    let ended = 0
+    const onBuildEnd = () => {
+      ended++
+    }
+
+    await Promise.all(
+      ['css', 'js'].map(async (platform) =>
+        callBuildStart(
+          vitePlugin({
+            config,
+            onBuildEnd,
+            platforms: [platform],
+            silent: true,
+          }),
+        ),
+      ),
+    )
+
+    expect(fs.existsSync(path.join(tempDir, 'selected.css'))).toBe(true)
+    expect(fs.existsSync(path.join(tempDir, 'selected.js'))).toBe(true)
+    expect(ended).toBe(2)
+  })
+
+  it.each([
+    { failOnError: [false, 'build'], order: 'behind one that does not' },
+    { failOnError: ['build', false], order: 'ahead of one that does not' },
+  ] as const)(
+    'fails an instance that asks to, $order',
+    async ({ failOnError }) => {
+      // Whether a failure is thrown is decided inside `runBuilds`, which only
+      // the first instance ran: a waiter asking for the default got the
+      // `false` instance's resolved promise and shipped nothing, and a waiter
+      // asking for `false` got the other's rejection.
+      let settled: string[] = []
+      const errors = await collectErrors(async () => {
+        const results = await Promise.allSettled(
+          failOnError.map(async (setting) =>
+            callBuildStart(
+              vitePlugin({
+                config: failingConfig,
+                failOnError: setting,
+                silent: true,
+              }),
+            ),
+          ),
+        )
+        settled = results.map((result) => result.status)
+      })
+
+      expect(settled).toEqual(
+        failOnError.map((setting) => (setting ? 'rejected' : 'fulfilled')),
+      )
+
+      // Each instance compiled, so each reports its own failure.
+      expect(
+        errors.filter((message) =>
+          message.includes('Compilation failed after'),
+        ),
+      ).toHaveLength(2)
+    },
+  )
+
   // A file-backed configuration in a directory of its own, so each test's
   // destinations and sources are unrelated to every other test's. A counting
   // format stands in for the compile, since what has to be observed is whether
