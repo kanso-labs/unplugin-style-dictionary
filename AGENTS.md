@@ -1470,33 +1470,35 @@ Mac, and CI runs Linux and Windows; the cases under
 `a watch entry reached through a symbolic link` hold both halves on every
 platform.
 
-**Rollup drops a file change that arrives while it is awaiting `watchChange`,
-and that makes the moment a test writes a file load-bearing.** Its watcher
-records a changed path in `invalidatedIds` and, one `buildDelay` later, runs a
-callback that awaits the `change` emission — which is where `watchChange` runs,
-and so where this plugin does an entire compile — then clears the map, then
-builds (rollup 4.63.3, `dist/shared/watch.js:133-166`). A path recorded during
-that await is therefore discarded by the clear, while the timeout it scheduled
-fires afterwards on an empty map: no hook is called and no rebuild happens. The
-`Task.invalidated` flag it set has been consumed by the run that followed the
-clear, so what the run looks like from outside is a `START` and an `END` with no
-`BUNDLE_START` in between.
+**Rollup through 4.63.4 could drop a file change that arrived during a rebuild,
+and 4.63.5 does not.** Its watcher recorded a changed path in `invalidatedIds`
+and, one `buildDelay` later, ran a callback that awaited the `change` emission —
+which is where `watchChange` runs, and so where this plugin does an entire
+compile — then cleared the map, then built (rollup 4.63.3,
+`dist/shared/watch.js:133-166`). A path recorded during that await armed a timer
+of its own. If the timer was still pending when the emission ended, the clear
+removed the path, and the timer later fired on an empty map: no hook ran and
+nothing rebuilt. So the window was `buildDelay` wide rather than the whole
+emission — at the default of 0, the timer fires while the compile is still
+yielding, and the path is reported.
 
-Measured with rollup alone — a plugin that registers a directory through
-`addWatchFile`, and whose `watchChange` creates a file inside it and returns
-once the invalidation has been recorded, is never told about that file, on every
-run. It is a lost change rather than a slow one, so no deadline recovers it.
+Rollup 4.63.5 (rollup/rollup#6526) clears the map before it emits and turns an
+invalidation during a cycle into a rerun, so such a path forms the next batch
+instead. Measured under a real `rollup.watch()` with `watch.buildDelay: 200`, a
+format that awaits 300ms, and a second token file saved 150ms into the rebuild:
+4.63.3 lost that save on 5 runs of 5, and 4.63.5 kept it on 5 of 5. The plugin
+does not work around the older behaviour, and #429 was closed for that reason. A
+consumer on rollup 4.63.4 or older who sets `buildDelay` can lose a save made
+mid-rebuild, and upgrading rollup is the fix.
 
-The window is only open while an emission is being awaited, which is exactly
-when this plugin writes its generated file — so a test that waits for that file
-and then writes another is aiming at it. `tests/index.test.ts` therefore has a
-`watcherIdle` gate: `watch.onInvalidate` counts what rollup has recorded, the
-`restart` event zeroes the count because rollup emits it immediately after the
-clear, `START` and `END` say whether a build is running, and a case waits for
-all three to be quiet before it touches the fixture again. Waiting on the
-compiled output alone is what made
+`tests/index.test.ts` has a `watcherIdle` gate from when that window mattered
+here. The real-watcher cases run at `buildDelay: 50`, and on 4.63.3 waiting on
+the compiled output alone made
 `notices an edit and a new file under a glob source` fail about one run in
-fifteen.
+fifteen. It stays because those cases also wait on it before `close()`, below:
+`watch.onInvalidate` counts what rollup has recorded, the `restart` event zeroes
+the count because rollup emits it once the map is empty, `START` and `END` say
+whether a build is running, and a case waits for all three to be quiet.
 
 **`await watcher.close()` does not wait for a build, so a rebuild can outlive
 the shutdown that was meant to end it.** `Watcher.close` clears the pending
@@ -1507,7 +1509,9 @@ removes its listeners — and never awaits `run` (rollup 4.63.3,
 that has already entered `rollupInternal` runs its `buildStart` hooks through to
 completion afterwards. Measured with rollup alone and no plugin of ours: a
 `buildStart` that awaits 400ms and then reads a file gets ENOENT, 300ms after
-`close()` resolved and the fixture was removed.
+`close()` resolved and the fixture was removed. 4.63.5 rewrote the watcher's run
+cycle and kept this order: `close()` still awaits no run, and `Task.run` still
+checks `closed` only once `rollupInternal` has resolved.
 
 Two things follow. A test that removes its fixture after `close()` is removing
 it under a live build, so the cases under `under a real rollup watcher` wait on
