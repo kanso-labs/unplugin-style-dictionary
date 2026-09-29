@@ -647,8 +647,16 @@ const persistedRecordFiles = new Map<string, string>()
 //
 // Module scope is the only place a shared answer can live, since the
 // instances know nothing about each other. It stays a claim about identical
-// work, never about identity: the key carries the root and the resolved
-// configurations, so one script building two packages shares nothing.
+// work, never about identity: the key carries the root, the resolved
+// configurations, and every setting of the instance that changes what the
+// compile writes or whether it fails — `platforms`, `cache`, `failOnError`,
+// `watch` and the three `onBuild*` hooks. So one script building two
+// packages shares nothing, and neither do two instances on one configuration
+// asking for different builds: a waiter returns without running `runBuilds`,
+// so its own selection, its hooks and its decision to fail used to be dropped
+// in favour of the first instance's. What only changes what is printed —
+// `logLevel`, `report`, `silent` — stays out, since a waiter printing nothing
+// is part of sharing.
 const compilesInFlight = new Map<string, Promise<void>>()
 
 // The slice of a webpack-shaped compiler this plugin touches, named rather
@@ -678,17 +686,23 @@ interface Compilation {
   warnings: Error[]
 }
 
-// A stable identity for a set of resolved configurations, or `null` for one
-// that cannot have a stable identity at all.
+// A stable identity for a compile — a set of resolved configurations and the
+// settings it runs with — or `null` for one that cannot have a stable
+// identity at all.
 //
 // Functions are serialised by source rather than dropped, because a `format`
 // or `transform` written inline is exactly what distinguishes two otherwise
 // identical configurations — and `JSON.stringify` omits a function outright,
-// which would make two different builds look like one.
-function buildKey(root: string, resolved: ResolvedConfig[]): null | string {
+// which would make two different builds look like one. The `onBuild*` hooks
+// among the settings go the same way.
+function buildKey(
+  root: string,
+  resolved: ResolvedConfig[],
+  settings: Record<string, unknown>,
+): null | string {
   try {
     return JSON.stringify(
-      [root, resolved.map((item) => item.file ?? item.config)],
+      [root, resolved.map((item) => item.file ?? item.config), settings],
       (_key, value: unknown) =>
         typeof value === 'function' ? `[fn]${String(value)}` : value,
     )
@@ -1035,7 +1049,15 @@ const unpluginFactory: UnpluginFactory<
   const compileOnceAcrossInstances = async (
     resolvedConfigs: ResolvedConfig[],
   ): Promise<void> => {
-    const key = buildKey(root, resolvedConfigs)
+    const key = buildKey(root, resolvedConfigs, {
+      cache,
+      failOnError,
+      onBuildEnd,
+      onBuildError,
+      onBuildStart,
+      platforms: platformsOption,
+      watch: options.watch,
+    })
     if (key === null) {
       await runBuilds(instance, resolvedConfigs)
       return

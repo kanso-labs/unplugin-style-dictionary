@@ -695,6 +695,173 @@ describe('unplugin-style-dictionary (vite target)', () => {
     expect(fs.existsSync(second.output)).toBe(true)
   })
 
+  it('builds each selection when instances on one config ask for different platforms', async () => {
+    // One configuration and one hook, so `platforms` is the only difference.
+    // A waiter used to await the first instance's compile and return, so its
+    // own selection was never built and its `onBuildEnd` never ran.
+    const config = {
+      platforms: {
+        css: {
+          buildPath: tempDir.replace(/\\/g, '/') + '/',
+          files: [{ destination: 'selected.css', format: 'css/variables' }],
+          transformGroup: 'css',
+        },
+        js: {
+          buildPath: tempDir.replace(/\\/g, '/') + '/',
+          files: [{ destination: 'selected.js', format: 'javascript/es6' }],
+          transformGroup: 'js',
+        },
+      },
+      source: [tokenFile.replace(/\\/g, '/')],
+    }
+
+    // What each hook is handed is every declared file on disk, the other
+    // selection's included, so what is counted is that each one ran.
+    let ended = 0
+    const onBuildEnd = () => {
+      ended++
+    }
+
+    await Promise.all(
+      ['css', 'js'].map(async (platform) =>
+        callBuildStart(
+          vitePlugin({
+            config,
+            onBuildEnd,
+            platforms: [platform],
+            silent: true,
+          }),
+        ),
+      ),
+    )
+
+    expect(fs.existsSync(path.join(tempDir, 'selected.css'))).toBe(true)
+    expect(fs.existsSync(path.join(tempDir, 'selected.js'))).toBe(true)
+    expect(ended).toBe(2)
+  })
+
+  it.each([
+    { failOnError: [false, 'build'], order: 'behind one that does not' },
+    { failOnError: ['build', false], order: 'ahead of one that does not' },
+  ] as const)(
+    'fails an instance that asks to, $order',
+    async ({ failOnError }) => {
+      // Whether a failure is thrown is decided inside `runBuilds`, which only
+      // the first instance ran: a waiter asking for the default got the
+      // `false` instance's resolved promise and shipped nothing, and a waiter
+      // asking for `false` got the other's rejection.
+      let settled: string[] = []
+      const errors = await collectErrors(async () => {
+        const results = await Promise.allSettled(
+          failOnError.map(async (setting) =>
+            callBuildStart(
+              vitePlugin({
+                config: failingConfig,
+                failOnError: setting,
+                silent: true,
+              }),
+            ),
+          ),
+        )
+        settled = results.map((result) => result.status)
+      })
+
+      expect(settled).toEqual(
+        failOnError.map((setting) => (setting ? 'rejected' : 'fulfilled')),
+      )
+
+      // Each instance compiled, so each reports its own failure.
+      expect(
+        errors.filter((message) =>
+          message.includes('Compilation failed after'),
+        ),
+      ).toHaveLength(2)
+    },
+  )
+
+  it('compiles for an instance with cache off, beside one that would skip', async () => {
+    const { config, counter } = countingConfig(
+      'custom/counting-cache-split',
+      'cache-split.txt',
+    )
+    await callBuildStart(vitePlugin({ config, silent: true }))
+    expect(counter.calls).toBe(1)
+
+    // The output is current, so the default instance skips. The other asked
+    // for a compile regardless, and waiting on a skip gave it none.
+    await Promise.all([
+      callBuildStart(vitePlugin({ config, silent: true })),
+      callBuildStart(vitePlugin({ cache: false, config, silent: true })),
+    ])
+
+    expect(counter.calls).toBe(2)
+  })
+
+  it('compiles for an instance whose watch entry is newer, beside one without it', async () => {
+    const { config, counter } = countingConfig(
+      'custom/counting-watch-split',
+      'watch-split.txt',
+    )
+    const extra = path.join(tempDir, 'watch-split-extra.txt')
+    fs.writeFileSync(extra, 'one\n')
+    await callBuildStart(vitePlugin({ config, silent: true, watch: extra }))
+    expect(counter.calls).toBe(1)
+
+    // A `watch` entry is an input to the up-to-date check, so only the
+    // instance that names it finds the output stale.
+    const later = new Date(Date.now() + 1000)
+    fs.utimesSync(extra, later, later)
+    await Promise.all([
+      callBuildStart(vitePlugin({ config, silent: true })),
+      callBuildStart(vitePlugin({ config, silent: true, watch: extra })),
+    ])
+
+    expect(counter.calls).toBe(2)
+  })
+
+  it.each(['onBuildStart', 'onBuildEnd', 'onBuildError'] as const)(
+    'runs each instance its own %s when that is all that differs',
+    async (hook) => {
+      // `onBuildError` only runs for a compile that fails, and `failOnError:
+      // false` keeps that failure from rejecting either instance.
+      const { config } = countingConfig(
+        `custom/counting-${hook}-split`,
+        `${hook}-split.txt`,
+      )
+      const failing = hook === 'onBuildError'
+
+      const ran: string[] = []
+      const hooks = [
+        () => {
+          ran.push('first')
+        },
+        () => {
+          ran.push('second')
+        },
+      ]
+
+      const errors = await collectErrors(async () => {
+        await Promise.all(
+          hooks.map(async (callback) =>
+            callBuildStart(
+              vitePlugin({
+                config: failing ? failingConfig : config,
+                failOnError: false,
+                [hook]: callback,
+                silent: true,
+              }),
+            ),
+          ),
+        )
+      })
+
+      expect(ran.toSorted()).toEqual(['first', 'second'])
+      expect(
+        errors.some((message) => message.includes('Compilation failed after')),
+      ).toBe(failing)
+    },
+  )
+
   // A file-backed configuration in a directory of its own, so each test's
   // destinations and sources are unrelated to every other test's. A counting
   // format stands in for the compile, since what has to be observed is whether
