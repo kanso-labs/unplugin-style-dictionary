@@ -86,9 +86,11 @@ export interface UnpluginStyleDictionaryOptions {
    * 4,000-token, two-platform configuration — and under Vite it runs inside
    * `server.listen()`, so the dev server does not accept a connection until
    * it finishes whether or not a token changed. A configuration is treated as
-   * up to date when every file it declares exists and is as the compile that
-   * wrote it left it, and nothing it reads, its own config file included, has
-   * changed since that compile read it.
+   * up to date when every file its last compile wrote exists and is as that
+   * compile left it, and nothing it reads, its own config file included, has
+   * changed since that compile read it. A file it declares and Style
+   * Dictionary declined to write — a filter matching no tokens — does not stop
+   * it being skipped, since that file was never going to be there.
    *
    * "Since" means since the moment that compile began reading, so a token
    * saved while a rebuild is compiling is rebuilt rather than taken for part
@@ -248,15 +250,17 @@ export interface UnpluginStyleDictionaryOptions {
   logLevel?: 'info' | 'silent' | 'verbose' | 'warn'
 
   /**
-   * Called once a build has finished, with every file it declares and how long
-   * it took in milliseconds.
+   * Called once a build has finished, with every file it declares that is on
+   * disk and how long it took in milliseconds.
    *
    * The paths are absolute and platform-native, sorted so two runs of the same
    * configuration hand back the same order. They are what the build declares
    * rather than what it wrote this time: a configuration skipped by `cache`
    * contributes its destinations too, because they are on disk and current,
    * and a post-processing step that ignored them would leave half the output
-   * untouched on a rebuild that changed one file.
+   * untouched on a rebuild that changed one file. A declared file Style
+   * Dictionary declined to write — a filter matching no tokens — is left out,
+   * since there is nothing there to open.
    *
    * This is where formatting the generated files, type-checking them, or
    * telling something else they have landed belongs.
