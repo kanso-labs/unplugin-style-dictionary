@@ -436,8 +436,14 @@ connections for the length of a compile whether or not a token had changed.
 
 Three things are compared: every file the configuration reads (its `source` and
 `include` matches, its own config file, and anything named by `watch`), every
-file it declares, and — for a configuration that is not a file — what the
-configuration looked like when those files were written.
+file it declares, and the configuration that last wrote them. That last one
+covers more than the configuration's own contents. It includes the hooks the
+configuration names — each `format`, `filter`, `fileHeader`, transform,
+transform group, parser and preprocessor it refers to by name — as Style
+Dictionary's registry holds them, and the Style Dictionary version. So a new
+body registered under a name it uses, which is what editing the
+[Custom Formats](#custom-formats) pattern does, rebuilds even though no file
+moved, and so does an upgrade.
 
 Once a configuration has been compiled, the files it reads are compared against
 what that compile saw before it started reading. A token saved while a rebuild
@@ -458,9 +464,11 @@ Two cases never skip, because neither can be settled from the filesystem:
 | The first compile of a process, for a configuration given as an object or a function | There is no config file to stat, so an edit to the object inside `vite.config.ts` moves no mtime. Within one process the resolved configuration is compared against the one last built. An earlier process's record is not trusted for it, because its functions are compared by their source and what they close over can differ. |
 | A platform declaring `actions`                                                       | An action writes what no `destination` names, so a skip would leave its work undone.                                                                                                                                                                                                                                               |
 
-A custom format that reads something off-disk — an environment variable, a
-network call — cannot be detected this way either. Set `cache: false` where that
-is the case, and every build runs.
+A hook's own code is compared, but not what it calls from another module. Name
+that module in `watch` and an edit to it rebuilds on the next start. A custom
+format that reads something off-disk — an environment variable, a network call —
+cannot be detected this way either. Set `cache: false` where that is the case,
+and every build runs.
 
 ## One Compile per Process
 
@@ -788,6 +796,15 @@ export interface UnpluginStyleDictionaryOptions {
    * `package.json`, so a restart still knows it. Where nothing is recorded,
    * the files a configuration reads are compared against the files it
    * declares instead.
+   *
+   * A compile is also recorded against the configuration that ran it: its
+   * contents, the hooks it names as Style Dictionary's registry holds them —
+   * each `format`, `filter`, `fileHeader`, transform, transform group,
+   * parser and preprocessor it refers to by name — and the Style Dictionary
+   * version. A new body registered under a name it uses, or an upgrade,
+   * rebuilds even though no file moved. What a hook's code calls from another
+   * module is not part of that code, so an edit there is not seen; naming the
+   * module in `watch` makes the next start rebuild.
    *
    * Two things are never skipped, because neither can be told from the
    * filesystem:

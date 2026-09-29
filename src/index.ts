@@ -405,10 +405,12 @@ const atomicVolume = Object.create(fs, {
 // below is: the instances that would otherwise repeat the work are different
 // instances, so per-instance state cannot see them. A `vitest run` stands up
 // several, and a function configuration — the form the README recommends for
-// registering custom formats — would be the one form that never skipped. It is
-// kept up whether or not `cache` is on: an instance that rewrote a file without
-// updating it would leave another instance vouching for output no longer its
-// own.
+// registering custom formats — would be the one form that never skipped. Every
+// compile forgets the files it is about to write, whether or not `cache` is on:
+// an instance that rewrote a file without that would leave another instance
+// vouching for output no longer its own. Only a compile with `cache` on records
+// them again, since only it has read the configuration a fingerprint is taken
+// from.
 //
 // The fingerprint carries the root, so two projects in one process never share
 // one. A configuration given as a path needs no fingerprint to be skipped: its
