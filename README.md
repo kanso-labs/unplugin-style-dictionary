@@ -36,8 +36,13 @@ them.
   the error overlay rather than only to the terminal, and cleared on the next
   one that succeeds.
 - **Atomic writes**: Every generated file is written to a temporary sibling and
-  renamed into place, so code importing a token file while it is being rebuilt
-  never reads a half-written file.
+  renamed into place, and so is every asset the `copy_assets` and
+  `android/copyImages` actions copy, so code reading one while it is being
+  rebuilt never sees it half-written. A file whose contents have not changed is
+  left alone. A custom action gets the same through `vol.promises.writeFile`,
+  `vol.writeFileSync`, `vol.promises.copyFile`, `vol.copyFileSync` and
+  `vol.promises.cp`; anything else it writes with, such as `appendFile` or a
+  write stream, writes in place.
 - **Multi-configuration**: Can run multiple Style Dictionary configurations in
   one build (useful for multi-brand or multi-theme projects). They are compiled
   one after another on purpose, so two configurations may safely write to the

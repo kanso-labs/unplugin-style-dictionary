@@ -403,12 +403,166 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
   }
 }
 
-// `node:fs` with both write entry points swapped for their atomic
-// equivalents, handed to Style Dictionary as the volume it builds through.
-// Everything else — reads, `mkdir`, `access`, the `promises` namespace — is
-// inherited from `node:fs` unchanged, so only the moment a file becomes
-// visible to readers changes. Custom actions receive this volume too, so
-// whatever they emit is written the same way.
+// Copies go the same way as writes. Two of Style Dictionary's own actions copy
+// rather than format — `copy_assets` through `promises.cp` and
+// `android/copyImages` through `promises.copyFile` — and both methods used to
+// be inherited from `node:fs`, which copies in place: measured, a reader
+// polling a copied 2 MB asset across 20 rebuilds read a partial file 1352
+// times in 3752. A configuration with actions is never skipped as up to date,
+// so every trigger copied every asset again, and an identical copy is now
+// compared first for the same reason an identical write is.
+//
+// `COPYFILE_EXCL` asks for a failure when the destination exists, which a
+// rename over it would quietly overwrite, so such a copy keeps the inherited
+// behaviour.
+const copyFileAtomic: typeof fs.promises.copyFile = async (
+  source,
+  destination,
+  mode,
+) => {
+  if (typeof destination !== 'string' || excludesExisting(mode)) {
+    return fs.promises.copyFile(source, destination, mode)
+  }
+
+  if (await alreadyHolds(destination, await fs.promises.readFile(source))) {
+    return
+  }
+
+  const temporary = temporaryPathFor(destination)
+
+  try {
+    await fs.promises.copyFile(source, temporary, mode)
+    await renameWithRetry(temporary, destination)
+  } catch (err) {
+    discardTemporaryFile(temporary)
+    throw err
+  }
+}
+
+const copyFileSyncAtomic: typeof fs.copyFileSync = (
+  source,
+  destination,
+  mode,
+) => {
+  if (typeof destination !== 'string' || excludesExisting(mode)) {
+    fs.copyFileSync(source, destination, mode)
+    return
+  }
+
+  if (alreadyHoldsSync(destination, fs.readFileSync(source))) return
+
+  const temporary = temporaryPathFor(destination)
+
+  try {
+    fs.copyFileSync(source, temporary, mode)
+    renameWithRetrySync(temporary, destination)
+  } catch (err) {
+    discardTemporaryFile(temporary)
+    throw err
+  }
+}
+
+function excludesExisting(mode: number | undefined): boolean {
+  return mode !== undefined && (mode & fs.constants.COPYFILE_EXCL) !== 0
+}
+
+// `promises.cp` as a walk over the source that sends each regular file through
+// `copyFileAtomic`. The walk models the call `copy_assets` makes — a directory
+// copied recursively over whatever is there — and hands anything else to the
+// inherited `cp`, which copies or refuses exactly as it always has: an option
+// the walk does not honour, such as `filter` or `dereference`, a destination
+// inside its own source, and, entry by entry, anything that is neither a file
+// nor a directory, such as a symbolic link.
+const cpAtomic: typeof fs.promises.cp = async (
+  source,
+  destination,
+  options,
+) => {
+  if (
+    typeof source !== 'string' ||
+    typeof destination !== 'string' ||
+    !walksCopy(options) ||
+    isWithin(destination, source)
+  ) {
+    return fs.promises.cp(source, destination, options)
+  }
+
+  // `cp` creates a missing parent, and the walk creates only what it copies.
+  await fs.promises.mkdir(path.dirname(path.resolve(destination)), {
+    recursive: true,
+  })
+  await copyTreeAtomic(source, destination, options)
+}
+
+async function copyTreeAtomic(
+  source: string,
+  destination: string,
+  options: fs.CopyOptions | undefined,
+): Promise<void> {
+  const stat = await fs.promises.lstat(source)
+  const existing = await fs.promises.lstat(destination).catch(() => undefined)
+
+  if (stat.isFile() && !existing?.isDirectory()) {
+    await copyFileAtomic(source, destination, options?.mode)
+    return
+  }
+
+  if (
+    !stat.isDirectory() ||
+    !options?.recursive ||
+    (existing && !existing.isDirectory())
+  ) {
+    await fs.promises.cp(source, destination, options)
+    return
+  }
+
+  // Sequential, as `cp` is, and a directory the walk creates takes its
+  // source's mode once its contents are in, as `cp` does it.
+  const created = await fs.promises.mkdir(destination, { recursive: true })
+  for (const entry of await fs.promises.readdir(source)) {
+    await copyTreeAtomic(
+      path.join(source, entry),
+      path.join(destination, entry),
+      options,
+    )
+  }
+  if (created !== undefined) await fs.promises.chmod(destination, stat.mode)
+}
+
+function isWithin(candidate: string, directory: string): boolean {
+  const relative = path.relative(
+    path.resolve(directory),
+    path.resolve(candidate),
+  )
+
+  return !(
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  )
+}
+
+// The options the walk honours: `recursive`, `mode`, and `force` at its
+// default of overwriting.
+function walksCopy(options: fs.CopyOptions | undefined): boolean {
+  return Object.entries(options ?? {}).every(
+    ([key, value]) =>
+      value === undefined ||
+      key === 'mode' ||
+      key === 'recursive' ||
+      (key === 'force' && value === true),
+  )
+}
+
+// `node:fs` with its write and copy entry points swapped for atomic
+// equivalents, handed to Style Dictionary as the volume it builds through:
+// `promises.writeFile`, `writeFileSync`, `promises.copyFile`, `copyFileSync`
+// and `promises.cp`. Everything else — reads, `mkdir`, `access`, the rest of
+// the `promises` namespace — is inherited from `node:fs` unchanged, so only the
+// moment a file becomes visible to readers changes. Custom actions receive this
+// volume too, so a file they emit through one of those five is written the
+// same way. `appendFile`, `createWriteStream`, `cpSync` and the callback forms
+// of `writeFile`, `copyFile` and `cp` are not among them, and write in place.
 //
 // It is assigned onto the instance rather than passed as the `volume`
 // constructor option on purpose: that option marks the volume as a custom
@@ -420,8 +574,11 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
 // copies own properties and drops the chain, is not a substitute.
 /* oxlint-disable typescript/no-unsafe-type-assertion */
 const atomicVolume = Object.create(fs, {
+  copyFileSync: { value: copyFileSyncAtomic },
   promises: {
     value: Object.create(fs.promises, {
+      copyFile: { value: copyFileAtomic },
+      cp: { value: cpAtomic },
       writeFile: { value: writeFileAtomic },
     }) as typeof fs.promises,
   },

@@ -4282,6 +4282,48 @@ const temporaryWritesDuring = async (
   }
 }
 
+// Custom actions copying `assets/logo.svg` into a platform's `buildPath` through
+// the volume they are handed, as a consumer's own action would: one for each
+// copy entry point `copy_assets` does not reach.
+const registerCopyActions = () => {
+  StyleDictionary.registerAction({
+    do: async (_dictionary, platform, _options, vol: typeof fs) => {
+      const copied = path.join(String(platform.buildPath), 'assets')
+      await vol.promises.mkdir(copied, { recursive: true })
+      await vol.promises.copyFile(
+        path.join('assets', 'logo.svg'),
+        path.join(copied, 'logo.svg'),
+      )
+    },
+    name: 'test/copy-file-through-volume',
+    undo: () => {},
+  })
+  StyleDictionary.registerAction({
+    do: (_dictionary, platform, _options, vol: typeof fs) => {
+      const copied = path.join(String(platform.buildPath), 'assets')
+      vol.mkdirSync(copied, { recursive: true })
+      vol.copyFileSync(
+        path.join('assets', 'logo.svg'),
+        path.join(copied, 'logo.svg'),
+      )
+    },
+    name: 'test/copy-file-sync-through-volume',
+    undo: () => {},
+  })
+}
+
+// The copy cases read `assets` relative to the working directory, as
+// `copy_assets` does, so their builds run from inside the fixture.
+const fromDirectory = async (directory: string, work: () => Promise<void>) => {
+  const originalCwd = process.cwd()
+  process.chdir(directory)
+  try {
+    await work()
+  } finally {
+    process.chdir(originalCwd)
+  }
+}
+
 const settle = async (ms: number) => {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -6647,6 +6689,265 @@ describe('the atomic writer', () => {
         errorSpy.mockRestore()
         renameSpy.mockRestore()
       }
+    },
+    30000,
+  )
+
+  // A platform that copies `assets/logo.svg` into its `buildPath` with
+  // `action`: `copy_assets` is Style Dictionary's own, and the actions
+  // `registerCopyActions` adds copy the same file through the volume they are
+  // handed, as a consumer's own action would.
+  const copyFixture = (name: string, action: string) => {
+    const directory = writeFixture(name)
+    const asset = path.join(directory, 'assets', 'logo.svg')
+    fs.mkdirSync(path.dirname(asset), { recursive: true })
+    fs.writeFileSync(asset, '<svg>first</svg>\n')
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            actions: [action],
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+
+    return {
+      asset,
+      configFile,
+      copied: path.join(directory, 'out', 'assets', 'logo.svg'),
+      directory,
+    }
+  }
+
+  it('never exposes a partially copied asset to a concurrent reader', async () => {
+    // `copy_assets` copies with `promises.cp`, and `node:fs`'s own unlinks
+    // the destination and copies into a fresh file in place, so a reader
+    // polling the asset mid-rebuild read part of it — measured, 1352 of 3752
+    // reads across 20 rebuilds of a 2 MB asset.
+    const { asset, configFile, copied, directory } = copyFixture(
+      'copied-asset',
+      'copy_assets',
+    )
+
+    // Alternated, as the marker is in the written-file case, so no rebuild
+    // is skipped as identical. Large enough that one copy takes long enough
+    // to be caught halfway.
+    const versions = ['a', 'b'].map((fill) =>
+      Buffer.alloc(2 * 1024 * 1024, fill),
+    )
+    const rebuilds = 20
+
+    const failures: string[] = []
+    let reads = 0
+
+    await fromDirectory(directory, async () => {
+      const plugin = vitePlugin({ config: configFile, silent: true })
+      fs.writeFileSync(asset, versions[0])
+      await callBuildStart(plugin)
+
+      const state = { building: true }
+      const reader = (async () => {
+        while (state.building) {
+          reads++
+          try {
+            const content = fs.readFileSync(copied)
+            if (!versions.some((version) => version.equals(content))) {
+              failures.push(`partial: read ${content.length} bytes`)
+            }
+          } catch (err) {
+            failures.push(
+              `read failed: ${err instanceof Error ? err.message : String(err)}`,
+            )
+          }
+
+          await new Promise((resolve) => setImmediate(resolve))
+        }
+      })()
+
+      for (let index = 1; index <= rebuilds; index++) {
+        fs.writeFileSync(asset, versions[index % versions.length])
+        await callBuildStart(plugin)
+      }
+      state.building = false
+      await reader
+    })
+
+    expect(failures).toEqual([])
+    expect(reads).toBeGreaterThan(rebuilds)
+  }, 30000)
+
+  it.each([
+    { action: 'copy_assets', entry: 'promises.cp' },
+    { action: 'test/copy-file-through-volume', entry: 'promises.copyFile' },
+    { action: 'test/copy-file-sync-through-volume', entry: 'copyFileSync' },
+  ])(
+    'leaves a copy $entry makes of an unchanged file in place',
+    async ({ action }) => {
+      // A configuration with actions is never skipped as up to date, so each
+      // trigger copies every asset again, and a copy that rewrote an
+      // unchanged file was an event per asset per rebuild.
+      registerCopyActions()
+      const { asset, configFile, copied, directory } = copyFixture(
+        `unchanged-${action.replace(/\W/g, '-')}`,
+        action,
+      )
+
+      await fromDirectory(directory, async () => {
+        const plugin = vitePlugin({ config: configFile, silent: true })
+        await callBuildStart(plugin)
+        const before = fs.statSync(copied)
+
+        await callBuildStart(plugin)
+        const after = fs.statSync(copied)
+
+        expect(after.ino).toBe(before.ino)
+        expect(after.mtimeMs).toBe(before.mtimeMs)
+
+        // A changed file is still copied, through a temporary file.
+        fs.writeFileSync(asset, '<svg>second</svg>\n')
+        await callBuildStart(plugin)
+      })
+
+      expect(fs.readFileSync(copied, 'utf8')).toBe('<svg>second</svg>\n')
+      expect(
+        fs
+          .readdirSync(path.dirname(copied))
+          .filter((name) => name.endsWith('.tmp')),
+      ).toEqual([])
+    },
+    30000,
+  )
+
+  it('hands a copy it does not model to the inherited cp', async () => {
+    // `filter` is one of the options the walk does not honour, so a call
+    // carrying it has to reach `cp` itself rather than copy everything.
+    const directory = writeFixture('cp-filter')
+    fs.mkdirSync(path.join(directory, 'assets'), { recursive: true })
+    fs.writeFileSync(path.join(directory, 'assets', 'logo.svg'), '<svg/>\n')
+    fs.writeFileSync(path.join(directory, 'assets', 'notes.txt'), 'draft\n')
+
+    StyleDictionary.registerAction({
+      do: async (_dictionary, platform, _options, vol: typeof fs) => {
+        await vol.promises.cp(
+          'assets',
+          path.join(String(platform.buildPath), 'assets'),
+          { filter: (source) => !source.endsWith('.txt'), recursive: true },
+        )
+      },
+      name: 'test/cp-filtered-through-volume',
+      undo: () => {},
+    })
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            actions: ['test/cp-filtered-through-volume'],
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+
+    await fromDirectory(directory, async () => {
+      await callBuildStart(vitePlugin({ config: configFile, silent: true }))
+    })
+
+    expect(fs.readdirSync(path.join(directory, 'out', 'assets'))).toEqual([
+      'logo.svg',
+    ])
+  }, 30000)
+
+  it('refuses a copy into its own source, as cp does, rather than walking it', async () => {
+    // Walked, the destination would be one of the entries it copies, and
+    // each level would create the next one down.
+    const directory = writeFixture('cp-into-self')
+    fs.mkdirSync(path.join(directory, 'assets'), { recursive: true })
+    fs.writeFileSync(path.join(directory, 'assets', 'logo.svg'), '<svg/>\n')
+
+    StyleDictionary.registerAction({
+      do: async (_dictionary, _platform, _options, vol: typeof fs) => {
+        await vol.promises.cp('assets', path.join('assets', 'copy'), {
+          recursive: true,
+        })
+      },
+      name: 'test/cp-into-self-through-volume',
+      undo: () => {},
+    })
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            actions: ['test/cp-into-self-through-volume'],
+            buildPath: posix(path.join(directory, 'out')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+
+    const errors = await collectErrors(async () => {
+      await fromDirectory(directory, async () => {
+        await expect(
+          callBuildStart(vitePlugin({ config: configFile, silent: true })),
+        ).rejects.toThrow(/subdirectory of self/)
+      })
+    })
+
+    expect(errors.join('\n')).toMatch(/subdirectory of self/)
+  }, 30000)
+
+  it.skipIf(process.platform === 'win32')(
+    'gives a directory it creates the mode of its source, as cp does',
+    async () => {
+      const { configFile, copied, directory } = copyFixture(
+        'cp-directory-mode',
+        'copy_assets',
+      )
+      fs.chmodSync(path.join(directory, 'assets'), 0o750)
+
+      await fromDirectory(directory, async () => {
+        await callBuildStart(vitePlugin({ config: configFile, silent: true }))
+      })
+
+      expect(fs.statSync(path.dirname(copied)).mode & 0o777).toBe(0o750)
+    },
+    30000,
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'copies a symbolic link as cp does, rather than the file it names',
+    async () => {
+      const { configFile, copied, directory } = copyFixture(
+        'cp-symbolic-link',
+        'copy_assets',
+      )
+      fs.symlinkSync('logo.svg', path.join(directory, 'assets', 'link.svg'))
+
+      await fromDirectory(directory, async () => {
+        await callBuildStart(vitePlugin({ config: configFile, silent: true }))
+      })
+
+      const link = path.join(path.dirname(copied), 'link.svg')
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true)
     },
     30000,
   )
