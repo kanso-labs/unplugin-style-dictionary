@@ -368,6 +368,73 @@ describe('under a real vite dev server', () => {
     expect(current()).toContain('second body')
   }, 30000)
 
+  it.each([
+    { event: false, label: 'with no file changed in the session' },
+    { event: true, label: 'after a file changed in the session' },
+  ])(
+    'compiles the new configuration on a restart $label',
+    async ({ event }) => {
+      // Vite restarts the server when `vite.config.ts` changes, and calls
+      // `buildStart` again for it. That call is a start, not a watch
+      // rebuild, so it has to compile whatever happened earlier in the
+      // session — and a file event earlier in the session is what it used to
+      // mistake for one.
+      const directory = path.join(tempDir, `restart-${String(event)}`)
+      const tokensDirectory = path.join(directory, 'tokens')
+      fs.mkdirSync(tokensDirectory, { recursive: true })
+      fs.writeFileSync(
+        path.join(tokensDirectory, 'color.json'),
+        JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+      )
+
+      let destination = 'before.js'
+      const generatedDirectory = path.join(directory, 'generated')
+
+      server = await createServer({
+        configFile: false,
+        logLevel: 'silent',
+        plugins: [
+          vitePlugin({
+            config: () => ({
+              platforms: {
+                js: {
+                  buildPath: posix(generatedDirectory) + '/',
+                  files: [{ destination, format: 'javascript/es6' }],
+                  transformGroup: 'js',
+                },
+              },
+              source: [posix(tokensDirectory) + '/*.json'],
+            }),
+            silent: true,
+          }),
+        ],
+        root: directory,
+        server: { hmr: false, middlewareMode: true },
+      })
+
+      const before = path.join(generatedDirectory, 'before.js')
+      await waitUntil(() => fs.existsSync(before), 10000)
+      expect(fs.existsSync(before)).toBe(true)
+
+      if (event) {
+        // A file no configuration reads, so the only thing it can do is reach
+        // `watchChange` as an event. The watcher needs a moment before it
+        // reports anything, and another for the event itself.
+        await settle(300)
+        fs.writeFileSync(path.join(directory, 'unrelated.txt'), 'not a token')
+        await settle(500)
+      }
+
+      destination = 'after.js'
+      await server.restart()
+
+      const after = path.join(generatedDirectory, 'after.js')
+      await waitUntil(() => fs.existsSync(after), 10000)
+      expect(fs.existsSync(after)).toBe(true)
+    },
+    30000,
+  )
+
   it('rebuilds a source saved while a rebuild is compiling', async () => {
     // The scheduler queues a follow-up for a save that lands mid-compile, and
     // with `cache` on that follow-up asks the up-to-date check first. The
