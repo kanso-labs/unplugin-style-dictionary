@@ -155,13 +155,22 @@ export async function runBuilds(
         ? await newestSourceOf({ log, root, watch }, item, declared)
         : null
 
+      // Who this configuration is: its contents, the hooks it names as the
+      // registry holds them now, and the Style Dictionary version. Taken here,
+      // after the `config` function's `register*` calls have landed, and once:
+      // the check compares it with each destination's record, and the record
+      // keeps it. Only with `cache` on, because nothing compares it otherwise
+      // and reading a configuration module to compute it would run it again.
+      const fingerprint = declared
+        ? configFingerprint(root, item, declared)
+        : null
+
       if (
         declared &&
         isUpToDate(
-          { destinationRecords, root },
+          { destinationRecords, fingerprint, newestSource },
           item,
           declared,
-          newestSource,
           selectedPlatforms,
         )
       ) {
@@ -333,7 +342,10 @@ export async function runBuilds(
       // all: a later check trusts the record only while the file still has
       // it. A file that was never written gets no record, so it is compiled
       // next time rather than vouched for.
-      const fingerprint = configFingerprint(root, item)
+      //
+      // Only a compile with `cache` on has a fingerprint to record. One with it
+      // off has still forgotten what it rewrote, above, which is what keeps
+      // every other instance from vouching for its output.
       if (fingerprint !== null) {
         for (const destination of writing) {
           const record = recordOf(destination, fingerprint, newestSource)

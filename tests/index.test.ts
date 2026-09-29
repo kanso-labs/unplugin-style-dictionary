@@ -1342,6 +1342,195 @@ describe('unplugin-style-dictionary (vite target)', () => {
     ).toBe(true)
   })
 
+  // Each row names one hook by string and registers it with a first body and
+  // then a second. The body lives in Style Dictionary's registry, which nothing
+  // on disk reflects, and the README's Custom Formats pattern registers inside
+  // the `config` function — so an edit to a hook is a new body under an old
+  // name, with every mtime the check reads unchanged.
+  const namedHookRows: Array<{
+    config?: Record<string, unknown>
+    file?: Record<string, unknown>
+    hook: string
+    platform?: Record<string, unknown>
+    register: (body: 1 | 2) => void
+  }> = [
+    {
+      file: { format: 'custom/named-format' },
+      hook: 'a format',
+      register: (body) => {
+        StyleDictionary.registerFormat({
+          format: body === 1 ? () => 'first body' : () => 'second body',
+          name: 'custom/named-format',
+        })
+      },
+    },
+    {
+      file: { filter: 'custom/named-filter' },
+      hook: 'a filter',
+      register: (body) => {
+        StyleDictionary.registerFilter({
+          filter: body === 1 ? () => true : (token) => token.path.length > 0,
+          name: 'custom/named-filter',
+        })
+      },
+    },
+    {
+      file: { options: { fileHeader: 'custom/named-header' } },
+      hook: 'a file header',
+      register: (body) => {
+        StyleDictionary.registerFileHeader({
+          fileHeader: body === 1 ? () => ['first'] : () => ['second'],
+          name: 'custom/named-header',
+        })
+      },
+    },
+    {
+      hook: 'a transform',
+      platform: { transforms: ['custom/named-transform'] },
+      register: (body) => {
+        StyleDictionary.registerTransform({
+          name: 'custom/named-transform',
+          transform:
+            body === 1
+              ? (token) => String(token.value)
+              : (token) => String(token.value).trim(),
+          type: 'value',
+        })
+      },
+    },
+    {
+      hook: 'a transform in the transform group',
+      platform: { transformGroup: 'custom/named-group' },
+      register: (body) => {
+        StyleDictionary.registerTransform({
+          name: 'custom/grouped-transform',
+          transform:
+            body === 1
+              ? (token) => String(token.value)
+              : (token) => String(token.value).trim(),
+          type: 'value',
+        })
+        StyleDictionary.registerTransformGroup({
+          name: 'custom/named-group',
+          transforms: ['custom/grouped-transform'],
+        })
+      },
+    },
+    {
+      config: { preprocessors: ['custom/named-preprocessor'] },
+      hook: 'a preprocessor',
+      register: (body) => {
+        StyleDictionary.registerPreprocessor({
+          name: 'custom/named-preprocessor',
+          preprocessor:
+            body === 1 ? (tokens) => tokens : (tokens) => ({ ...tokens }),
+        })
+      },
+    },
+    {
+      config: { parsers: ['custom/named-parser'] },
+      hook: 'a parser',
+      register: (body) => {
+        StyleDictionary.registerParser({
+          name: 'custom/named-parser',
+          parser:
+            body === 1
+              ? () => ({ color: { primary: { value: '#0070f3' } } })
+              : () => ({ color: { primary: { value: '#ff0000' } } }),
+          pattern: /\.json$/,
+        })
+      },
+    },
+  ]
+
+  it.each(namedHookRows)(
+    'compiles again when $hook it names has a new body',
+    async ({ config, file, hook, platform, register }) => {
+      const fixture = freshnessFixture(
+        `named-hook-${hook.replaceAll(' ', '-')}`,
+      )
+      fs.writeFileSync(
+        fixture.configPath,
+        JSON.stringify({
+          platforms: {
+            text: {
+              buildPath: fixture.directory.replace(/\\/g, '/') + '/',
+              files: [
+                { destination: 'out.txt', format: fixture.format, ...file },
+              ],
+              transformGroup: 'css',
+              ...platform,
+            },
+          },
+          source: [fixture.source.replace(/\\/g, '/')],
+          ...config,
+        }),
+      )
+
+      const buildSpy = vi.spyOn(StyleDictionary.prototype, 'buildAllPlatforms')
+      try {
+        register(1)
+        await callBuildStart(
+          vitePlugin({ config: fixture.configPath, silent: true }),
+        )
+        await callBuildStart(
+          vitePlugin({ config: fixture.configPath, silent: true }),
+        )
+        expect(buildSpy).toHaveBeenCalledTimes(1)
+
+        register(2)
+        await callBuildStart(
+          vitePlugin({ config: fixture.configPath, silent: true }),
+        )
+        expect(buildSpy).toHaveBeenCalledTimes(2)
+      } finally {
+        buildSpy.mockRestore()
+      }
+    },
+  )
+
+  it('compiles again when Style Dictionary is upgraded', async () => {
+    // An upgrade changes built-in hooks under names a configuration already
+    // uses, and moves nothing the check reads on disk. The version stands in
+    // for all of it, so it is set here rather than an upgrade performed.
+    const fixture = freshnessFixture('upgraded')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    const version = StyleDictionary.VERSION
+    try {
+      StyleDictionary.VERSION = `${version}-next`
+      await callBuildStart(
+        vitePlugin({ config: fixture.configPath, silent: true }),
+      )
+    } finally {
+      StyleDictionary.VERSION = version
+    }
+
+    expect(fixture.counter.calls).toBe(2)
+  })
+
+  it('still skips when a hook the configuration does not name changes', async () => {
+    // The registry is shared by the whole process, so a configuration is
+    // fingerprinted with the hooks it names and nothing else. Every other
+    // configuration's `register*` call would defeat its skip otherwise.
+    const fixture = freshnessFixture('unnamed-hook')
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    StyleDictionary.registerFormat({
+      format: () => 'nobody names this',
+      name: 'custom/unnamed-hook',
+    })
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(1)
+  })
+
   it('still skips the configuration a rebuild did not touch', async () => {
     // What the record buys over not checking at all on a rebuild: an edit to
     // one configuration's tokens compiles that configuration alone.

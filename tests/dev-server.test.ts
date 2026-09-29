@@ -103,6 +103,11 @@ const breakReferences = (tokenSource: string, count: number) => {
   fs.writeFileSync(tokenSource, JSON.stringify({ color }))
 }
 
+// Two bodies registered under one format name, as an edit to the README's
+// Custom Formats pattern leaves them: different source, same name.
+const firstFormatBody = () => 'first body'
+const secondFormatBody = () => 'second body'
+
 describe('under a real vite dev server', () => {
   const tempDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'unplugin-style-dictionary-dev-server-'),
@@ -302,6 +307,65 @@ describe('under a real vite dev server', () => {
     } finally {
       buildSpy.mockRestore()
     }
+  }, 30000)
+
+  it('rebuilds on a restart when the config function registers a new format body', async () => {
+    // The README's Custom Formats pattern: the format is registered inside the
+    // `config` function, and an edit to it reaches the plugin as a new body
+    // under the same name when Vite restarts the server. Nothing on disk moves,
+    // so only a fingerprint carrying the hook's body can tell.
+    const directory = path.join(tempDir, 'restart-format')
+    const tokensDirectory = path.join(directory, 'tokens')
+    fs.mkdirSync(tokensDirectory, { recursive: true })
+    fs.writeFileSync(
+      path.join(tokensDirectory, 'color.json'),
+      JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+    )
+
+    let registered = firstFormatBody
+
+    const generated = path.join(directory, 'generated', 'out.txt')
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [
+        vitePlugin({
+          config: () => {
+            StyleDictionary.registerFormat({
+              format: registered,
+              name: 'custom/restart-format',
+            })
+            return {
+              platforms: {
+                text: {
+                  buildPath: posix(path.join(directory, 'generated')) + '/',
+                  files: [
+                    { destination: 'out.txt', format: 'custom/restart-format' },
+                  ],
+                  transformGroup: 'css',
+                },
+              },
+              source: [posix(tokensDirectory) + '/*.json'],
+            }
+          },
+          silent: true,
+        }),
+      ],
+      root: directory,
+      server: { hmr: false, middlewareMode: true },
+    })
+
+    const current = () =>
+      fs.existsSync(generated) ? fs.readFileSync(generated, 'utf-8') : ''
+    await waitUntil(() => current().includes('first body'), 10000)
+    expect(current()).toContain('first body')
+
+    registered = secondFormatBody
+    await server.restart()
+
+    await waitUntil(() => current().includes('second body'), 10000)
+    expect(current()).toContain('second body')
   }, 30000)
 
   it.each([

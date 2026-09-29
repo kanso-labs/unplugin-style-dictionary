@@ -98,6 +98,15 @@ export interface UnpluginStyleDictionaryOptions {
    * the files a configuration reads are compared against the files it
    * declares instead.
    *
+   * A compile is also recorded against the configuration that ran it: its
+   * contents, the hooks it names as Style Dictionary's registry holds them —
+   * each `format`, `filter`, `fileHeader`, transform, transform group,
+   * parser and preprocessor it refers to by name — and the Style Dictionary
+   * version. A new body registered under a name it uses, or an upgrade,
+   * rebuilds even though no file moved. What a hook's code calls from another
+   * module is not part of that code, so an edit there is not seen; naming the
+   * module in `watch` makes the next start rebuild.
+   *
    * Two things are never skipped, because neither can be told from the
    * filesystem:
    *

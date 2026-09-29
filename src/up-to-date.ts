@@ -7,11 +7,12 @@
 // The functions that read and write the persisted copy of that record work on
 // a file they are handed and keep nothing.
 
-import type { Config } from 'style-dictionary'
+import type { Config, Hooks } from 'style-dictionary/types'
 
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import StyleDictionary from 'style-dictionary'
 
 import type { Log, ResolvedConfig } from './config.js'
 import type { UnpluginStyleDictionaryOptions } from './types.js'
@@ -35,13 +36,23 @@ export interface DestinationRecord {
 }
 
 // Bumped whenever what a record or a fingerprint means changes, so a file an
-// older version of the plugin wrote is ignored rather than misread.
-const RECORDS_VERSION = 1
+// older version of the plugin wrote is ignored rather than misread. 2 added
+// the hooks a configuration names and the Style Dictionary version to the
+// fingerprint, and started comparing it for a configuration given as a path.
+const RECORDS_VERSION = 2
 
 // A stable identity for one resolved configuration, or `null` where it
 // cannot have one. Functions are serialised by source rather than dropped,
 // because an inline `format` or `transform` is exactly the edit a
 // fingerprint has to notice, and `JSON.stringify` omits a function outright.
+//
+// It carries more than the configuration: the hooks it names, as the registry
+// holds them now, and the Style Dictionary version. A hook named by a string is
+// only that string in the configuration, and its body lives in the registry,
+// which a `register*` call changes without anything on disk moving — the
+// README's own Custom Formats pattern registers inside the `config` function.
+// An upgrade changes the built-in hooks the same way. Neither is a file the
+// up-to-date check reads, so neither could be seen before this.
 //
 // A digest of that serialisation rather than the serialisation itself,
 // because it is held against every destination a build writes, and a
@@ -49,11 +60,18 @@ const RECORDS_VERSION = 1
 export function configFingerprint(
   root: string,
   item: ResolvedConfig,
+  configObj: Config,
 ): null | string {
   let serialised: string
   try {
     serialised = JSON.stringify(
-      [root, item.file ?? item.config],
+      [
+        root,
+        item.file ?? null,
+        configObj,
+        namedHooksOf(configObj),
+        StyleDictionary.VERSION,
+      ],
       (_key, value: unknown) =>
         typeof value === 'function' ? `[fn]${String(value)}` : value,
     )
@@ -124,14 +142,15 @@ export function declaredDestinations(
 export function isUpToDate(
   {
     destinationRecords,
-    root,
+    fingerprint,
+    newestSource,
   }: {
     destinationRecords: ReadonlyMap<string, DestinationRecord>
-    root: string
+    fingerprint: null | string
+    newestSource: null | number
   },
   item: ResolvedConfig,
   configObj: Config,
-  newestSource: null | number,
   only?: string[],
 ): boolean {
   // An action writes what no `destination` names, so there is nothing for
@@ -146,8 +165,6 @@ export function isUpToDate(
 
   if (newestSource === null) return false
 
-  const fingerprint = configFingerprint(root, item)
-
   for (const destination of destinations) {
     const stats = statOrNull(destination)
     if (!stats) return false
@@ -155,6 +172,13 @@ export function isUpToDate(
     const record = destinationRecords.get(destination)
     const writtenByThis =
       fingerprint !== null && record?.fingerprint === fingerprint
+
+    // Recorded against something else: another configuration, or this one
+    // before a hook it names changed or Style Dictionary was upgraded. The
+    // file holds that compile's output, and nothing the comparison below
+    // reads can say so — which is why a configuration given as a path is
+    // held to this as much as one given as an object.
+    if (record !== undefined && !writtenByThis) return false
 
     // The file has moved since this configuration wrote it, so something
     // wrote it afterwards and nothing here can say what it holds. Its mtime
@@ -409,6 +433,63 @@ export function writtenDestination(
     process.cwd(),
     buildPath ? path.join(buildPath, destination) : destination,
   )
+}
+
+// The hooks a configuration names by string, each as the registry holds it
+// now: the parsers and preprocessors it lists, each platform's transforms and
+// the transforms its `transformGroup` expands to, and each file's `format`,
+// `filter` and `fileHeader`. A hook given inline is part of the configuration
+// already. The configuration's own `hooks` win over the registry, as they do
+// when Style Dictionary builds.
+//
+// **Only the hooks it names, never the whole registry.** The registry is
+// shared by the whole process, so fingerprinting all of it would let one
+// configuration's `register*` call defeat every other configuration's skip.
+function namedHooksOf(
+  configObj: Config,
+): Record<string, Record<string, unknown>> {
+  const own: Hooks = configObj.hooks ?? {}
+  const registry = StyleDictionary.hooks
+  const named: Record<string, Record<string, unknown>> = {}
+
+  const add = (kind: keyof Hooks, name: unknown) => {
+    if (typeof name !== 'string') return
+    const hook: unknown = own[kind]?.[name] ?? registry[kind][name]
+    named[kind] ??= {}
+    named[kind][name] = hook ?? null
+  }
+
+  for (const name of configObj.parsers ?? []) add('parsers', name)
+  for (const name of configObj.preprocessors ?? []) add('preprocessors', name)
+
+  for (const platform of Object.values(configObj.platforms ?? {})) {
+    for (const name of platform.preprocessors ?? []) add('preprocessors', name)
+    for (const transform of platform.transforms ?? []) {
+      add('transforms', transform)
+    }
+
+    const group = platform.transformGroup
+    if (group !== undefined) {
+      add('transformGroups', group)
+
+      // `unknown`, because a group nobody registered is `undefined` here
+      // whatever the registry's type says.
+      const members: unknown =
+        own.transformGroups?.[group] ?? registry.transformGroups[group]
+      if (Array.isArray(members)) {
+        for (const name of members) add('transforms', name)
+      }
+    }
+
+    add('fileHeaders', platform.options?.fileHeader)
+    for (const file of platform.files ?? []) {
+      add('formats', file.format)
+      add('filters', file.filter)
+      add('fileHeaders', file.options?.fileHeader)
+    }
+  }
+
+  return named
 }
 
 // `fs.statSync` without the throw. A file that is missing, or that cannot be
