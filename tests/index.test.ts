@@ -6826,6 +6826,58 @@ describe('the atomic writer', () => {
     30000,
   )
 
+  it.each([
+    { entry: 'promises.copyFile', name: 'test/copy-file-exclusive' },
+    { entry: 'copyFileSync', name: 'test/copy-file-sync-exclusive' },
+  ])(
+    'refuses a $entry with COPYFILE_EXCL over an existing file, as node:fs does',
+    async ({ name }) => {
+      // An exclusive copy asks to fail when the destination exists. Compared
+      // first, one over an identical file would be skipped as done, and a
+      // rename would quietly replace a different one.
+      StyleDictionary.registerAction({
+        do: async (_dictionary, platform, _options, vol: typeof fs) => {
+          await vol.promises.copyFile(
+            path.join('assets', 'logo.svg'),
+            path.join(String(platform.buildPath), 'logo.svg'),
+            fs.constants.COPYFILE_EXCL,
+          )
+        },
+        name: 'test/copy-file-exclusive',
+        undo: () => {},
+      })
+      StyleDictionary.registerAction({
+        do: (_dictionary, platform, _options, vol: typeof fs) => {
+          vol.copyFileSync(
+            path.join('assets', 'logo.svg'),
+            path.join(String(platform.buildPath), 'logo.svg'),
+            fs.constants.COPYFILE_EXCL,
+          )
+        },
+        name: 'test/copy-file-sync-exclusive',
+        undo: () => {},
+      })
+
+      const { asset, configFile, directory } = copyFixture(
+        `copy-exclusive-${name.replace(/\W/g, '-')}`,
+        name,
+      )
+      fs.mkdirSync(path.join(directory, 'out'), { recursive: true })
+      fs.copyFileSync(asset, path.join(directory, 'out', 'logo.svg'))
+
+      const errors = await collectErrors(async () => {
+        await fromDirectory(directory, async () => {
+          await expect(
+            callBuildStart(vitePlugin({ config: configFile, silent: true })),
+          ).rejects.toThrow(/EEXIST/)
+        })
+      })
+
+      expect(errors.join('\n')).toMatch(/EEXIST/)
+    },
+    30000,
+  )
+
   it('hands a copy it does not model to the inherited cp', async () => {
     // `filter` is one of the options the walk does not honour, so a call
     // carrying it has to reach `cp` itself rather than copy everything.
