@@ -178,42 +178,52 @@ function nodeModulesWatchDirectories(paths: string[]): string[] {
 // temporary file.
 let temporaryFileCounter = 0
 
-// Whether the freshly rendered `temporary` holds exactly what `destination`
-// already holds. A rebuild whose inputs did not change renders byte-identical
-// output, and renaming that over the destination is a filesystem event the
-// host bundler reacts to — which is the whole of the rebuild loop, since
-// consuming code imports the generated file and every regenerate is therefore
-// a module-graph change. Comparing the two files rather than the `data`
-// argument keeps this indifferent to whether the caller passed a string, a
-// buffer or a stream, and to the encoding it passed with it.
+// Whether `destination` already holds exactly `rendered`. A rebuild whose
+// inputs did not change renders byte-identical output, and writing that over
+// the destination is a filesystem event the host bundler reacts to — which is
+// the whole of the rebuild loop, since consuming code imports the generated
+// file and every regenerate is therefore a module-graph change.
 //
-// A destination that cannot be read is not identical, which covers the
-// ordinary case of it not existing yet.
-async function rendersWhatIsAlreadyThere(
-  temporary: string,
+// A destination that cannot be read does not, which covers the ordinary case
+// of it not existing yet.
+async function alreadyHolds(
   destination: string,
+  rendered: Buffer,
 ): Promise<boolean> {
   try {
-    const [existing, rendered] = await Promise.all([
-      fs.promises.readFile(destination),
-      fs.promises.readFile(temporary),
-    ])
-
-    return existing.equals(rendered)
+    return (await fs.promises.readFile(destination)).equals(rendered)
   } catch {
     return false
   }
 }
 
-function rendersWhatIsAlreadyThereSync(
-  temporary: string,
-  destination: string,
-): boolean {
+function alreadyHoldsSync(destination: string, rendered: Buffer): boolean {
   try {
-    return fs.readFileSync(destination).equals(fs.readFileSync(temporary))
+    return fs.readFileSync(destination).equals(rendered)
   } catch {
     return false
   }
+}
+
+// The bytes a write of `data` leaves on disk, wherever they can be known
+// before anything is written: a string encoded the way `writeFile` encodes
+// it, with the encoding `options` names or utf8, and a buffer as it stands.
+// Style Dictionary only ever hands its volume a string. A stream or an
+// iterable cannot be read without being consumed, so it has none here, and
+// the writer compares what it wrote instead.
+function bytesToWrite(
+  data: Parameters<typeof fs.promises.writeFile>[1],
+  options: Parameters<typeof fs.promises.writeFile>[2],
+): Buffer | undefined {
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+  }
+
+  if (typeof data !== 'string') return undefined
+
+  const encoding = typeof options === 'string' ? options : options?.encoding
+
+  return Buffer.from(data, encoding ?? 'utf8')
 }
 
 function temporaryPathFor(destination: string): string {
@@ -339,16 +349,27 @@ const writeFileAtomic: typeof fs.promises.writeFile = async (
     return fs.promises.writeFile(file, data, options)
   }
 
+  // Compared before anything is created, so a rebuild that renders what is
+  // already there leaves nothing for a watcher to see — not even a temporary
+  // file created and removed again, which a raw directory watcher such as
+  // `node --watch-path` reports. A write that does change the destination
+  // still goes through a temporary file and a rename, so a concurrent reader
+  // still never sees a partial file.
+  const bytes = bytesToWrite(data, options)
+  if (bytes && (await alreadyHolds(file, bytes))) return
+
   const temporary = temporaryPathFor(file)
 
   try {
     await fs.promises.writeFile(temporary, data, options)
 
-    // The check sits in front of the rename rather than in place of it: the
-    // temporary file is still written, so a destination that does need
-    // replacing is still replaced in one atomic step and a concurrent reader
-    // still never sees a partial file.
-    if (await rendersWhatIsAlreadyThere(temporary, file)) {
+    // A stream or an iterable is only known once it is on disk, so it is the
+    // one write that still creates a temporary file for a destination it
+    // leaves unchanged.
+    if (
+      !bytes &&
+      (await alreadyHolds(file, await fs.promises.readFile(temporary)))
+    ) {
       discardTemporaryFile(temporary)
       return
     }
@@ -366,16 +387,15 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
     return
   }
 
+  // `writeFileSync` takes only a string or a buffer, so every write it is
+  // given can be compared before anything is created.
+  const bytes = bytesToWrite(data, options)
+  if (bytes && alreadyHoldsSync(file, bytes)) return
+
   const temporary = temporaryPathFor(file)
 
   try {
     fs.writeFileSync(temporary, data, options)
-
-    if (rendersWhatIsAlreadyThereSync(temporary, file)) {
-      discardTemporaryFile(temporary)
-      return
-    }
-
     renameWithRetrySync(temporary, file)
   } catch (err) {
     discardTemporaryFile(temporary)

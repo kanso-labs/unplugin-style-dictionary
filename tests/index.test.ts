@@ -4252,6 +4252,35 @@ const temporaries = (directory: string) =>
     .filter((entry) => entry.isFile() && entry.name.endsWith('.tmp'))
     .map((entry) => entry.name)
 
+// The temporary files `work` writes beside that same output through `writer`,
+// which catches one however briefly it lived. Read from the spy before the
+// restore resets it, and only the output directory counts: the up-to-date
+// records are written through a temporary file of their own, elsewhere.
+const temporaryWritesDuring = async (
+  directory: string,
+  writer: 'writeFile' | 'writeFileSync',
+  work: () => Promise<unknown>,
+) => {
+  const out = path.join(directory, 'out')
+  const writeSpy =
+    writer === 'writeFile'
+      ? vi.spyOn(fs.promises, 'writeFile')
+      : vi.spyOn(fs, 'writeFileSync')
+  try {
+    await work()
+    return writeSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (file) =>
+          typeof file === 'string' &&
+          path.dirname(file) === out &&
+          file.endsWith('.tmp'),
+      )
+  } finally {
+    writeSpy.mockRestore()
+  }
+}
+
 const settle = async (ms: number) => {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -6230,6 +6259,158 @@ describe('the atomic writer', () => {
       'written by a custom action',
     )
     expect(temporaries(directory)).toEqual([])
+  }, 30000)
+
+  it.each([
+    { half: 'async', method: 'writeFile' as const },
+    { half: 'sync', method: 'writeFileSync' as const },
+  ])(
+    'creates nothing beside an output the $half writer leaves unchanged',
+    async ({ method }) => {
+      // A rebuild that renders what is already there used to write a sibling
+      // temporary file, compare it, and delete it. Only the rename was
+      // skipped, so a raw directory watcher — `node --watch-path` on the
+      // `buildPath` — still saw an event for a compile that changed nothing,
+      // and a process it restarted rebuilt into the next restart.
+      const directory = writeFixture(`identical-${method}`)
+      const out = path.join(directory, 'out')
+
+      // The sync writer is reached only through a custom action's own
+      // `vol.writeFileSync`.
+      let actionOutput = 'written by a custom action\n'
+      StyleDictionary.registerAction({
+        do: (_dictionary, platform, _options, vol) => {
+          vol.writeFileSync(
+            path.join(String(platform.buildPath), 'from-action.txt'),
+            actionOutput,
+          )
+        },
+        name: 'test/write-fixed-through-volume',
+        undo: () => {},
+      })
+
+      const actions =
+        method === 'writeFileSync'
+          ? ['test/write-fixed-through-volume']
+          : undefined
+
+      const configFile = path.join(directory, 'sd.config.json')
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
+          platforms: {
+            css: {
+              ...(actions ? { actions } : {}),
+              buildPath: posix(out) + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+        }),
+      )
+
+      // `cache: false`, so the second build compiles and renders again
+      // rather than being skipped as up to date.
+      const plugin = vitePlugin({
+        cache: false,
+        config: configFile,
+        silent: true,
+      })
+      await callBuildStart(plugin)
+
+      const rebuild = async () => callBuildStart(plugin)
+
+      const directoryModified = fs.statSync(out).mtimeMs
+      expect(await temporaryWritesDuring(directory, method, rebuild)).toEqual(
+        [],
+      )
+
+      // Creating and removing an entry moves a directory's mtime, so this
+      // holds whichever route a stray file took.
+      expect(fs.statSync(out).mtimeMs).toBe(directoryModified)
+
+      // A rebuild that does change the output still writes a temporary file
+      // and renames it, which is also what shows the spy sees one.
+      actionOutput = 'rewritten by a custom action\n'
+      fs.writeFileSync(
+        path.join(directory, 'tokens', 'color.json'),
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+      )
+      expect(
+        await temporaryWritesDuring(directory, method, rebuild),
+      ).toHaveLength(1)
+      expect(temporaries(directory)).toEqual([])
+    },
+    30000,
+  )
+
+  it('compares a string by the bytes its encoding writes, and a buffer as it is', async () => {
+    // What is compared is what the write would leave on disk. Reading every
+    // string as utf8 would take `aGk=` written as base64 for the `aGk=` an
+    // earlier utf8 write left there, and skip a write that changes the file.
+    const directory = writeFixture('encodings')
+    const out = path.join(directory, 'out')
+
+    const written: { encoding: BufferEncoding; text: string } = {
+      encoding: 'utf8',
+      text: 'aGk=',
+    }
+    StyleDictionary.registerAction({
+      // The two forms `options` takes, and a buffer, which takes none.
+      do: (_dictionary, platform, _options, vol) => {
+        const buildPath = String(platform.buildPath)
+        vol.writeFileSync(
+          path.join(buildPath, 'named.txt'),
+          written.text,
+          written.encoding,
+        )
+        vol.writeFileSync(path.join(buildPath, 'option.txt'), written.text, {
+          encoding: written.encoding,
+        })
+        vol.writeFileSync(
+          path.join(buildPath, 'buffer.bin'),
+          Buffer.from(written.text),
+        )
+      },
+      name: 'test/write-encoded-through-volume',
+      undo: () => {},
+    })
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            actions: ['test/write-encoded-through-volume'],
+            buildPath: posix(out) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+      }),
+    )
+
+    const plugin = vitePlugin({
+      cache: false,
+      config: configFile,
+      silent: true,
+    })
+    const rebuild = async () => callBuildStart(plugin)
+    await rebuild()
+
+    expect(
+      await temporaryWritesDuring(directory, 'writeFileSync', rebuild),
+    ).toEqual([])
+
+    // The same text in another encoding is other bytes, and is written.
+    written.encoding = 'base64'
+    await rebuild()
+
+    expect(fs.readFileSync(path.join(out, 'named.txt'), 'utf8')).toBe('hi')
+    expect(fs.readFileSync(path.join(out, 'option.txt'), 'utf8')).toBe('hi')
   }, 30000)
 
   it.each([
