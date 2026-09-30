@@ -970,10 +970,31 @@ entry point that compiles without asking whether it should.
 
 Underneath all three, a write whose bytes match the destination touches nothing,
 so a rebuild that renders what is already there emits no filesystem event at
-all. That is the backstop for the targets none of the three cover.
-`tests/index.test.ts` pins each of these, the last one through a real
-`rollup.watch()` run rather than a hand-built plugin context. Do not "simplify"
-any of them.
+all. That is the backstop for the targets none of the three cover. Do not
+"simplify" any of them.
+
+**Each is pinned by a case that fails when it alone is removed**, measured, and
+with the cache off wherever the cache would otherwise decide first:
+
+- The pattern filter:
+  `does not resolve the config for a file that matches nothing`, and on webpack
+  and rspack `compiles nothing for a watch recompile no token source caused`.
+- The own-output subtraction:
+  `never rebuilds on output written beside its own sources` and its `below`
+  twin.
+- The re-entry skip: `compiles once for one token edit with the cache off`, a
+  real `rollup.watch()` counting compiles through `onBuildStart` rather than
+  bundles. With the cache on, the up-to-date check skips the re-entry before the
+  guard is asked, which is how the older rollup, rolldown and webpack cases came
+  to pin nothing (#399).
+- The byte-identical write:
+  `creates nothing beside an output the async writer leaves unchanged` and its
+  sync twin.
+
+No watcher case pins the byte skip as a loop stopper any more. Under rollup the
+re-entry skip alone also stops the loop, and since #395 webpack's recompile for
+its own output compiles nothing; measured, every watcher case passes with the
+skip removed.
 
 **The bytes are compared before any temporary file exists, and that is what
 makes "no event at all" true.** Comparing after writing one skipped only the

@@ -4772,6 +4772,86 @@ describe('under a real rollup watcher', () => {
     }
   }, 30000)
 
+  it('compiles once for one token edit with the cache off', async () => {
+    // What pins `buildStart`'s re-entry guard. Every rollup rebuild re-enters
+    // `buildStart`, and `watchChange` has already compiled for this cycle, so
+    // compiling again here is the second compile the guard exists to stop.
+    // With the cache on, the up-to-date check skips that re-entry before the
+    // guard is ever asked, and without the guard the identical bytes still
+    // stop the loop — so what is counted is compiles, through `onBuildStart`,
+    // not bundles.
+    const directory = path.join(tempDir, 'reentry')
+    const tokenSource = path.join(directory, 'tokens', 'color.json')
+    const generated = path.join(directory, 'generated', 'tokens.js')
+    const entry = path.join(directory, 'entry.js')
+    fs.mkdirSync(path.dirname(tokenSource), { recursive: true })
+    fs.mkdirSync(path.dirname(generated), { recursive: true })
+
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#000000' } } }),
+    )
+    fs.writeFileSync(
+      entry,
+      [
+        "import { ColorBrand } from './generated/tokens.js'",
+        'export const brand = ColorBrand',
+        '',
+      ].join('\n'),
+    )
+
+    let compiles = 0
+    const idle = watcherIdle()
+    const watcher = rollup.watch({
+      input: entry,
+      output: { dir: path.join(directory, 'dist'), format: 'es' },
+      plugins: [
+        rollupPlugin({
+          cache: false,
+          config: {
+            platforms: {
+              js: {
+                buildPath: posix(path.dirname(generated)) + '/',
+                files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+                transformGroup: 'js',
+              },
+            },
+            source: [posix(tokenSource)],
+          },
+          onBuildStart: () => {
+            compiles++
+          },
+          silent: true,
+        }),
+      ],
+      watch: { buildDelay: 50, onInvalidate: idle.onInvalidate },
+    })
+    idle.observe(watcher)
+    watcher.on('event', (event) => {
+      if (event.code === 'BUNDLE_END') void event.result.close()
+    })
+
+    try {
+      await waitUntil(() => fs.existsSync(generated), 20000)
+      await idle.whenIdle()
+      expect(compiles).toBe(1)
+
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+      )
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
+        20000,
+      )
+      await idle.whenIdle()
+
+      expect(compiles).toBe(2)
+    } finally {
+      await watcher.close()
+    }
+  }, 60000)
+
   it('notices an edit and a new file under a glob source', async () => {
     // Before the expansion this registered the pattern itself, which rollup's
     // FileWatcher treats as a filename that does not exist — so an edit under
