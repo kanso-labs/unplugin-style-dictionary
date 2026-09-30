@@ -65,6 +65,17 @@ const asHmrFrame = (data: unknown): HmrFrame | null => {
   return isHmrFrame(parsed) ? parsed : null
 }
 
+// The negations a dev server's ignore list gained, in order.
+const ignoreNegations = (running: ViteDevServer): string[] => {
+  const ignored = running.config.server.watch?.ignored
+  return (Array.isArray(ignored) ? ignored : [ignored]).filter(
+    (entry): entry is string =>
+      typeof entry === 'string' && entry.startsWith('!'),
+  )
+}
+
+const byName = (a: string, b: string) => a.localeCompare(b)
+
 // A real client on the same `vite-hmr` subprotocol Vite's own browser client
 // uses, reading frames off the socket. Spying on `server.hot.send` would pass
 // just as happily on a payload Vite declines to transmit, and the claim here
@@ -993,6 +1004,97 @@ describe('under a real vite dev server', () => {
     }
   }
 
+  // The same package reached through a glob matching several token files, so a
+  // negation per matched file and one per pattern come out differently. With
+  // `fromAbove` the glob starts at the app and a `**` reaches into
+  // `node_modules`, so the pattern itself names no `node_modules` segment.
+  const nodeModulesGlobTokens = (name: string, fromAbove = false) => {
+    const app = path.join(tempDir, name)
+    const tokens = path.join(app, 'node_modules', '@acme', 'tokens', 'src')
+    fs.mkdirSync(tokens, { recursive: true })
+    fs.mkdirSync(path.join(app, 'generated'), { recursive: true })
+
+    for (const [file, token] of [
+      ['color.json', { color: { brand: { value: '#123456' } } }],
+      ['size.json', { size: { base: { value: '4px' } } }],
+      ['space.json', { space: { base: { value: '8px' } } }],
+    ] as const) {
+      fs.writeFileSync(path.join(tokens, file), JSON.stringify(token))
+    }
+
+    const pattern = fromAbove
+      ? `${posix(app)}/**/tokens/src/*.json`
+      : `${posix(tokens)}/*.json`
+    const configFile = path.join(app, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          css: {
+            buildPath: posix(path.join(app, 'generated')) + '/',
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+        },
+        source: [pattern],
+      }),
+    )
+
+    return {
+      app,
+      configFile,
+      generated: path.join(app, 'generated', 'vars.css'),
+      pattern,
+      tokenFiles: ['color.json', 'size.json', 'space.json'].map((file) =>
+        posix(path.join(tokens, file)),
+      ),
+      tokenSource: path.join(tokens, 'color.json'),
+    }
+  }
+
+  it('negates a glob source under node_modules once, not once per file', async () => {
+    // chokidar tests every path it considers against the whole ignore list,
+    // and one negation per matched file made that list — and every event —
+    // grow with the token count. The pattern un-ignores the same files.
+    const { app, configFile, generated, pattern } =
+      nodeModulesGlobTokens('glob-negation')
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+      root: app,
+      server: { hmr: false, middlewareMode: true },
+    })
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    // None per file, and none for the directory the glob starts from.
+    expect(ignoreNegations(server)).toEqual([`!${pattern}`])
+  }, 30000)
+
+  it('negates each file a glob from above reaches into node_modules', async () => {
+    // A `**` from outside `node_modules` names no `node_modules` segment, so
+    // negating the pattern would say nothing Vite's `**/node_modules/**` does
+    // not overrule. Those files are negated one by one, as every file was.
+    const { app, configFile, generated, tokenFiles } = nodeModulesGlobTokens(
+      'glob-from-above',
+      true,
+    )
+
+    server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+      root: app,
+      server: { hmr: false, middlewareMode: true },
+    })
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    expect(ignoreNegations(server).toSorted(byName)).toEqual(
+      tokenFiles.map((file) => `!${file}`).toSorted(byName),
+    )
+  }, 30000)
+
   it('leaves a disabled watcher disabled when a token resolves inside node_modules', async () => {
     // `server.watch: null` is how Vite turns its watcher off, and it builds a
     // real one for any other value. Appending the negation spread that `null`
@@ -1052,17 +1154,25 @@ describe('under a real vite dev server', () => {
 
   // Windows is skipped because the negation has no effect there; the plugin's
   // own watcher is the only mechanism it has, and that is pinned elsewhere.
-  it.skipIf(process.platform === 'win32')(
-    "rebuilds through Vite's watcher on the negation alone",
-    async () => {
+  it.skipIf(process.platform === 'win32').each([
+    { fixture: nodeModulesToken, source: 'a literal source' },
+    { fixture: nodeModulesGlobTokens, source: 'a glob source' },
+    {
+      fixture: (name: string) => nodeModulesGlobTokens(name, true),
+      source: 'a glob reaching in from above',
+    },
+  ])(
+    "rebuilds through Vite's watcher on the negation alone, for $source",
+    async ({ fixture, source }) => {
       // The plugin's own `fs.watch` on a `node_modules` token directory is
       // refused, which its `catch` tolerates, so the negation in Vite's
       // ignore list is the one path left to deliver the edit. A plain
       // directory rather than a link, so no realpath is registered either.
       // Only the plugin's own calls are refused, told apart by where they
       // come from: chokidar calls \`fs.watch\` too, for the same directories.
-      const { app, configFile, generated, tokenSource } =
-        nodeModulesToken('negation-only')
+      const { app, configFile, generated, tokenSource } = fixture(
+        `negation-only-${source.replaceAll(' ', '-')}`,
+      )
 
       const realWatch = fs.watch.bind(fs)
       const pluginSource = path.join('src', 'index.ts')
@@ -1112,7 +1222,8 @@ describe('under a real vite dev server', () => {
   )
 
   it('leaves the rest of node_modules ignored', async () => {
-    // The negation names each file exactly, and that is the point:
+    // The negation names what the build reads — the source pattern, or the
+    // file a `**` from outside reached — and that is the point:
     // `!**/node_modules/**` would hand the whole dependency tree back to the
     // watcher, which on a real project is thousands of files that no token
     // build reads.

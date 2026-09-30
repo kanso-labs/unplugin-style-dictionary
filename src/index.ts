@@ -26,7 +26,11 @@ import {
   watchPatternsOf,
 } from './patterns.js'
 import { createScheduler } from './scheduler.js'
-import { isWatchedSource, registeredSpellingOf } from './watch-filter.js'
+import {
+  isWatchedSource,
+  matchesWatchedFile,
+  registeredSpellingOf,
+} from './watch-filter.js'
 
 export type * from './types.js'
 
@@ -108,15 +112,40 @@ function isMessageChannel(value: unknown): value is (message: string) => void {
 // events for an edit, while a token file outside the root but outside
 // `node_modules` rebuilt in the same run.
 //
-// A negation naming the file exactly is what un-ignores it, and is deliberately
-// the narrowest form that works. `!**/node_modules/**` would restore the whole
-// dependency tree to the watcher.
-function nodeModulesNegations(paths: string[]): string[] {
-  const negations = new Set<string>()
+// A negation of the pattern that names the files is what un-ignores them: one
+// `!<pattern>` for each source pattern that itself reaches into
+// `node_modules`, a literal being its own pattern. It un-ignores exactly the
+// files Style Dictionary reads, which is why it is not the broadening that
+// must not be done — `!**/node_modules/**`, or the package directory, would
+// restore thousands of files no build reads to the watcher.
+//
+// It used to be one negation per matched file and per static parent
+// directory. chokidar tests every path it considers against the whole list,
+// so start-up and every later event grew with the token count: measured on
+// Vite 8.3.0 with 2,000 token files, 1,373ms of ignore-matching at start-up
+// and 116µs per path, against 14ms and 1.4µs for the one pattern. The
+// directory needs no entry, because the pattern alone delivers the edit, and
+// a file created there later reaches the plugin's own watcher from
+// `nodeModulesWatchDirectories`.
+//
+// A file a pattern outside `node_modules` reached — a `**` from above — is
+// still negated on its own: negating that pattern would say nothing about
+// `node_modules`, and Vite's `**/node_modules/**` is ahead of it in the list.
+function nodeModulesNegations(
+  patterns: WatchPatterns,
+  paths: string[],
+): string[] {
+  const reaching = [...patterns.globs, ...patterns.literals].filter((pattern) =>
+    pattern.includes('/node_modules/'),
+  )
+  const negations = new Set(reaching.map((pattern) => `!${pattern}`))
 
   for (const file of paths) {
     const normalised = file.replace(/\\/g, '/')
-    if (normalised.includes('/node_modules/')) negations.add(`!${normalised}`)
+    if (!normalised.includes('/node_modules/') || isDirectory(file)) continue
+    if (matchesWatchedFile(normalised, reaching)) continue
+
+    negations.add(`!${normalised}`)
   }
 
   return Array.from(negations)
@@ -1763,10 +1792,10 @@ const unpluginFactory: UnpluginFactory<
             try {
               const resolved = await resolveConfigs()
               if (resolved.length > 0) {
-                const { paths } = await getWatchTargets(resolved)
+                const { paths, patterns } = await getWatchTargets(resolved)
                 appendChokidarIgnored(
                   config.build.watch,
-                  nodeModulesNegations(paths),
+                  nodeModulesNegations(patterns, paths),
                 )
               }
             } catch (err) {
@@ -1814,8 +1843,8 @@ const unpluginFactory: UnpluginFactory<
           // the dev server's, and says nothing about `vite build --watch`.
           if (config.server.watch === null) return
 
-          const { paths } = await getWatchTargets(startupResolved)
-          const negations = nodeModulesNegations(paths)
+          const { paths, patterns } = await getWatchTargets(startupResolved)
+          const negations = nodeModulesNegations(patterns, paths)
           if (negations.length === 0) return
 
           // Appended to whatever the consumer asked for, not replacing it.
