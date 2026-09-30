@@ -4471,7 +4471,10 @@ const temporaryWritesDuring = async (
   writer: 'writeFile' | 'writeFileSync',
   work: () => Promise<unknown>,
 ) => {
-  const out = path.join(directory, 'out')
+  // Resolved, because the writer puts its temporary file beside the
+  // destination's real target, and on macOS the temporary directory is
+  // reached through a link.
+  const out = fs.realpathSync(path.join(directory, 'out'))
   const writeSpy =
     writer === 'writeFile'
       ? vi.spyOn(fs.promises, 'writeFile')
