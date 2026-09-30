@@ -20,6 +20,25 @@ import vitePlugin from '../src/vite.ts'
 // was unexecuted, including the watcher listener that holds both the rebuild
 // trigger and the guard keeping the plugin off its own output.
 
+// A pass-through, so a case can count how often the plugin walks the token
+// tree: every walk is one `glob` call. Nothing else here behaves differently.
+const walks = vi.hoisted(() => ({ count: 0 }))
+vi.mock('tinyglobby', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  const original = actual.glob
+  if (typeof original !== 'function') {
+    throw new TypeError('tinyglobby no longer exports glob')
+  }
+
+  return {
+    ...actual,
+    glob: (...args: unknown[]): unknown => {
+      walks.count++
+      return Reflect.apply(original, undefined, args)
+    },
+  }
+})
+
 const posix = (value: string) => value.replace(/\\/g, '/')
 
 const settle = async (ms: number) => {
@@ -216,6 +235,98 @@ describe('under a real vite dev server', () => {
       JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
     )
 
+    await waitUntil(
+      () => fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
+      10000,
+    )
+    expect(fs.readFileSync(generated, 'utf-8')).toContain('#ff0000')
+  }, 30000)
+
+  it('walks the token tree twice for one edit, and re-adds nothing unchanged', async () => {
+    // One edit walked the tree four times: `watchChange` expanded the list
+    // before scheduling only to keep its patterns, the up-to-date check walked
+    // it, the refresh walked it, and `watchChange` walked it again afterwards
+    // for `addWatchFile` — which under Vite repeats what the refresh already
+    // added. And the refresh handed chokidar the whole unchanged list.
+    const { configFile, directory, generated, tokenSource } =
+      writeFixture('two-walks')
+
+    const running = await boot(directory, configFile)
+    await waitUntil(() => fs.existsSync(generated), 10000)
+    await settle(300)
+
+    const addSpy = vi.spyOn(running.watcher, 'add')
+    const walksBefore = walks.count
+    try {
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+      )
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
+        10000,
+      )
+
+      // `watchChange`'s own work after the build finishes after the output
+      // is written, so it is given time to land before anything is counted.
+      await settle(500)
+
+      // The up-to-date check and the refresh; nothing else walks.
+      expect(walks.count - walksBefore).toBe(2)
+      expect(addSpy).not.toHaveBeenCalled()
+    } finally {
+      addSpy.mockRestore()
+    }
+  }, 30000)
+
+  it('rebuilds a literal token source that was deleted and recreated', async () => {
+    // The refresh hands the watcher only what it does not have — and a path
+    // that no longer exists, because on chokidar's non-fsevents path, which
+    // Linux takes, adding a missing path is what watches its parent for that
+    // name. Diffing against the previous list alone would never re-add it.
+    //
+    // The token sits outside Vite's root, as a sibling package's would. Inside
+    // it, chokidar watches the whole tree anyway and sees the file come back
+    // whatever the plugin adds.
+    const { configFile, directory, generated, tokenSource } =
+      writeFixture('recreated-literal')
+    const root = path.join(directory, 'app')
+    fs.mkdirSync(root)
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: posix(path.join(directory, 'generated')) + '/',
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [posix(tokenSource)],
+      }),
+    )
+
+    await boot(root, configFile)
+    await waitUntil(() => fs.existsSync(generated), 10000)
+    await settle(300)
+
+    fs.rmSync(tokenSource)
+    await settle(1000)
+
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#00ff00' } } }),
+    )
+    await waitUntil(
+      () => fs.readFileSync(generated, 'utf-8').includes('#00ff00'),
+      10000,
+    )
+    await settle(300)
+
+    fs.writeFileSync(
+      tokenSource,
+      JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+    )
     await waitUntil(
       () => fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
       10000,
