@@ -4491,6 +4491,26 @@ const temporaryWritesDuring = async (
   }
 }
 
+// A css platform writing `out/vars.css` under `directory`, with whatever a case
+// has already put at that path left standing.
+const writeVarsConfig = (directory: string) => {
+  const configFile = path.join(directory, 'sd.config.json')
+  fs.writeFileSync(
+    configFile,
+    JSON.stringify({
+      platforms: {
+        css: {
+          buildPath: posix(path.join(directory, 'out')) + '/',
+          files: [{ destination: 'vars.css', format: 'css/variables' }],
+          transformGroup: 'css',
+        },
+      },
+      source: [posix(path.join(directory, 'tokens')) + '/*.json'],
+    }),
+  )
+  return configFile
+}
+
 // Custom actions copying `assets/logo.svg` into a platform's `buildPath` through
 // the volume they are handed, as a consumer's own action would: one for each
 // copy entry point `copy_assets` does not reach.
@@ -6609,6 +6629,64 @@ describe('the atomic writer', () => {
       await rebuildInNewProcess()
 
       expect(temporaries(directory)).toEqual(['.vars.1.0.tmp'])
+    },
+    30000,
+  )
+
+  it.each([
+    { layout: 'a file it points at', target: 'vars.css', written: true },
+    { layout: 'a file not written yet', target: 'missing.css', written: false },
+  ])(
+    'writes through a symbolic link to $layout, and keeps the link',
+    async ({ target, written }) => {
+      // A rename onto a link replaces the link with a regular file, so the
+      // file it pointed at was never updated again, where Style Dictionary's
+      // own in-place write goes through it.
+      const directory = writeFixture(`link-${target}`)
+      const out = path.join(directory, 'out')
+      const shared = path.join(directory, 'shared')
+      fs.mkdirSync(out, { recursive: true })
+      fs.mkdirSync(shared, { recursive: true })
+      if (written) fs.writeFileSync(path.join(shared, target), 'OLD\n')
+      fs.symlinkSync(
+        path.join('..', 'shared', target),
+        path.join(out, 'vars.css'),
+        'file',
+      )
+
+      await callBuildStart(
+        vitePlugin({ config: writeVarsConfig(directory), silent: true }),
+      )
+
+      expect(fs.lstatSync(path.join(out, 'vars.css')).isSymbolicLink()).toBe(
+        true,
+      )
+      expect(fs.readFileSync(path.join(shared, target), 'utf-8')).toContain(
+        '--color-brand: #0070f3;',
+      )
+      expect(temporaries(directory)).toEqual([])
+    },
+    30000,
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'keeps the mode of the file it replaces',
+    async () => {
+      // A group-restricted destination came back at the umask default, 0640
+      // becoming 0644, where an in-place write keeps it. Windows is skipped:
+      // `chmod` there sets the read-only bit and nothing else.
+      const directory = writeFixture('mode')
+      const vars = path.join(directory, 'out', 'vars.css')
+      fs.mkdirSync(path.dirname(vars), { recursive: true })
+      fs.writeFileSync(vars, 'OLD\n')
+      fs.chmodSync(vars, 0o640)
+
+      await callBuildStart(
+        vitePlugin({ config: writeVarsConfig(directory), silent: true }),
+      )
+
+      expect(fs.readFileSync(vars, 'utf-8')).toContain('--color-brand')
+      expect(fs.statSync(vars).mode & 0o777).toBe(0o640)
     },
     30000,
   )

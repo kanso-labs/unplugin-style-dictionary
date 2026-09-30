@@ -217,6 +217,29 @@ function alreadyHoldsSync(destination: string, rendered: Buffer): boolean {
   }
 }
 
+// The file a write of `destination` should replace. A rename onto a symbolic
+// link replaces the link itself with a regular file, so the file it pointed at
+// was never updated again — where Style Dictionary's own in-place write goes
+// through the link. The real target is what gets the temporary sibling and the
+// rename, since a link and its target may sit on different filesystems and a
+// rename is only atomic within one. A dangling link is followed to the target
+// it names, which the write then creates; anything else that cannot be
+// resolved — the ordinary case of a file not written yet — is kept as given.
+function atomicTargetOf(destination: string): string {
+  try {
+    return fs.realpathSync(destination)
+  } catch {
+    try {
+      return path.resolve(
+        path.dirname(destination),
+        fs.readlinkSync(destination),
+      )
+    } catch {
+      return destination
+    }
+  }
+}
+
 // The bytes a write of `data` leaves on disk, wherever they can be known
 // before anything is written: a string encoded the way `writeFile` encodes
 // it, with the encoding `options` names or utf8, and a buffer as it stands.
@@ -259,6 +282,27 @@ function isRunning(pid: number): boolean {
       'code' in err &&
       err.code === 'ESRCH'
     )
+  }
+}
+
+// Gives the temporary file the mode of the file it is about to replace, and
+// its owner when running as root, as `write-file-atomic` does. An in-place
+// write keeps both, and a restricted destination used to come back at the
+// umask default: 0640 became 0644. A destination that does not exist yet has
+// nothing to keep. A hard link to the destination is still replaced rather
+// than updated, because keeping it would mean writing in place, which is the
+// partial-read window the rename exists to close.
+function keepExistingMode(temporary: string, target: string): void {
+  let existing: fs.Stats
+  try {
+    existing = fs.statSync(target)
+  } catch {
+    return
+  }
+
+  fs.chmodSync(temporary, existing.mode & 0o7777)
+  if (process.getuid?.() === 0) {
+    fs.chownSync(temporary, existing.uid, existing.gid)
   }
 }
 
@@ -444,11 +488,15 @@ const writeFileAtomic: typeof fs.promises.writeFile = async (
   // `node --watch-path` reports. A write that does change the destination
   // still goes through a temporary file and a rename, so a concurrent reader
   // still never sees a partial file.
-  sweepAbandonedTemporaries(file)
+  //
+  // Every step works on the destination's real target rather than the path as
+  // given — see `atomicTargetOf`.
+  const target = atomicTargetOf(file)
+  sweepAbandonedTemporaries(target)
   const bytes = bytesToWrite(data, options)
-  if (bytes && (await alreadyHolds(file, bytes))) return
+  if (bytes && (await alreadyHolds(target, bytes))) return
 
-  const temporary = temporaryPathFor(file)
+  const temporary = temporaryPathFor(target)
 
   try {
     await fs.promises.writeFile(temporary, data, options)
@@ -458,13 +506,14 @@ const writeFileAtomic: typeof fs.promises.writeFile = async (
     // leaves unchanged.
     if (
       !bytes &&
-      (await alreadyHolds(file, await fs.promises.readFile(temporary)))
+      (await alreadyHolds(target, await fs.promises.readFile(temporary)))
     ) {
       discardTemporaryFile(temporary)
       return
     }
 
-    await renameWithRetry(temporary, file)
+    keepExistingMode(temporary, target)
+    await renameWithRetry(temporary, target)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
@@ -479,15 +528,17 @@ const writeFileSyncAtomic: typeof fs.writeFileSync = (file, data, options) => {
 
   // `writeFileSync` takes only a string or a buffer, so every write it is
   // given can be compared before anything is created.
-  sweepAbandonedTemporaries(file)
+  const target = atomicTargetOf(file)
+  sweepAbandonedTemporaries(target)
   const bytes = bytesToWrite(data, options)
-  if (bytes && alreadyHoldsSync(file, bytes)) return
+  if (bytes && alreadyHoldsSync(target, bytes)) return
 
-  const temporary = temporaryPathFor(file)
+  const temporary = temporaryPathFor(target)
 
   try {
     fs.writeFileSync(temporary, data, options)
-    renameWithRetrySync(temporary, file)
+    keepExistingMode(temporary, target)
+    renameWithRetrySync(temporary, target)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
@@ -515,16 +566,19 @@ const copyFileAtomic: typeof fs.promises.copyFile = async (
     return fs.promises.copyFile(source, destination, mode)
   }
 
-  sweepAbandonedTemporaries(destination)
-  if (await alreadyHolds(destination, await fs.promises.readFile(source))) {
+  // A copy takes its source's mode, as `node:fs`'s own does, so only the
+  // target is resolved here.
+  const target = atomicTargetOf(destination)
+  sweepAbandonedTemporaries(target)
+  if (await alreadyHolds(target, await fs.promises.readFile(source))) {
     return
   }
 
-  const temporary = temporaryPathFor(destination)
+  const temporary = temporaryPathFor(target)
 
   try {
     await fs.promises.copyFile(source, temporary, mode)
-    await renameWithRetry(temporary, destination)
+    await renameWithRetry(temporary, target)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
@@ -541,14 +595,15 @@ const copyFileSyncAtomic: typeof fs.copyFileSync = (
     return
   }
 
-  sweepAbandonedTemporaries(destination)
-  if (alreadyHoldsSync(destination, fs.readFileSync(source))) return
+  const target = atomicTargetOf(destination)
+  sweepAbandonedTemporaries(target)
+  if (alreadyHoldsSync(target, fs.readFileSync(source))) return
 
-  const temporary = temporaryPathFor(destination)
+  const temporary = temporaryPathFor(target)
 
   try {
     fs.copyFileSync(source, temporary, mode)
-    renameWithRetrySync(temporary, destination)
+    renameWithRetrySync(temporary, target)
   } catch (err) {
     discardTemporaryFile(temporary)
     throw err
