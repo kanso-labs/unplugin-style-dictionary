@@ -4302,29 +4302,49 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })
 
     it('keeps an unselected platform out of the watch list', async () => {
-      // The own-output guard has to cover every declared platform, not only
+      // The own-output record has to cover every declared platform, not only
       // the ones this compile built: a file an unselected platform wrote
-      // earlier is still the plugin's, and treating it as a token source would
-      // rebuild on it forever.
+      // earlier is still the plugin's, and treating it as a token source
+      // would rebuild once for every change to it. Its output sits inside the
+      // source glob, so the record is the only thing that can exclude it, and
+      // the cache is off so a wrongly triggered rebuild really runs.
       const directory = path.join(tempDir, 'scoped-guard')
-      const { configFile: scoped } = threePlatforms(directory)
+      fs.mkdirSync(directory, { recursive: true })
+      fs.writeFileSync(
+        path.join(directory, 'tokens.json'),
+        JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+      )
 
       const plugin = vitePlugin({
-        config: scoped,
+        cache: false,
+        config: {
+          platforms: {
+            css: {
+              buildPath: posix(path.join(directory, 'css-out')) + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+            json: {
+              buildPath: posix(directory) + '/',
+              files: [{ destination: 'flat.json', format: 'json/flat' }],
+              transformGroup: 'js',
+            },
+          },
+          source: [posix(directory) + '/*.json'],
+        },
         logLevel: 'silent',
         platforms: ['css'],
       })
       await callBuildStart(plugin)
 
-      // scss was never built by this compile, and its destination is still
+      // json was never built by this compile, and its destination is still
       // recognised as the plugin's own output rather than as a source.
-      const unselectedOutput = path.join(directory, 'scss-out', 'vars.scss')
-      fs.mkdirSync(path.dirname(unselectedOutput), { recursive: true })
-      fs.writeFileSync(unselectedOutput, '// touched by the test\n')
+      const unselectedOutput = path.join(directory, 'flat.json')
+      fs.writeFileSync(unselectedOutput, '{}\n')
 
       const buildSpy = vi.spyOn(StyleDictionary.prototype, 'buildPlatform')
       try {
-        await callWatchChange(plugin, unselectedOutput)
+        await callWatchChange(plugin, posix(unselectedOutput))
         expect(buildSpy).not.toHaveBeenCalled()
       } finally {
         buildSpy.mockRestore()

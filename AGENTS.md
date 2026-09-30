@@ -1101,16 +1101,20 @@ ones it skipped, so asking about all of them means the answer is always "not up
 to date" and `cache` can never fire for a scoped configuration. The own-output
 set is the opposite and must keep covering _every_ declared platform: a file an
 unselected platform wrote on an earlier build is still the plugin's, and
-dropping it would let a watcher treat it as a token source and rebuild forever.
-And the whole selection is validated before anything is built, because Style
-Dictionary's `buildPlatform` rejects an unknown name only when it reaches it —
-measured: with the check removed, `css` is on disk when the throw for `nope`
-arrives. It is validated before the up-to-date check too, since that check
-judges a selection by the destinations declared for it and cannot see a name the
-configuration does not define: until #392, `['css', 'nope']` with `css` current
-was skipped as up to date and the typo said nothing until a source changed. The
-check runs in both places through one `checkSelection`, because a build with
-`cache: false` never reaches the first.
+dropping it would let a watcher treat it as a token source and rebuild once for
+every change to it — not a loop, since a scoped rebuild never rewrites that
+file, and measured as such in #400.
+`keeps an unselected platform out of the watch list` pins it with that file
+inside the source glob and the cache off, the only shape in which the record is
+what decides. And the whole selection is validated before anything is built,
+because Style Dictionary's `buildPlatform` rejects an unknown name only when it
+reaches it — measured: with the check removed, `css` is on disk when the throw
+for `nope` arrives. It is validated before the up-to-date check too, since that
+check judges a selection by the destinations declared for it and cannot see a
+name the configuration does not define: until #392, `['css', 'nope']` with `css`
+current was skipped as up to date and the typo said nothing until a source
+changed. The check runs in both places through one `checkSelection`, because a
+build with `cache: false` never reaches the first.
 
 The per-platform loop is sequential, matching the configuration loop it sits
 inside. `buildAllPlatforms` fanning its own platforms out with `Promise.all` is
