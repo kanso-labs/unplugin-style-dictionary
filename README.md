@@ -554,8 +554,10 @@ StyleDictionary({
 ```
 
 `'warn'` is the level worth knowing about: Style Dictionary's warnings without
-the plugin's own progress lines and size table. `silent: true` is an alias for
-`'silent'`.
+the plugin's own progress lines and size table. Style Dictionary's own lines
+stay — the platform name and the `✔︎` for each file it wrote — because `'warn'`
+leaves its verbosity at the default, and only `'silent'` quiets them.
+`silent: true` is an alias for `'silent'`.
 
 A compile that fails is reported at every level, including `'silent'`, which is
 why there is no `'error'`. `log.warnings` is never touched: if your
@@ -566,12 +568,12 @@ configuration turns a warning into a thrown build, that stays your decision.
 Through your bundler, not straight to the console, and each one takes them its
 own way:
 
-| Target             | Progress lines           | A failed compile                   |
-| ------------------ | ------------------------ | ---------------------------------- |
-| Vite               | `config.logger.info`     | `config.logger.error`              |
-| Rollup, Rolldown   | the plugin context's log | the context's warning channel      |
-| Webpack, Rspack    | the console              | `compilation.warnings`, so `stats` |
-| No host (one-shot) | the console              | the console                        |
+| Target             | Progress lines and size table | A failed compile                   |
+| ------------------ | ----------------------------- | ---------------------------------- |
+| Vite               | `config.logger.info`          | `config.logger.error`              |
+| Rollup, Rolldown   | the plugin context's log      | the context's warning channel      |
+| Webpack, Rspack    | the console                   | `compilation.warnings`, so `stats` |
+| No host (one-shot) | the console                   | the console                        |
 
 That is what makes a `customLogger` and `clearScreen` work under Vite, and what
 puts a failed compile into `stats.toJson()` under webpack — where it reaches CI
@@ -592,9 +594,12 @@ than `compilation.errors`, so `failOnError: false` really does leave the build
 passing.
 
 **Your bundler's own log level applies.** `vite --logLevel silent` silences
-Vite's logger, and the plugin's lines are Vite's logger's now, so they go too.
-Nothing is lost by it that matters: `failOnError` decides whether a broken token
-set stops the build, and it decides that whether or not anything was printed.
+Vite's logger, and the plugin's lines are Vite's logger's now, so they go too —
+the size table included. Style Dictionary's own lines are not among them: the
+platform name and the `✔︎` for each file it wrote are its own `console` calls, so
+they still print unless the plugin's `logLevel` is `'silent'`. Nothing is lost
+by it that matters: `failOnError` decides whether a broken token set stops the
+build, and it decides that whether or not anything was printed.
 
 Colour follows the usual conventions, which it previously ignored entirely: no
 escapes when `NO_COLOR` is set, or when the stream is not a terminal, or under
@@ -729,14 +734,21 @@ const plugin = styleDictionary.rollup({ config: 'sd.config.json' })
  * build (e.g. `tsdown`/`rolldown build` without `--watch`) only builds once, in
  * `buildStart`.
  *
- * Everything the plugin says goes through the host rather than to the console:
- * Vite's `config.logger`, the plugin context under rollup and rolldown, and
- * `compilation.warnings` under webpack, which is what puts a failed compile in
- * `stats.toJson()`. A failure is reported on the warning channel and never the
- * error one — rollup's `this.error` aborts the bundle, and that decision is
- * `failOnError`'s alone. Where no host offers a channel the console is used,
- * with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the stream is a
- * terminal.
+ * What the plugin says goes through the host wherever the host has a channel
+ * for it: Vite's `config.logger`, the plugin context under rollup and
+ * rolldown, and `compilation.warnings` under webpack and rspack, which is what
+ * puts a failed compile in `stats.toJson()`. The progress lines and the size
+ * table take the host's `info` channel, and webpack and rspack have none, so
+ * there both go to the console. A failure is reported on the warning channel
+ * and never the error one — rollup's `this.error` aborts the bundle, and that
+ * decision is `failOnError`'s alone. Where no host offers a channel the console
+ * is used, with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the
+ * stream is a terminal.
+ *
+ * Style Dictionary's own lines are not the plugin's. The platform name and the
+ * `✔︎` for each file it wrote are its own `console` calls, so they reach the
+ * console under every host, whatever the host's log level. `logLevel: 'silent'`
+ * quiets them, as does `log.verbosity: 'silent'` in the configuration.
  *
  * The three `onBuild*` hooks are called synchronously and their return value
  * is not awaited, so a build never waits for one. A hook may still be written

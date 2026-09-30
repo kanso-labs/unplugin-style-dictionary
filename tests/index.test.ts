@@ -3647,6 +3647,61 @@ describe('unplugin-style-dictionary (vite target)', () => {
       }
     })
 
+    it('hands the size table to the host too, unpainted and unprefixed', async () => {
+      // The table was the one thing the plugin still wrote with a bare
+      // `console.log`, so `vite --logLevel silent` and a recording
+      // `customLogger` both left it on stdout.
+      //
+      // Style Dictionary's own lines are its `console` calls rather than the
+      // plugin's, so the configuration silences them — whatever reaches the
+      // console below is then something the plugin failed to route.
+      fs.writeFileSync(
+        configFile,
+        JSON.stringify({
+          log: { verbosity: 'silent' },
+          platforms: {
+            css: {
+              buildPath: tempDir.replace(/\\/g, '/') + '/',
+              files: [{ destination: 'vars.css', format: 'css/variables' }],
+              transformGroup: 'css',
+            },
+          },
+          source: [tokenFile.replace(/\\/g, '/')],
+        }),
+      )
+
+      const infos: string[] = []
+      const warned: string[] = []
+      const previousEnv = { ...process.env }
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      try {
+        // Colour allowed on stdout, so an escape in a row the host received
+        // could only have come from painting it for the console.
+        for (const key of ['NO_COLOR', 'TERM']) {
+          delete process.env[key]
+        }
+        process.env.FORCE_COLOR = '1'
+
+        await callWithContext(vitePlugin({ config: configFile }), {
+          info: (message: string) => infos.push(message),
+          warn: (message: string) => warned.push(message),
+        })
+
+        // `SIZE_LINE` pins the shape the console path prints, which is
+        // neither painted nor prefixed — a row carrying either fails it.
+        const rows = infos.filter((message) => message.includes('gzip:'))
+        expect(rows).toHaveLength(1)
+        expect(rows[0]).toMatch(SIZE_LINE)
+
+        expect(warned).toEqual([])
+        expect(logSpy).not.toHaveBeenCalled()
+      } finally {
+        process.env = previousEnv
+        logSpy.mockRestore()
+      }
+    })
+
     it('falls back to the console when the context offers nothing', async () => {
       // The unit-test stub, and any host whose context carries no channels.
       // Feature-detected rather than assumed: calling `this.warn` against a
@@ -6415,17 +6470,19 @@ describe("when the host's root is not the working directory", () => {
   it('prints a size for the file it wrote', async () => {
     const { file, root } = fixture('size-report')
 
-    // The table goes straight to the console, and so does Style Dictionary's
-    // own line for each file at the default level the table needs.
+    // The table goes through Vite's logger. Style Dictionary's own line for
+    // each file still goes straight to the console at the default level the
+    // table needs, which is what the spy is for.
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
-      const { errors } = await buildUnderViteRoot(root, {})
-      const rows = logSpy.mock.calls
-        .map((call) => stripAnsi(String(call[0])))
-        .filter((line) => line.includes('gzip:'))
+      const { errors, info } = await buildUnderViteRoot(root, {})
+      const rows = info.filter((line) => line.includes('gzip:'))
 
       expect(errors).toEqual([])
       expect(rows).toHaveLength(1)
+      expect(
+        logSpy.mock.calls.some((call) => String(call[0]).includes('gzip:')),
+      ).toBe(false)
 
       // Shown relative to the host's root, the directory Vite prints its own
       // output from. A root read before the host assigned it would be the

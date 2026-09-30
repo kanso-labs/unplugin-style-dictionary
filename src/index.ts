@@ -1206,6 +1206,22 @@ const unpluginFactory: UnpluginFactory<
     )
   }
 
+  // The size table, by the route `log` gives an `'info'` line and without its
+  // prefix, which would push every row out of line with the next. It takes a
+  // renderer rather than finished lines because only this end knows where they
+  // go, and so whether to paint them: nothing painted is handed to a host.
+  //
+  // Under webpack and rspack there is no `info` channel, so the table goes to
+  // the console beside the progress lines, as README documents.
+  const logTable = (render: (colour: boolean) => string[]): void => {
+    if (host?.info) {
+      for (const line of render(false)) host.info(line)
+      return
+    }
+
+    for (const line of render(stdoutColour)) console.log(line)
+  }
+
   // Resolve config file paths / objects. The work is `resolveConfigOption`'s;
   // what this adds is the instance it runs for, read at the moment of the call.
   // `root` is assigned by the host after the factory has run, so it is passed
@@ -1262,6 +1278,7 @@ const unpluginFactory: UnpluginFactory<
     failOnError,
     generatedDestinations,
     log,
+    logTable,
     notifyBuildOutcome: (error) => {
       notifyBuildOutcome?.(error)
     },
@@ -1273,7 +1290,6 @@ const unpluginFactory: UnpluginFactory<
     quiet,
     report,
     root: () => root,
-    stdoutColour,
     verbosity,
     volume: atomicVolume,
     watch: options.watch,

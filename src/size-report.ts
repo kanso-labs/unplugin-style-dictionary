@@ -4,17 +4,19 @@ import zlib from 'node:zlib'
 
 import { paint } from './colour.js'
 
-// The size-and-gzip table, in a function of its own so that the compile
-// `try` in `runBuilds` can stop before it. Everything here is presentation
-// over files Style Dictionary has already finished writing, so a throw from
-// it is a reporting bug and nothing more.
+// The size-and-gzip table's lines, in a function of its own so that the
+// compile `try` in `runBuilds` can stop before it. Everything here is
+// presentation over files Style Dictionary has already finished writing, so a
+// throw from it is a reporting bug and nothing more.
 //
-// `root` and whether stdout takes colour belong to the plugin instance, so
-// they are handed in rather than held.
-export function reportSizes(
-  { root, stdoutColour }: { root: string; stdoutColour: boolean },
+// It returns the lines rather than printing them, because where they go is
+// the instance's to decide: a host's `info` channel where one exists, stdout
+// otherwise. `colour` says whether to paint them, which only stdout ever asks
+// for — a host renders its own output.
+export function sizeTable(
+  { colour, root }: { colour: boolean; root: string },
   generatedFiles: Set<string>,
-): void {
+): string[] {
   const fileInfos: Array<{
     coloredPath: string
     gzipSizeStr: string
@@ -27,13 +29,10 @@ export function reportSizes(
       const displayPath = path.relative(root, filePath).replace(/\\/g, '/')
       const dir = path.dirname(displayPath)
       const base = path.basename(displayPath)
-      // The table goes to stdout, so it follows stdout's decision — which
-      // is not always stderr's, since the two are redirected separately.
       const coloredPath =
         dir === '.'
-          ? paint('32', base, stdoutColour)
-          : paint('90', `${dir}/`, stdoutColour) +
-            paint('32', base, stdoutColour)
+          ? paint('32', base, colour)
+          : paint('90', `${dir}/`, colour) + paint('32', base, colour)
 
       try {
         const stats = fs.statSync(filePath)
@@ -60,6 +59,8 @@ export function reportSizes(
     }
   }
 
+  const lines: string[] = []
+
   if (fileInfos.length > 0) {
     const longestPathLength = Math.max(
       ...fileInfos.map((f) => f.relativeDisplayPath.length),
@@ -75,15 +76,13 @@ export function reportSizes(
         Math.max(2, longestPathLength - info.relativeDisplayPath.length + 2),
       )
       const sizePadded = info.sizeStr.padStart(longestSizeLength)
-      console.log(
+      lines.push(
         info.coloredPath +
           pathPadding +
-          paint(
-            '90',
-            `${sizePadded} │ gzip: ${info.gzipSizeStr}`,
-            stdoutColour,
-          ),
+          paint('90', `${sizePadded} │ gzip: ${info.gzipSizeStr}`, colour),
       )
     }
   }
+
+  return lines
 }
