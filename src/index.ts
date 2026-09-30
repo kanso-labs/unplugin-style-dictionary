@@ -769,7 +769,10 @@ interface BundlerCompiler {
       tapPromise: (name: string, handler: () => Promise<void>) => void
     }
   }
+  // Set by a watcher before `watchRun`, and left unset for its first compile.
+  modifiedFiles?: ReadonlySet<string> | undefined
   options: { context?: string | undefined; mode?: string | undefined }
+  removedFiles?: ReadonlySet<string> | undefined
   watchMode: boolean
 }
 
@@ -777,6 +780,7 @@ interface BundlerCompiler {
 // and rspack `Error[]`; both are arrays of something extending `Error`, so a
 // plain one is what this pushes on either.
 interface Compilation {
+  errors: Error[]
   warnings: Error[]
 }
 
@@ -1305,6 +1309,15 @@ const unpluginFactory: UnpluginFactory<
       },
     }
 
+    // A watch recompile that `failOnError` says should fail, held for the
+    // compilation it is about to create. Thrown from `watchRun`, it reaches
+    // the same `_done` a first build's failure does, which never re-arms the
+    // watcher — so a broken token edit would end the watch session, and no
+    // later edit of any kind would rebuild. As an entry in
+    // `compilation.errors` it fails that recompile in `stats` and leaves the
+    // watcher running.
+    let heldFailure: Error | undefined
+
     compiler.hooks.compilation.tap(
       'unplugin-style-dictionary',
       (compilation) => {
@@ -1312,6 +1325,11 @@ const unpluginFactory: UnpluginFactory<
           const reported = new Error(message)
           reported.name = 'UnpluginStyleDictionaryWarning'
           compilation.warnings.push(reported)
+        }
+
+        if (heldFailure) {
+          compilation.errors.push(heldFailure)
+          heldFailure = undefined
         }
       },
     )
@@ -1352,10 +1370,61 @@ const unpluginFactory: UnpluginFactory<
       await compileOnceAcrossInstances(resolved)
       hasCompiled = true
     }
+    // The token source a watch recompile is for, spelled the way the patterns
+    // spell it, or `undefined` when none changed — an edit to application
+    // code, or this plugin's own output. Before a build has derived a watch
+    // list there is nothing to filter against, so any change counts.
+    const changedSource = (): string | undefined => {
+      const changed = [
+        ...(compiler.modifiedFiles ?? []),
+        ...(compiler.removedFiles ?? []),
+      ]
+
+      for (const file of changed) {
+        const id = registeredSpellingOf(file, linkedPaths)
+        if (
+          !cachedPatterns ||
+          isWatchedSource(id, cachedPatterns, generatedDestinations)
+        ) {
+          return id
+        }
+      }
+
+      return undefined
+    }
+
+    // A watcher's later compiles are rebuilds, and every one of them used to
+    // reach `runBuilds` without a `context`, which reads as a first build: the
+    // default `failOnError: 'build'` threw on a broken token edit and ended the
+    // watch session, `platforms.watch` was never used, `failOnError: 'serve'`
+    // failed nothing, and an edit to application code called the consumer's
+    // `config` function and fired both hooks. Its first compile has no
+    // `modifiedFiles`, and is a first build like any other.
+    const rebuildTokens = async () => {
+      if (!hasCompiled || compiler.modifiedFiles === undefined) {
+        await compileTokens()
+        return
+      }
+
+      isWatching = compiler.watchMode
+
+      const changed = changedSource()
+      if (changed === undefined) return
+
+      const resolved = await resolveConfigs()
+      if (resolved.length === 0) return
+
+      try {
+        await runBuilds(instance, resolved, path.basename(changed))
+      } catch (err) {
+        heldFailure = asError(err)
+      }
+    }
+
     compiler.hooks.run.tapPromise('unplugin-style-dictionary', compileTokens)
     compiler.hooks.watchRun.tapPromise(
       'unplugin-style-dictionary',
-      compileTokens,
+      rebuildTokens,
     )
   }
 

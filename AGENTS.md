@@ -1406,6 +1406,31 @@ reaches neither `run` nor `watchRun`. Returning early on `compiler.isChild()`
 cannot do the same job: the child runs the parent's tap, which closes over the
 parent's `compiler`, so it answers `false` on both calls.
 
+**A webpack or rspack watch recompile is a rebuild, and `watchRun` decides it.**
+Both hosts set `compiler.modifiedFiles` and `compiler.removedFiles` before
+`watchRun`, and leave `modifiedFiles` unset on webpack for a watcher's first
+compile. A later compile whose changed files include no token source — an edit
+to application code, or the plugin's own output — compiles nothing, and one
+whose files do calls `runBuilds` with a `context`. Until #395 every compile
+reached it without one, which reads as a first build: the default
+`failOnError: 'build'` threw on a broken token edit, `platforms.watch` was never
+used, and `failOnError: 'serve'` failed nothing. `watchChange` cannot take this
+decision, since on webpack it runs from `make`, after the compile.
+
+**A recompile that should fail goes on `compilation.errors`, never out of
+`watchRun`.** webpack hands an error from `watchRun` to the same `_done` a first
+build's failure reaches, and that path never re-arms the watcher — so throwing
+would end the watch session on the first broken edit, whatever `failOnError`
+asked for. The failure is held and pushed from the `compilation` tap instead,
+which fails that recompile in `stats` and leaves the watcher running.
+
+Two things about testing a watcher here. A compile that writes the generated
+file makes the watcher run one more compile straight after, because the write
+lands after the compile's start time, so no case may take "the next build" to be
+the one its edit caused. And rspack reports a file written just before the
+watcher started as modified on its first recompile, so the fixtures in
+`tests/webpack-api.test.ts` are backdated before a watch begins.
+
 **Colour is three signals in order, never one conjunction.**
 `!NO_COLOR && FORCE_COLOR !== '0' && stream.isTTY` looks like it honours all
 three and never honours `FORCE_COLOR=1` on a non-TTY — the TTY check has the
