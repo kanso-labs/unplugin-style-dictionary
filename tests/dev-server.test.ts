@@ -864,6 +864,12 @@ describe('under a real vite dev server', () => {
     // rebuilt, with nothing said about it — measured on Vite 6.4.3, 7.3.6 and
     // 8.3.0 before the fix.
     //
+    // More than one thing delivers the edit now, and this case passes with any
+    // of them alone: the negation in Vite's ignore list, a watcher of the
+    // plugin's own on the token's directory, and — for a linked package like
+    // this one — the realpath registered beside the link. The negation is
+    // pinned on its own below.
+    //
     // A symlink rather than a copied directory on purpose: a workspace install
     // produces one, and the ignore list is matched against the path walked
     // rather than the realpath.
@@ -942,8 +948,8 @@ describe('under a real vite dev server', () => {
       10000,
     )
 
-    // The half that did not. Without the negation this stays at `#123456`
-    // forever and no watcher event is ever emitted for the edit.
+    // The half that did not. With none of those mechanisms this stays at
+    // `#123456` forever and no watcher event is ever emitted for the edit.
     expect(fs.readFileSync(generated, 'utf-8')).toContain(
       '--color-brand: #ff0000;',
     )
@@ -1043,6 +1049,67 @@ describe('under a real vite dev server', () => {
       `!${posix(tokenSource)}`,
     )
   }, 30000)
+
+  // Windows is skipped because the negation has no effect there; the plugin's
+  // own watcher is the only mechanism it has, and that is pinned elsewhere.
+  it.skipIf(process.platform === 'win32')(
+    "rebuilds through Vite's watcher on the negation alone",
+    async () => {
+      // The plugin's own `fs.watch` on a `node_modules` token directory is
+      // refused, which its `catch` tolerates, so the negation in Vite's
+      // ignore list is the one path left to deliver the edit. A plain
+      // directory rather than a link, so no realpath is registered either.
+      // Only the plugin's own calls are refused, told apart by where they
+      // come from: chokidar calls \`fs.watch\` too, for the same directories.
+      const { app, configFile, generated, tokenSource } =
+        nodeModulesToken('negation-only')
+
+      const realWatch = fs.watch.bind(fs)
+      const pluginSource = path.join('src', 'index.ts')
+      const watchSpy = vi
+        .spyOn(fs, 'watch')
+        .mockImplementation((...call: Parameters<typeof fs.watch>) => {
+          const [target] = call
+          if (
+            String(target).includes('node_modules') &&
+            new Error('stack probe').stack?.includes(pluginSource)
+          ) {
+            throw new Error('the plugin may not watch this directory')
+          }
+
+          return realWatch(...call)
+        })
+
+      try {
+        server = await createServer({
+          configFile: false,
+          logLevel: 'silent',
+          plugins: [vitePlugin({ config: configFile, logLevel: 'silent' })],
+          root: app,
+          server: { hmr: false, middlewareMode: true },
+        })
+
+        await waitUntil(() => fs.existsSync(generated), 10000)
+        await settle(300)
+
+        fs.writeFileSync(
+          tokenSource,
+          JSON.stringify({ color: { brand: { value: '#ff0000' } } }),
+        )
+
+        await waitUntil(
+          () => fs.readFileSync(generated, 'utf-8').includes('#ff0000'),
+          10000,
+        )
+        expect(fs.readFileSync(generated, 'utf-8')).toContain(
+          '--color-brand: #ff0000;',
+        )
+      } finally {
+        watchSpy.mockRestore()
+      }
+    },
+    30000,
+  )
 
   it('leaves the rest of node_modules ignored', async () => {
     // The negation names each file exactly, and that is the point:
