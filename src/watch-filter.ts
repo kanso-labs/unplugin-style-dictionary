@@ -3,6 +3,34 @@ import picomatch from 'picomatch'
 
 import type { WatchPatterns } from './patterns.js'
 
+// Whether a forward-slashed path is one a watch list names.
+export type WatchMatcher = (normalizedFile: string) => boolean
+
+// One watch list compiled into a matcher, once, where the list is derived.
+// picomatch compiles a pattern on every `isMatch`, with no cache, so asking
+// per event compiled every pattern again for every file a watcher reported —
+// under a dev server, each unrelated save went through the filter twice. The
+// matcher is the factory's to hold, beside the list it came from: one module
+// serves every plugin instance, so a cache here would be state in a module
+// that holds none.
+//
+// A literal is a path, so it is compared as one. A config file reaches here
+// that way, and so does a token file named without a glob, and neither may be
+// read as a pattern: the project's own directory can hold characters a glob
+// treats as syntax. The globs are compiled exactly as given — see
+// `matchesWatchedFile` below — and an absolute path a consumer wrote with a
+// glob character in it is filed as a glob and still names itself.
+export function compileWatchPatterns({
+  globs,
+  literals,
+}: WatchPatterns): WatchMatcher {
+  const named = new Set([...globs, ...literals])
+  const matchesGlob = globs.length > 0 ? picomatch(globs) : () => false
+
+  return (normalizedFile) =>
+    named.has(normalizedFile) || matchesGlob(normalizedFile)
+}
+
 // Whether a changed file is a token or config source rather than something
 // this plugin just wrote. Both watch entry points ask through here, so
 // neither can react to its own output.
@@ -11,25 +39,20 @@ import type { WatchPatterns } from './patterns.js'
 // wrote, so it is handed in rather than held: one module serves every
 // instance in the process, and each one's output is its own.
 //
-// A literal is a path, so it is compared as one. A config file reaches here
-// that way, and so does a token file named without a glob, and neither may be
-// read as a pattern: the project's own directory can hold characters a glob
-// treats as syntax.
+// It takes the list compiled rather than the list: see `compileWatchPatterns`.
 export function isWatchedSource(
   file: string,
-  { globs, literals }: WatchPatterns,
+  matches: WatchMatcher,
   generatedDestinations: ReadonlySet<string>,
 ): boolean {
   const normalizedFile = file.replace(/\\/g, '/')
 
-  return (
-    !generatedDestinations.has(normalizedFile) &&
-    (literals.includes(normalizedFile) ||
-      matchesWatchedFile(normalizedFile, globs))
-  )
+  return !generatedDestinations.has(normalizedFile) && matches(normalizedFile)
 }
 
-// Whether `file` matches one of the resolved config/token watch patterns.
+// Whether `file` matches one of the resolved config/token watch patterns,
+// compiled for this one question. Every event goes through
+// `compileWatchPatterns` instead; this stays for a one-off answer.
 // Shared by the Vite-specific `configureServer` watcher and the universal
 // `watchChange` hook — both need it, and both must skip files that don't
 // match: without this filter, `watchChange` reacts to *any* changed
