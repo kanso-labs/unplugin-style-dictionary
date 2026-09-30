@@ -40,7 +40,7 @@ const EXPECTED = '#0070f3'
 const ROLLDOWN_DRIVER = `
     import { rolldown } from 'rolldown'
     import plugin from '@kanso-labs/unplugin-style-dictionary/rolldown'
-    const bundle = await rolldown({ input: 'entry.js', plugins: [plugin({ config: 'sd.config.json' })] })
+    const bundle = await rolldown({ input: 'entry.js', plugins: [plugin({ config: CONFIG })] })
     await bundle.generate({ format: 'es' })
     await bundle.close()
   `
@@ -48,7 +48,7 @@ const ROLLDOWN_DRIVER = `
 const ROLLUP_DRIVER = `
     import { rollup } from 'rollup'
     import plugin from '@kanso-labs/unplugin-style-dictionary/rollup'
-    const bundle = await rollup({ input: 'entry.js', plugins: [plugin({ config: 'sd.config.json' })] })
+    const bundle = await rollup({ input: 'entry.js', plugins: [plugin({ config: CONFIG })] })
     await bundle.generate({ format: 'es' })
     await bundle.close()
   `
@@ -67,7 +67,7 @@ const RSPACK_DRIVER = `
           entry: './entry.js',
           mode: 'development',
           output: { path: process.cwd() + '/dist' },
-          plugins: [plugin({ config: 'sd.config.json' })],
+          plugins: [plugin({ config: CONFIG })],
         },
         (error, stats) => {
           if (error) return reject(error)
@@ -86,7 +86,7 @@ const VITE_DRIVER = `
       build: { lib: { entry: 'entry.js', fileName: 'out', formats: ['es'] }, outDir: 'dist' },
       configFile: false,
       logLevel: 'silent',
-      plugins: [plugin({ config: 'sd.config.json' })],
+      plugins: [plugin({ config: CONFIG })],
     })
   `
 
@@ -103,7 +103,7 @@ const WEBPACK_DRIVER = `
           entry: './entry.js',
           mode: 'development',
           output: { path: process.cwd() + '/dist' },
-          plugins: [plugin({ config: 'sd.config.json' })],
+          plugins: [plugin({ config: CONFIG })],
         },
         (error, stats) => {
           if (error) return reject(error)
@@ -122,6 +122,14 @@ const WEBPACK_DRIVER = `
  * style-dictionary rides on rollup rather than getting fixtures of its own:
  * it is the peer every target shares, so pinning it at each end of `^5` while
  * the bundler stays constant is what isolates it.
+ *
+ * One fixture's configuration is TypeScript, and it is the only place a `.ts`
+ * config meets Node's own loader. The Vitest row for `.ts` never does: under
+ * Vitest the plugin's `import()` goes through Vite's module runner, which
+ * transpiles the file itself, so it passes where the built package cannot load
+ * the file at all. Where `process.features.typescript` is off — Node 22 before
+ * 22.18 — the documented failure is asserted instead, so the check never skips
+ * without saying so.
  */
 const FIXTURES = [
   {
@@ -150,8 +158,9 @@ const FIXTURES = [
   },
   {
     bundler: 'rolldown',
+    config: 'sd.config.ts',
     driver: ROLLDOWN_DRIVER,
-    end: 'only',
+    end: 'only, TypeScript config',
     versions: { rolldown: '*' },
   },
   {
@@ -248,9 +257,10 @@ function readPackReport(json) {
  * entry that re-exports a generated token, and the driver that builds it.
  * @param {string} directory
  * @param {string} driver
+ * @param {string} config the configuration's filename, `.json` or `.ts`
  * @returns {void}
  */
-function writeFixture(directory, driver) {
+function writeFixture(directory, driver, config) {
   fs.mkdirSync(path.join(directory, 'tokens'), { recursive: true })
 
   fs.writeFileSync(
@@ -263,18 +273,28 @@ function writeFixture(directory, driver) {
     JSON.stringify({ color: { brand: { value: TOKEN } } }),
   )
 
-  fs.writeFileSync(
-    path.join(directory, 'sd.config.json'),
-    JSON.stringify({
-      platforms: {
-        js: {
-          buildPath: 'generated/',
-          files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
-          transformGroup: 'js',
-        },
+  const configuration = {
+    platforms: {
+      js: {
+        buildPath: 'generated/',
+        files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+        transformGroup: 'js',
       },
-      source: ['tokens/**/*.json'],
-    }),
+    },
+    source: ['tokens/**/*.json'],
+  }
+
+  // A `.ts` config carries type syntax Node has to strip — an `import type`
+  // and a `satisfies` — so it cannot load as JavaScript by accident.
+  fs.writeFileSync(
+    path.join(directory, config),
+    config.endsWith('.ts')
+      ? [
+          "import type { Config } from 'style-dictionary'",
+          `export default ${JSON.stringify(configuration)} satisfies Config`,
+          '',
+        ].join('\n')
+      : JSON.stringify(configuration),
   )
 
   // Re-exports a token rather than importing for side effects, so the
@@ -289,7 +309,10 @@ function writeFixture(directory, driver) {
     ].join('\n'),
   )
 
-  fs.writeFileSync(path.join(directory, 'drive.mjs'), driver)
+  fs.writeFileSync(
+    path.join(directory, 'drive.mjs'),
+    `const CONFIG = ${JSON.stringify(config)}\n${driver}`,
+  )
 }
 
 const failures = []
@@ -306,12 +329,23 @@ const packed = readPackReport(
 const tarball = path.join(tarballDirectory, packed.filename)
 console.log(`  ${packed.filename} (${packed.files.length} files)\n`)
 
-for (const { bundler, driver, end, versions } of FIXTURES) {
+// What a Node without type stripping says about a `.ts` config: Style
+// Dictionary's own message, which README points at.
+const NO_TYPE_STRIPPING = 'Could not import TypeScript file'
+
+for (const {
+  bundler,
+  config = 'sd.config.json',
+  driver,
+  end,
+  versions,
+} of FIXTURES) {
   const label = `${bundler} (${end})`
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'usd-peer-'))
+  const expectsFailure = config.endsWith('.ts') && !process.features.typescript
 
   try {
-    writeFixture(directory, driver)
+    writeFixture(directory, driver, config)
 
     const specifiers = Object.entries(versions).map(
       ([name, range]) => `${name}@${range}`,
@@ -335,6 +369,33 @@ for (const { bundler, driver, end, versions } of FIXTURES) {
     const installed = readInstalledVersion(
       path.join(directory, 'node_modules', bundler, 'package.json'),
     )
+
+    if (expectsFailure) {
+      let failure = ''
+      try {
+        execFileSync(process.execPath, ['drive.mjs'], {
+          cwd: directory,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+      } catch (error) {
+        failure =
+          typeof error === 'object' && error !== null && 'stderr' in error
+            ? String(error.stderr)
+            : String(error)
+      }
+
+      if (!failure.includes(NO_TYPE_STRIPPING)) {
+        throw new Error(
+          `without type stripping, expected "${NO_TYPE_STRIPPING}", got: ${failure || 'a build that succeeded'}`,
+        )
+      }
+
+      console.log(
+        `  ok    ${label.padEnd(30)} ${bundler}@${installed}, fails as documented without type stripping`,
+      )
+      continue
+    }
 
     execFileSync(process.execPath, ['drive.mjs'], {
       cwd: directory,
