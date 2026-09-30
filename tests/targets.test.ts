@@ -512,6 +512,183 @@ describe('every watching target rebuilds once and then settles', () => {
   }, 60000)
 })
 
+// Closes a watcher either host returned. Both type `watch()` as possibly
+// returning nothing, so closing is conditional rather than asserted.
+const closeWatching = async (
+  watching: undefined | { close: (done: () => void) => void },
+) =>
+  new Promise<void>((resolve) => {
+    if (!watching) {
+      resolve()
+      return
+    }
+
+    watching.close(() => {
+      resolve()
+    })
+  })
+
+// A token file created after the first build, under a glob `source`. The glob's
+// static parent directory is registered so that such a file is noticed, and on
+// webpack and rspack it used to go to `fileDependencies`, where a directory
+// reports no new entry: nothing rebuilt until an existing token was edited.
+describe.each([
+  {
+    name: 'webpack',
+    watch: (
+      directory: string,
+      options: Parameters<typeof webpackPlugin>[0],
+      onBuild: () => void,
+    ) =>
+      webpack({
+        context: directory,
+        entry: './entry.js',
+        mode: 'development',
+        output: { path: path.join(directory, 'dist') },
+        plugins: [webpackPlugin(options)],
+      }).watch({ aggregateTimeout: 50 }, onBuild),
+  },
+  {
+    name: 'rspack',
+    watch: (
+      directory: string,
+      options: Parameters<typeof rspackPlugin>[0],
+      onBuild: () => void,
+    ) =>
+      rspack({
+        context: directory,
+        entry: './entry.js',
+        mode: 'development',
+        output: { path: path.join(directory, 'dist') },
+        plugins: [rspackPlugin(options)],
+      }).watch({ aggregateTimeout: 50 }, onBuild),
+  },
+])('a new token file under a real $name watcher', ({ name, watch }) => {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `unplugin-style-dictionary-new-file-${name}-`),
+  )
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir))
+      fs.rmSync(tempDir, { force: true, recursive: true })
+  })
+
+  it('rebuilds for a new top-level file and a new nested one', async () => {
+    const directory = path.join(tempDir, 'glob')
+    const { configFile, generated } = writeFixture(directory)
+    const tokens = path.join(directory, 'tokens')
+
+    let builds = 0
+    const watching = watch(
+      directory,
+      { cache: false, config: configFile, silent: true },
+      () => {
+        builds += 1
+      },
+    )
+
+    try {
+      await waitUntil(() => builds > 0, 20000)
+      await settledCount(() => builds, 1000, 20000)
+
+      const beforeTopLevel = builds
+      fs.writeFileSync(
+        path.join(tokens, 'accent.json'),
+        JSON.stringify({ color: { accent: { value: '#aa0000' } } }),
+      )
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#aa0000'),
+        20000,
+      )
+      expect(builds).toBeGreaterThan(beforeTopLevel)
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#aa0000')
+      await settledCount(() => builds, 1000, 20000)
+
+      const beforeNested = builds
+      fs.writeFileSync(
+        path.join(tokens, 'nested', 'extra.json'),
+        JSON.stringify({ color: { extra: { value: '#bb0000' } } }),
+      )
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#bb0000'),
+        20000,
+      )
+      expect(builds).toBeGreaterThan(beforeNested)
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#bb0000')
+
+      expect(await settledCount(() => builds, 1500, 20000)).not.toBeNull()
+    } finally {
+      await closeWatching(watching)
+    }
+  }, 60000)
+
+  it('settles with the buildPath inside the source directory', async () => {
+    // Every entry the plugin writes under a watched directory is now a change
+    // to that directory, which counts as a token source changing — so its
+    // own output reaches a compile. What ends that chain is the rebuild
+    // rendering identical bytes and writing nothing.
+    const directory = path.join(tempDir, 'inside')
+    const tokens = path.join(directory, 'tokens')
+    fs.mkdirSync(path.join(tokens, 'nested'), { recursive: true })
+    fs.writeFileSync(
+      path.join(tokens, 'nested', 'color.json'),
+      JSON.stringify({ color: { brand: { value: '#0070f3' } } }),
+    )
+
+    const configFile = path.join(directory, 'sd.config.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        platforms: {
+          js: {
+            buildPath: posix(path.join(tokens, 'build')) + '/',
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [posix(tokens) + '/**/*.json'],
+      }),
+    )
+    fs.writeFileSync(
+      path.join(directory, 'entry.js'),
+      [
+        "import { ColorBrand } from './tokens/build/tokens.js'",
+        'export const brand = ColorBrand',
+        '',
+      ].join('\n'),
+    )
+    const generated = path.join(tokens, 'build', 'tokens.js')
+
+    let builds = 0
+    const watching = watch(
+      directory,
+      { cache: false, config: configFile, silent: true },
+      () => {
+        builds += 1
+      },
+    )
+
+    try {
+      await waitUntil(() => builds > 0, 20000)
+      await settledCount(() => builds, 1000, 20000)
+
+      fs.writeFileSync(
+        path.join(tokens, 'accent.json'),
+        JSON.stringify({ color: { accent: { value: '#aa0000' } } }),
+      )
+      await waitUntil(
+        () => fs.readFileSync(generated, 'utf-8').includes('#aa0000'),
+        20000,
+      )
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#aa0000')
+
+      expect(await settledCount(() => builds, 1500, 20000)).not.toBeNull()
+    } finally {
+      await closeWatching(watching)
+    }
+  }, 60000)
+})
+
 describe('vite build --watch', () => {
   const tempDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'unplugin-style-dictionary-build-watch-'),

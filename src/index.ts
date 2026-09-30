@@ -784,6 +784,14 @@ interface Compilation {
   warnings: Error[]
 }
 
+// What a hook's plugin context offers for registering watched paths. Every
+// host's has `addWatchFile`; webpack's and rspack's also reach the compilation
+// through `getNativeBuildContext`, and the unit tests bind neither.
+interface WatchContext {
+  addWatchFile: (id: string) => void
+  getNativeBuildContext?: () => unknown
+}
+
 // A stable identity for a compile — a set of resolved configurations and the
 // settings it runs with — or `null` for one that cannot have a stable
 // identity at all.
@@ -809,6 +817,50 @@ function buildKey(
     // BigInt — takes no shared identity rather than a wrong one, and compiles
     // exactly as it did before.
     return null
+  }
+}
+
+// The `contextDependencies` of the compilation a webpack or rspack hook is
+// running for, reached through the native context unplugin hands it — the
+// one set there that reports a file created in a watched directory.
+function contextDependenciesOf(
+  context: WatchContext,
+): undefined | { add: (path: string) => void } {
+  const native = context.getNativeBuildContext?.()
+  const compilation: unknown =
+    typeof native === 'object' && native !== null && 'compilation' in native
+      ? native.compilation
+      : undefined
+  const dependencies: unknown =
+    typeof compilation === 'object' &&
+    compilation !== null &&
+    'contextDependencies' in compilation
+      ? compilation.contextDependencies
+      : undefined
+
+  if (
+    typeof dependencies !== 'object' ||
+    dependencies === null ||
+    !('add' in dependencies)
+  ) {
+    return undefined
+  }
+
+  const add: unknown = dependencies.add
+  if (typeof add !== 'function') return undefined
+
+  return {
+    add: (entry: string) => {
+      Reflect.apply(add, dependencies, [entry])
+    },
+  }
+}
+
+function isDirectory(file: string): boolean {
+  try {
+    return fs.statSync(file).isDirectory()
+  } catch {
+    return false
   }
 }
 
@@ -945,20 +997,44 @@ const unpluginFactory: UnpluginFactory<
   // the pair. Only the `addWatchFile` sites come through here: the list
   // `getWatchTargets` returns also feeds the dev server's watcher and its
   // negations, which see through a link as they are.
-  const addWatchFiles = (
-    context: { addWatchFile: (id: string) => void },
-    paths: string[],
-  ): void => {
-    for (const file of paths) {
+  //
+  // On webpack and rspack a directory goes to `contextDependencies` instead,
+  // and is remembered in `watchedDirectories`. unplugin turns `addWatchFile`
+  // into `fileDependencies.add`, and a directory registered as a file
+  // dependency reports no entry created inside it — so a token file added
+  // under a glob `source` was never picked up there, though the static parent
+  // is registered for exactly that.
+  const addWatchFiles = (context: WatchContext, paths: string[]): void => {
+    const contextDependencies = isWebpack
+      ? contextDependenciesOf(context)
+      : undefined
+
+    const register = (file: string) => {
+      if (contextDependencies && isDirectory(file)) {
+        contextDependencies.add(path.resolve(file))
+        watchedDirectories.add(file)
+        return
+      }
+
       context.addWatchFile(file)
+    }
+
+    for (const file of paths) {
+      register(file)
 
       const real = realpathOf(file)
       if (real === undefined || real === file) continue
 
       linkedPaths.set(real, file)
-      context.addWatchFile(real)
+      register(real)
     }
   }
+
+  // The directories registered as context dependencies, spelled as
+  // registered. webpack's watcher reports a change inside one as a change to
+  // the directory rather than to the entry, so the `watchRun` filter counts a
+  // match here as a token source changing.
+  const watchedDirectories = new Set<string>()
 
   // Whether `watchChange` has fired since the last `buildStart`, and whether
   // anything has been compiled yet. Rollup, rolldown and webpack all run
@@ -1384,6 +1460,7 @@ const unpluginFactory: UnpluginFactory<
         const id = registeredSpellingOf(file, linkedPaths)
         if (
           !cachedPatterns ||
+          watchedDirectories.has(id.replace(/\\/g, '/')) ||
           isWatchedSource(id, cachedPatterns, generatedDestinations)
         ) {
           return id
