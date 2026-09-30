@@ -311,7 +311,8 @@ export async function runBuilds(
       // Every declared platform, not only the ones this compile built. A
       // file an unselected platform wrote on an earlier build is still the
       // plugin's own output, and dropping it from this set would let a
-      // watcher treat it as a token source and rebuild on it forever.
+      // watcher treat it as a token source and rebuild once for every change
+      // to it. Not a loop: a scoped rebuild never rewrites that file.
       //
       // Collected on every build rather than only on the ones whose size
       // report prints it below. The set is also what keeps a rebuild from
