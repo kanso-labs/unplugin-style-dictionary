@@ -158,9 +158,10 @@ export interface UnpluginStyleDictionaryOptions {
    * first one that *looks like a Style Dictionary configuration* wins — it has
    * to declare at least one of `platforms`, `source`, `include` or `tokens` —
    * and the path it picked is announced, so which file a build used is
-   * answerable from the console. A candidate that fails that check is reported
-   * and skipped rather than adopted, because `config.json` is an extremely
-   * common name for something else entirely.
+   * answerable from the console. A candidate that fails that check is skipped
+   * rather than adopted, because `config.json` is an extremely common name for
+   * something else entirely. It is named in that announcement when a later
+   * candidate is adopted, and reported as an error when none is.
    *
    * **`false` turns discovery off.** Two of the four names are modules rather
    * than data, and reading a module means running it: a `sd.config.js` in the

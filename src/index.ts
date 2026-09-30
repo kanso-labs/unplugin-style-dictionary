@@ -6,7 +6,7 @@ import path from 'node:path'
 import { createUnplugin } from 'unplugin'
 
 import type { PluginInstance } from './compile.js'
-import type { ResolvedConfig } from './config.js'
+import type { Log, ResolvedConfig } from './config.js'
 import type { WatchPatterns } from './patterns.js'
 import type {
   StyleDictionaryConfigContext,
@@ -1222,6 +1222,22 @@ const unpluginFactory: UnpluginFactory<
     for (const line of render(stdoutColour)) console.log(line)
   }
 
+  // What this instance has said about its configuration. A problem with one
+  // is found on every resolution, and a watching host resolves on every
+  // rebuild — three times during a Vite start-up alone — so without this each
+  // one repeats at `'error'`, which `'silent'` prints and webpack files as a
+  // warning. Cleared when a compile succeeds, so a problem that is fixed and
+  // comes back is said again.
+  //
+  // Kept here, beside `discovery`, because `config.ts` serves every instance
+  // in the process and holds nothing.
+  const saidAboutConfig = new Set<string>()
+  const logConfig: Log = (message, type) => {
+    if (saidAboutConfig.has(message)) return
+    saidAboutConfig.add(message)
+    log(message, type)
+  }
+
   // Resolve config file paths / objects. The work is `resolveConfigOption`'s;
   // what this adds is the instance it runs for, read at the moment of the call.
   // `root` is assigned by the host after the factory has run, so it is passed
@@ -1236,7 +1252,7 @@ const unpluginFactory: UnpluginFactory<
       config: options.config,
       configContext,
       discovery,
-      log,
+      log: logConfig,
       root,
     })
     if (!options.watch) return resolved
@@ -1258,7 +1274,7 @@ const unpluginFactory: UnpluginFactory<
     resolvedConfigs: ResolvedConfig[],
   ): Promise<{ paths: string[]; patterns: WatchPatterns }> => {
     const patterns = await watchPatternsOf(
-      { log, root, watch: options.watch },
+      { log: logConfig, root, watch: options.watch },
       resolvedConfigs,
     )
 
@@ -1280,6 +1296,7 @@ const unpluginFactory: UnpluginFactory<
     log,
     logTable,
     notifyBuildOutcome: (error) => {
+      if (!error) saidAboutConfig.clear()
       notifyBuildOutcome?.(error)
     },
     onBuildEnd,

@@ -1160,6 +1160,20 @@ would otherwise take the real configuration out of play, which is worse than
 what the check replaced. The path is announced once per instance, because
 `resolveConfigs` runs on every rebuild.
 
+**A skipped candidate is only an error when nothing was adopted.** When a later
+one is, it is named in that announcement instead, and the advice is to name the
+adopted file with `config` — not `config: false`, which returns before discovery
+runs and would drop the very file that was found.
+
+**Every configuration message goes through `logConfig`, which says each one once
+until a compile succeeds.** A problem is found on every resolution, and a Vite
+start-up alone resolves three times, so without it each repeat reached
+`'silent'` at `'error'` and became another webpack warning. The record lives in
+the factory beside `discovery`, because `config.ts` holds nothing, and
+`notifyBuildOutcome(null)` clears it, so a problem that is fixed and comes back
+is said again. With nothing resolved there are no patterns to filter against, so
+an unrelated save still resolves; it is the message that no longer repeats.
+
 The check never applies to a configuration the consumer named. Style Dictionary
 accepts shapes this predicate does not know about, and the plugin overruling the
 host on its own contract is not a trade worth making. That distinction is
