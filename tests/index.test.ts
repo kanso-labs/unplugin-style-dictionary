@@ -4,6 +4,7 @@ import type { MockInstance } from 'vitest'
 
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
@@ -20,7 +21,11 @@ import packageJson from '../package.json' with { type: 'json' }
 import rolldownPlugin from '../src/rolldown.ts'
 import rollupPlugin from '../src/rollup.ts'
 import vitePlugin from '../src/vite.ts'
-import { matchesWatchedFile } from '../src/watch-filter.ts'
+import {
+  compileWatchPatterns,
+  isWatchedSource,
+  matchesWatchedFile,
+} from '../src/watch-filter.ts'
 
 interface BuildContext {
   addWatchFile: (id: string) => void
@@ -97,6 +102,13 @@ const restartedVitePlugin = async () => {
   const { default: restarted } = await import('../src/vite.ts')
   return restarted
 }
+
+// picomatch's own module, as far as the compile count needs it.
+const hasCompileRe = (
+  value: unknown,
+): value is { compileRe: (...args: unknown[]) => unknown } =>
+  typeof value === 'function' &&
+  typeof Reflect.get(value, 'compileRe') === 'function'
 
 // Whatever reached `console.error` while `work` ran. The read happens before
 // the restore on purpose: `mockRestore` resets the recorded calls along with
@@ -2016,6 +2028,53 @@ describe('unplugin-style-dictionary (vite target)', () => {
         'C:/p/tokens/**/*.json',
       ]),
     ).toBe(true)
+  })
+
+  it('compiles a watch list once, not once per event', () => {
+    // picomatch compiles on every `isMatch`, with no cache, so testing each
+    // event against the list compiled every pattern again — under a dev
+    // server that is every file the watcher reports, twice. Counted on
+    // `compileRe` inside picomatch's own module: every compile goes through
+    // it, and the package entry only copies it, so a spy there sees nothing.
+    const internals: unknown = createRequire(import.meta.url)(
+      'picomatch/lib/picomatch.js',
+    )
+    if (!hasCompileRe(internals)) {
+      throw new TypeError('picomatch no longer exposes compileRe')
+    }
+
+    const compileSpy = vi.spyOn(internals, 'compileRe')
+    try {
+      const matcher = compileWatchPatterns({
+        globs: [
+          '/p/tokens/**/*.json',
+          '/p/brand/*.json',
+          '/p/theme/**',
+          '/p/extra/*.yaml',
+        ],
+        literals: ['/p/sd.config.json'],
+      })
+      const compiled = compileSpy.mock.calls.length
+
+      for (let index = 0; index < 1000; index++) {
+        isWatchedSource(`/p/src/file-${index}.ts`, matcher, new Set())
+      }
+
+      // Read before the restore, which clears what the spy recorded.
+      expect(compiled).toBe(4)
+      expect(compileSpy.mock.calls.length).toBe(compiled)
+
+      // And it still answers: a token file, the config, and not the rest.
+      expect(isWatchedSource('/p/tokens/a/b.json', matcher, new Set())).toBe(
+        true,
+      )
+      expect(isWatchedSource('/p/sd.config.json', matcher, new Set())).toBe(
+        true,
+      )
+      expect(isWatchedSource('/p/src/main.ts', matcher, new Set())).toBe(false)
+    } finally {
+      compileSpy.mockRestore()
+    }
   })
 
   it('rebuilds a token file sitting directly in a `**` source directory', async () => {

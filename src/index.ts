@@ -13,6 +13,7 @@ import type {
   UnpluginStyleDictionaryOptions,
 } from './types.js'
 import type { DestinationRecord } from './up-to-date.js'
+import type { WatchMatcher } from './watch-filter.js'
 
 import { colourAllowed, paint } from './colour.js'
 import { runBuilds } from './compile.js'
@@ -27,6 +28,7 @@ import {
 } from './patterns.js'
 import { createScheduler } from './scheduler.js'
 import {
+  compileWatchPatterns,
   isWatchedSource,
   matchesWatchedFile,
   registeredSpellingOf,
@@ -1062,11 +1064,12 @@ const unpluginFactory: UnpluginFactory<
   // on its own writes for as long as the dev server runs.
   const generatedDestinations = new Set<string>()
 
-  // The patterns the last `getWatchTargets` derived. `watchChange` tests a
-  // changed path against these before it resolves anything, so a file the
-  // plugin does not care about costs one glob match instead of a full config
-  // resolution — which, when `config` is a function, is the consumer's own
-  // code, and the place the README tells them to register custom formats.
+  // The patterns the last `getWatchTargets` derived, compiled. `watchChange`
+  // tests a changed path against these before it resolves anything, so a file
+  // the plugin does not care about costs one match against an already compiled
+  // matcher instead of a full config resolution — which, when `config` is a
+  // function, is the consumer's own code, and the place the README tells them
+  // to register custom formats.
   //
   // It is safe to filter on a list that may be one build out of date because
   // the list always contains the config files themselves: an edit that adds a
@@ -1074,7 +1077,7 @@ const unpluginFactory: UnpluginFactory<
   // one thing it cannot see is a `config` function that starts returning
   // different sources with no file changing at all, and that was never
   // observable without a rebuild to observe it in.
-  let cachedPatterns: undefined | WatchPatterns
+  let cachedMatcher: undefined | WatchMatcher
 
   // Every registered path that runs through a symbolic link, keyed by where
   // the link leads. On macOS rolldown's watcher drops the events for a path
@@ -1308,17 +1311,23 @@ const unpluginFactory: UnpluginFactory<
   // Parse token files to watch
   const getWatchTargets = async (
     resolvedConfigs: ResolvedConfig[],
-  ): Promise<{ paths: string[]; patterns: WatchPatterns }> => {
+  ): Promise<{
+    matcher: WatchMatcher
+    paths: string[]
+    patterns: WatchPatterns
+  }> => {
     const patterns = await watchPatternsOf(
       { log: logConfig, root, watch: options.watch },
       resolvedConfigs,
     )
 
-    // Recorded here rather than at each call site, so every path that derives
-    // a watch list refreshes the one `watchChange` filters against.
-    cachedPatterns = patterns
+    // Compiled once per derived list rather than on every event, and recorded
+    // here rather than at each call site, so every path that derives a watch
+    // list refreshes the one `watchChange` filters against.
+    const matcher = compileWatchPatterns(patterns)
+    cachedMatcher = matcher
 
-    return { paths: await expandPatterns(patterns, log), patterns }
+    return { matcher, paths: await expandPatterns(patterns, log), patterns }
   }
 
   // What `runBuilds` reads from this plugin instance, built once. `root` and
@@ -1606,9 +1615,9 @@ const unpluginFactory: UnpluginFactory<
       for (const file of changed) {
         const id = registeredSpellingOf(file, linkedPaths)
         if (
-          !cachedPatterns ||
+          !cachedMatcher ||
           watchedDirectories.has(id.replace(/\\/g, '/')) ||
-          isWatchedSource(id, cachedPatterns, generatedDestinations)
+          isWatchedSource(id, cachedMatcher, generatedDestinations)
         ) {
           return id
         }
@@ -1931,7 +1940,7 @@ const unpluginFactory: UnpluginFactory<
                 if (
                   !isWatchedSource(
                     changed,
-                    targets.patterns,
+                    targets.matcher,
                     generatedDestinations,
                   )
                 )
@@ -2011,7 +2020,7 @@ const unpluginFactory: UnpluginFactory<
         // floating. `schedule` owns the whole rebuild including its errors,
         // so there is nothing here left to reject.
         server.watcher.on('all', (_event, file) => {
-          if (!isWatchedSource(file, targets.patterns, generatedDestinations))
+          if (!isWatchedSource(file, targets.matcher, generatedDestinations))
             return
 
           // A dev server has no build to fail, so a rebuild that throws is
@@ -2050,8 +2059,8 @@ const unpluginFactory: UnpluginFactory<
       // answer ran a consumer's `config` function once per unrelated file.
       // Skipped until a build has derived a list to filter against.
       if (
-        cachedPatterns &&
-        !isWatchedSource(id, cachedPatterns, generatedDestinations)
+        cachedMatcher &&
+        !isWatchedSource(id, cachedMatcher, generatedDestinations)
       )
         return
 
@@ -2062,14 +2071,14 @@ const unpluginFactory: UnpluginFactory<
       // is what decided this path was worth resolving and not what decides a
       // rebuild. A config edit reaches here through its own filename and can
       // have dropped the very source the cached list matched.
-      const { patterns } = await getWatchTargets(resolved)
+      const { matcher, patterns } = await getWatchTargets(resolved)
       // Without this check, watchChange fires for *any* changed file in the
       // host bundler's module graph — including our own generated output,
       // since consuming code imports it. Every regenerate is itself a
       // "change", so skipping what is not a source here is what keeps this
       // from rebuilding forever — both the files that match no pattern and
       // the ones that match only because this plugin wrote them.
-      if (!isWatchedSource(id, patterns, generatedDestinations)) return
+      if (!isWatchedSource(id, matcher, generatedDestinations)) return
 
       // Same division as `buildStart`: on webpack the compile belongs to
       // `watchRun`, which has already run for this compilation, so all that
