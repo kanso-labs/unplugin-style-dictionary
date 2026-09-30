@@ -499,6 +499,12 @@ describe.each(COMPILERS)(
           ),
         ).toBe(true)
 
+        // Reported rather than failed: the default fails a first build and
+        // lets a rebuild through, and this is a rebuild.
+        expect(since.map((build) => build.stats?.hasErrors())).toEqual(
+          since.map(() => false),
+        )
+
         await session.quiet()
         writeToken('#000002')
         await waitUntil(() => generated('tokens.js').includes('#000002'), 20000)
