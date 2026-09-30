@@ -18,7 +18,12 @@ import { colourAllowed, paint } from './colour.js'
 import { runBuilds } from './compile.js'
 import { resolveConfigOption } from './config.js'
 import { asError, errorMessage } from './errors.js'
-import { expandPatterns, realpathOf, watchPatternsOf } from './patterns.js'
+import {
+  expandPatterns,
+  realpathOf,
+  watchOptionPatterns,
+  watchPatternsOf,
+} from './patterns.js'
 import { createScheduler } from './scheduler.js'
 import { isWatchedSource, registeredSpellingOf } from './watch-filter.js'
 
@@ -1205,14 +1210,32 @@ const unpluginFactory: UnpluginFactory<
   // what this adds is the instance it runs for, read at the moment of the call.
   // `root` is assigned by the host after the factory has run, so it is passed
   // as it stands now rather than as it stood when this was built.
-  const resolveConfigs = async (): Promise<ResolvedConfig[]> =>
-    resolveConfigOption({
+  //
+  // A configuration read from a file also carries the files `watch` names,
+  // which key a config module's import — see `ResolvedConfig`. Directories
+  // are left out, because a directory's mtime moves whenever an entry is
+  // renamed inside it and so says nothing about what the config would read.
+  const resolveConfigs = async (): Promise<ResolvedConfig[]> => {
+    const resolved = await resolveConfigOption({
       config: options.config,
       configContext,
       discovery,
       log,
       root,
     })
+    if (!options.watch) return resolved
+
+    const watched = (
+      await expandPatterns(watchOptionPatterns(root, options.watch), log)
+    ).filter((file) => !isDirectory(file))
+
+    // Each call resolves fresh items, so they are this call's to annotate.
+    for (const item of resolved) {
+      if (item.file) item.watched = watched
+    }
+
+    return resolved
+  }
 
   // Parse token files to watch
   const getWatchTargets = async (
