@@ -42,7 +42,10 @@ them.
   left alone. A custom action gets the same through `vol.promises.writeFile`,
   `vol.writeFileSync`, `vol.promises.copyFile`, `vol.copyFileSync` and
   `vol.promises.cp`; anything else it writes with, such as `appendFile` or a
-  write stream, writes in place.
+  write stream, writes in place. A destination that is a symbolic link is
+  written through to the file it points at, and a replaced file keeps its mode.
+  A hard-linked destination is replaced rather than updated, so the other link
+  keeps the old contents.
 - **Multi-configuration**: Can run multiple Style Dictionary configurations in
   one build (useful for multi-brand or multi-theme projects). They are compiled
   one after another on purpose, so two configurations may safely write to the
