@@ -7,11 +7,13 @@
 // announced a discovery yet — is handed in on each call.
 
 import type { Config } from 'style-dictionary'
+import type { DesignTokens } from 'style-dictionary/types'
 
 import JSON5 from 'json5'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import StyleDictionary from 'style-dictionary'
 
 import type {
   StyleDictionaryConfigContext,
@@ -32,6 +34,11 @@ export type Log = (message: string, type: 'error' | 'info') => void
 export interface ResolvedConfig {
   config: Config | string
   file?: string
+  // The files the plugin's `watch` option names, expanded. A config module's
+  // import is keyed on their mtimes beside its own, so a data file it reads
+  // at load time — and that a consumer named in `watch` to trigger a rebuild
+  // — re-evaluates it rather than only rebuilding with what it read before.
+  watched?: string[]
 }
 
 // The config extensions Style Dictionary loads with `import` rather than by
@@ -47,19 +54,21 @@ export interface ResolvedConfig {
 // trailing comma failed strict `JSON.parse` for the same reason.
 const IMPORTED_CONFIG_EXTENSIONS = ['.js', '.mjs', '.ts']
 
-// What `new StyleDictionary` is handed for an item. Only a path in the JS
-// family becomes an object, because those are exactly the extensions Style
-// Dictionary's own `loadFile` reaches with `import` — the ones whose module
-// record Node then caches forever, and so the only ones a build could read
-// stale. The JSON5 family stays a path because there is nothing to gain:
-// those are read from disk on every pass either way, so a build can never
-// see one as it stood earlier in the process.
+// What `new StyleDictionary` is handed for an item: always an object, carrying
+// the plugin's own parser for token modules — see `withTokenModuleParser`.
+//
+// A path in the JS family is read here because those are exactly the
+// extensions Style Dictionary's own `loadFile` reaches with `import`, whose
+// module record Node then caches forever, so a build handed the path could
+// read the config stale. A JSON5-family path is read here too, so the parser
+// can ride along; Style Dictionary would have parsed the same file the same
+// way.
 export async function configForBuild(
   item: ResolvedConfig,
 ): Promise<Config | string> {
   const { config } = item
 
-  if (typeof config !== 'string' || !isImportedConfig(config)) return config
+  if (typeof config !== 'string') return withTokenModuleParser(config)
 
   const loaded = await readConfigObject(item)
 
@@ -74,10 +83,38 @@ export async function configForBuild(
   // `mutateOriginal`. Cloning throws on a config carrying functions — an
   // inline transform — and Style Dictionary's own fallback in that case is
   // to use the original, so this one matches it.
+  if (!isImportedConfig(config)) return withTokenModuleParser(loaded)
+
   try {
-    return structuredClone(loaded)
+    return withTokenModuleParser(structuredClone(loaded))
   } catch {
-    return loaded
+    return withTokenModuleParser(loaded)
+  }
+}
+
+// The name the plugin's token-module parser is registered and applied under.
+const TOKEN_MODULE_PARSER = 'unplugin-style-dictionary/token-module'
+
+// Matches a `.js`, `.mjs` or `.ts` token source, unless another parser the
+// configuration applies matches it too. Style Dictionary runs every parser
+// whose pattern matches and keeps the last result, and a global parser comes
+// ahead of a configuration's own whatever the order in `parsers` — measured,
+// `['plugin-own', 'consumer-global']` ran in the order
+// `['consumer-global', 'plugin-own']`. So order cannot make the consumer's
+// win, and stepping aside is what does. A `RegExp` whose `Symbol.match` is
+// overridden, because `filePath.match(pattern)` is how Style Dictionary asks.
+class TokenModulePattern extends RegExp {
+  private readonly others: RegExp[]
+
+  constructor(others: RegExp[]) {
+    super(String.raw`\.(?:js|mjs|ts)$`)
+    this.others = others
+  }
+
+  override [Symbol.match](value: string): null | RegExpMatchArray {
+    if (this.others.some((other) => value.match(other) !== null)) return null
+
+    return super[Symbol.match](value)
   }
 }
 
@@ -108,7 +145,7 @@ export async function readConfigObject(
     // parses identically and one carrying a comment stops being a config
     // the build understands and the watch list does not.
     const loaded: unknown = isImportedConfig(item.config)
-      ? await importConfigModule(item.config)
+      ? await importConfigModule(item.config, item.watched)
       : JSON5.parse(fs.readFileSync(item.config, 'utf-8'))
 
     if (isConfig(loaded)) return loaded
@@ -250,29 +287,53 @@ export async function resolveConfigOption({
 // millisecond as the previous import shared that import's key, and was
 // served the old module anyway. `mtimeMs` carries sub-millisecond
 // resolution and only moves when the file does.
-async function importConfigModule(file: string): Promise<unknown> {
-  let version: number
-  try {
-    version = fs.statSync(file).mtimeMs
-  } catch {
-    // A config that cannot be stat'd is about to fail its import too. The
-    // old key is what keeps that failure the import's to report.
-    version = Date.now()
-  }
-
-  // The dot goes, and that is not cosmetic. `mtimeMs` is fractional, so the
-  // query it produces ends in something that reads as a file extension to
-  // anything deriving a loader from the specifier without stripping the
-  // query first — `sd.config.ts?t=1789565080284.6606` is then a `.6606`
-  // file, and a TypeScript config gets parsed as JavaScript. Replacing the
-  // one dot keeps every distinct mtime a distinct key.
-  const key = String(version).replace('.', '_')
+//
+// Keyed on the files the plugin's `watch` option names as well: a config that
+// reads a data file at load time went on building what that file said at
+// startup. A module the config itself imports is out of reach — a new query
+// on the config re-evaluates the config, not what it imports — so naming one
+// in `watch` buys a rebuild and not a re-read.
+async function importConfigModule(
+  file: string,
+  watched: string[] = [],
+): Promise<unknown> {
+  const key = versionKey([file, ...watched])
 
   // Sequential on purpose: a config module runs arbitrary code at import
   // time — `registerFormat` and friends — and Style Dictionary's registries
   // are global, so importing several at once would interleave those
   // registrations.
   return unwrapDefault(await import(`${pathToFileURL(file).href}?t=${key}`))
+}
+
+// A token module, read the way `importConfigModule` reads a config: under a
+// query keyed on its mtime, and cloned as Style Dictionary's own `loadFile`
+// clones it. Style Dictionary reads one with a bare `import`, and Node's
+// module cache keeps that first evaluation for the life of the process — so
+// under a long-lived watcher an edited `.mjs` token file rebuilt, reported
+// success, and wrote the values the process started with.
+async function importTokenModule(
+  filePath: string | undefined,
+): Promise<DesignTokens> {
+  if (filePath === undefined) return {}
+
+  const module: unknown = await import(
+    `${pathToFileURL(filePath).href}?t=${versionKey([filePath])}`
+  )
+
+  // `.default`, exactly as `loadFile` reads it: a module without one carries
+  // no tokens.
+  const tokens: unknown =
+    typeof module === 'object' && module !== null && 'default' in module
+      ? module.default
+      : undefined
+  if (!isTokens(tokens)) return {}
+
+  try {
+    return structuredClone(tokens)
+  } catch {
+    return tokens
+  }
 }
 
 // A config file is an untyped boundary: `JSON.parse` and a dynamic `import`
@@ -289,6 +350,10 @@ function isImportedConfig(file: string): boolean {
   return IMPORTED_CONFIG_EXTENSIONS.some((extension) =>
     file.endsWith(extension),
   )
+}
+
+function isTokens(value: unknown): value is DesignTokens {
+  return typeof value === 'object' && value !== null
 }
 
 // Whether a discovered file looks like a Style Dictionary configuration at all.
@@ -318,4 +383,62 @@ function unwrapDefault(value: unknown): unknown {
   return typeof value === 'object' && value !== null && 'default' in value
     ? (value.default ?? value)
     : value
+}
+
+// The cache key for a module read under `files`: the newest of their mtimes.
+//
+// The dot goes, and that is not cosmetic. `mtimeMs` is fractional, so the
+// query it produces ends in something that reads as a file extension to
+// anything deriving a loader from the specifier without stripping the query
+// first — `sd.config.ts?t=1789565080284.6606` is then a `.6606` file, and a
+// TypeScript config gets parsed as JavaScript. Replacing the one dot keeps
+// every distinct mtime a distinct key.
+//
+// A file that cannot be stat'd is about to fail its import too, and falls
+// back to the time now, which keeps that failure the import's to report.
+function versionKey(files: string[]): string {
+  let newest = -1
+  for (const file of files) {
+    try {
+      newest = Math.max(newest, fs.statSync(file).mtimeMs)
+    } catch {
+      // Named, and not there: a data file created later is fine to miss.
+    }
+  }
+
+  return String(newest < 0 ? Date.now() : newest).replace('.', '_')
+}
+
+// `config` with the plugin's token-module parser registered in `hooks.parsers`
+// and named in `parsers` — Style Dictionary applies a parser only when both
+// are true. A copy, so the consumer's object is not changed.
+function withTokenModuleParser(config: Config): Config {
+  const applied = config.parsers ?? []
+
+  // The patterns of every other parser the configuration applies, from its
+  // own hooks or the global registry, since either can be named.
+  // Typed partial, because a name nothing registered indexes to nothing.
+  const own: Partial<Record<string, { pattern: RegExp }>> =
+    config.hooks?.parsers ?? {}
+  const registered: Partial<Record<string, { pattern: RegExp }>> =
+    StyleDictionary.hooks.parsers
+  const others = applied.flatMap((name) => {
+    const parser = own[name] ?? registered[name]
+    return parser ? [parser.pattern] : []
+  })
+
+  return {
+    ...config,
+    hooks: {
+      ...config.hooks,
+      parsers: {
+        ...config.hooks?.parsers,
+        [TOKEN_MODULE_PARSER]: {
+          parser: async ({ filePath }) => importTokenModule(filePath),
+          pattern: new TokenModulePattern(others),
+        },
+      },
+    },
+    parsers: [...applied, TOKEN_MODULE_PARSER],
+  }
 }

@@ -785,7 +785,21 @@ grouping were set by hand once and stay wherever the last person left them.
 `sd.config.js` and `sd.config.mjs`. A candidate is validated before it is
 adopted, but the two module names are `import`ed to be validated at all — so
 anything at the top level of that file has already run by the time the check
-looks at what came back. Freshly, on every watch event.
+looks at what came back — once when it is first read, and again whenever it or a
+file named in `watch` changes.
+
+**A module is read again only when something says it changed, and what it
+imports never is.** Node's module cache is permanent, so the plugin reads its
+own modules under a `?t=` key taken from mtimes: a config module keyed on its
+own mtime and those of the files `watch` names, and a `.js`, `.mjs` or `.ts`
+token source through the plugin's own parser, keyed on its mtime. Until #398 a
+token module was read by Style Dictionary's bare `import` and never again, so a
+watcher rebuilt it, reported success, and wrote the startup values. That parser
+steps aside for any file another applied parser matches, because a global parser
+runs ahead of a configuration's own whatever `parsers` says, and the last match
+wins. A new query on a module re-evaluates that module and not what it imports —
+measured — so a module imported by a config or a token module is evaluated once
+per process, and naming it in `watch` buys a rebuild, not a re-read.
 
 That is the plugin's security surface, and it is why this repository's threat
 model is a build-time one: it runs code the host project supplies, writes

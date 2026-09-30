@@ -174,9 +174,10 @@ so which configuration a build used is answerable from the console.
 it, so a project relying on that default keeps working.
 
 **Two of the four names are modules, and reading a module runs it.** A root
-`sd.config.js` is imported — freshly, on every watch event — and validation
-cannot prevent that, because the check can only look at what the import
-returned. If you name your configuration explicitly, or have none, say so:
+`sd.config.js` is imported when it is first read, and again whenever it changes,
+and validation cannot prevent that, because the check can only look at what the
+import returned. If you name your configuration explicitly, or have none, say
+so:
 
 ```typescript
 StyleDictionary({ config: false })
@@ -874,8 +875,9 @@ export interface UnpluginStyleDictionaryOptions {
    *
    * **`false` turns discovery off.** Two of the four names are modules rather
    * than data, and reading a module means running it: a `sd.config.js` in the
-   * root is imported, freshly, on every watch event. Validation cannot prevent
-   * that, because the check can only look at what the import returned — so a
+   * root is imported when it is first read, and again whenever it or a file
+   * named in `watch` changes. Validation cannot prevent that, because the
+   * check can only look at what the import returned — so a
    * project that names its configuration explicitly, or has none, should say
    * `config: false` rather than rely on there being nothing to find.
    */
@@ -1116,6 +1118,11 @@ export interface UnpluginStyleDictionaryOptions {
    * against the working directory — so where the host's root is somewhere
    * else, name a file here relative to the root, and in `source` relative to
    * where the build runs.
+   *
+   * A configuration module is imported again when a file named here changes,
+   * so a data file it reads when it loads is picked up. A module that a
+   * configuration or a token module itself imports is evaluated once per
+   * process, though: naming it here buys a rebuild, not a re-read.
    *
    * What a change to a watched file then triggers is the host's to decide —
    * see the interface documentation above.

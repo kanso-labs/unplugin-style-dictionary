@@ -5155,6 +5155,117 @@ describe('when the config file itself changes', () => {
     ).toContain('#0070f3')
   }, 30000)
 
+  // A configuration reading `tokens/*.mjs`, so its token source is a module
+  // Style Dictionary loads with `import` rather than by parsing it.
+  const tokenModuleFixture = (name: string) => {
+    const directory = fixtureDirectory(name)
+    const tokenModule = path.join(directory, 'tokens', 'color.mjs')
+    const writeTokenModule = (value: string) => {
+      fs.writeFileSync(
+        tokenModule,
+        `export default { color: { primary: { value: '${value}' } } }\n`,
+      )
+    }
+    writeTokenModule('#ff0000')
+
+    const config = {
+      platforms: {
+        css: {
+          buildPath: posix(directory) + '/',
+          files: [{ destination: 'vars.css', format: 'css/variables' }],
+          transformGroup: 'css',
+        },
+      },
+      source: [posix(path.join(directory, 'tokens')) + '/*.mjs'],
+    }
+
+    return {
+      config,
+      output: () => fs.readFileSync(path.join(directory, 'vars.css'), 'utf-8'),
+      tokenModule,
+      writeTokenModule,
+    }
+  }
+
+  it('reads an edited token module, not the one it read at startup', async () => {
+    // Style Dictionary imports a token module with a bare `import`, and Node's
+    // module cache keeps that first evaluation for the life of the process:
+    // the rebuild ran, reported success, and wrote the startup values.
+    const { config, output, tokenModule, writeTokenModule } =
+      tokenModuleFixture('token-module')
+
+    const plugin = vitePlugin({ cache: false, config, silent: true })
+    await callBuildStart(plugin)
+    expect(output()).toContain('--color-primary: #ff0000;')
+
+    await settle(20)
+    writeTokenModule('#00ff00')
+    await callWatchChange(plugin, posix(tokenModule))
+
+    expect(output()).toContain('--color-primary: #00ff00;')
+  }, 30000)
+
+  it('leaves a token module to a parser the configuration applies itself', async () => {
+    // Style Dictionary runs every parser whose pattern matches and keeps the
+    // last result, and the plugin's own comes after a global one whatever the
+    // order in `parsers` — so it has to step aside for any file another
+    // applied parser matches.
+    const { config, output } = tokenModuleFixture('token-module-parser')
+    StyleDictionary.registerParser({
+      name: 'test/consumer-mjs',
+      parser: () => ({ color: { primary: { value: '#123123' } } }),
+      pattern: /\.mjs$/,
+    })
+
+    await callBuildStart(
+      vitePlugin({
+        cache: false,
+        config: { ...config, parsers: ['test/consumer-mjs'] },
+        silent: true,
+      }),
+    )
+
+    expect(output()).toContain('--color-primary: #123123;')
+  }, 30000)
+
+  it('evaluates a config again when a file it reads and names in watch changes', async () => {
+    // A config module was keyed on its own mtime alone, so one choosing its
+    // output from a data file went on writing the first choice after the data
+    // said otherwise — though the data file was in `watch`, so the edit did
+    // trigger the rebuild.
+    const directory = fixtureDirectory('watched-data')
+    const data = path.join(directory, 'data.json')
+    fs.writeFileSync(data, JSON.stringify({ destination: 'first.js' }))
+
+    const configFile = path.join(directory, 'sd.config.mjs')
+    fs.writeFileSync(
+      configFile,
+      `import fs from 'node:fs'
+const { destination } = JSON.parse(fs.readFileSync('${posix(data)}', 'utf-8'))
+export default {
+  platforms: {
+    js: {
+      buildPath: '${posix(directory)}/',
+      files: [{ destination, format: 'javascript/es6' }],
+      transformGroup: 'js',
+    },
+  },
+  source: ['${posix(path.join(directory, 'tokens'))}/*.json'],
+}
+`,
+    )
+
+    const plugin = vitePlugin({ config: configFile, silent: true, watch: data })
+    await callBuildStart(plugin)
+    expect(fs.existsSync(path.join(directory, 'first.js'))).toBe(true)
+
+    await settle(20)
+    fs.writeFileSync(data, JSON.stringify({ destination: 'second.js' }))
+    await callWatchChange(plugin, posix(data))
+
+    expect(fs.existsSync(path.join(directory, 'second.js'))).toBe(true)
+  }, 30000)
+
   it('evaluates an unchanged ESM config once however many events arrive', async () => {
     const directory = fixtureDirectory('once')
     const configFile = path.join(directory, 'sd.config.mjs')
