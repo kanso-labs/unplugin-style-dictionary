@@ -113,6 +113,12 @@ const collectErrors = async (work: () => Promise<void>) => {
   }
 }
 
+// The Vite plugin created as a JavaScript config creates it, with nothing
+// checking the options' type on the way in.
+const createUntyped = (options: unknown) => {
+  Reflect.apply(vitePlugin, undefined, [options])
+}
+
 // `closeWatcher` uses none of the plugin context, but it gets a caller of its
 // own like every other hook here: a bare call is how a hook that starts using
 // `this` fails as a plugin bug rather than as a missing stub.
@@ -4374,6 +4380,50 @@ describe('unplugin-style-dictionary (vite target)', () => {
       expect(
         again.filter((line) => line.includes('Config file not found')),
       ).toHaveLength(1)
+    })
+  })
+
+  // A value outside an option's declared type used to be read as whatever it
+  // came closest to: `failOnError: 'always'` behaved as `false`, so the build
+  // exited 0, and `platforms: { serve: ['js'] }` built every platform. A typed
+  // config rules them out, and a CommonJS webpack config or a JavaScript Vite
+  // config does not — so they are checked when the plugin is created.
+  describe('an option outside its declared type', () => {
+    it.each([
+      ['failOnError', { failOnError: 'always' }],
+      ['failOnError', { failOnError: 'true' }],
+      ['platforms', { platforms: 'js' }],
+      ['platforms', { platforms: { serve: ['js'] } }],
+      ['platforms', { platforms: ['js', 1] }],
+      ['logLevel', { logLevel: 'error' }],
+    ])('rejects %s: %o', (name, options) => {
+      expect(() => {
+        createUntyped(options)
+      }).toThrow(TypeError)
+      expect(() => {
+        createUntyped(options)
+      }).toThrow(name)
+    })
+
+    it.each<UnpluginStyleDictionaryOptions>([
+      {},
+      { failOnError: true },
+      { failOnError: false },
+      { failOnError: 'build' },
+      { failOnError: 'serve' },
+      { platforms: ['js'] },
+      { platforms: { build: ['js'] } },
+      { platforms: { watch: ['js'] } },
+      { logLevel: 'silent' },
+      { logLevel: 'warn' },
+      { logLevel: 'info' },
+      { logLevel: 'verbose' },
+    ])('accepts %o', (options) => {
+      expect(() => vitePlugin(options)).not.toThrow()
+    })
+
+    it('accepts no options at all', () => {
+      expect(() => vitePlugin()).not.toThrow()
     })
   })
 
