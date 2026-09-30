@@ -759,14 +759,15 @@ const compilesInFlight = new Map<string, Promise<void>>()
 // makes `adoptCompiler` one function instead of two copies drifting apart.
 interface BundlerCompiler {
   hooks: {
-    beforeCompile: {
-      tapPromise: (name: string, handler: () => Promise<void>) => void
-    }
     compilation: {
       tap: (name: string, handler: (compilation: Compilation) => void) => void
     }
     done: { tap: (name: string, handler: () => void) => void }
     failed: { tap: (name: string, handler: () => void) => void }
+    run: { tapPromise: (name: string, handler: () => Promise<void>) => void }
+    watchRun: {
+      tapPromise: (name: string, handler: () => Promise<void>) => void
+    }
   }
   options: { context?: string | undefined; mode?: string | undefined }
   watchMode: boolean
@@ -819,8 +820,8 @@ const unpluginFactory: UnpluginFactory<
   // webpack and rspack are the targets whose `buildStart` does not run before
   // the module graph is resolved: unplugin taps it on `make`, an
   // `AsyncParallelHook` that `EntryPlugin` taps too. The `webpack` and
-  // `rspack` keys below compile on `beforeCompile` instead, which both await
-  // before the compilation exists. rspack reimplements webpack's plugin API,
+  // `rspack` keys below compile on `run` and `watchRun` instead, which both
+  // await before the compilation exists. rspack reimplements webpack's plugin API,
   // so everything this plugin does with a compiler is the same on either —
   // but unplugin dispatches them by separate keys, so the flag names both.
   const isWebpack = meta.framework === 'webpack' || meta.framework === 'rspack'
@@ -1285,9 +1286,9 @@ const unpluginFactory: UnpluginFactory<
     // after this runs, so it is read per compile below rather than here.
     hostMode = compiler.options.mode
 
-    // The compile happens in `beforeCompile`, which webpack awaits *before*
-    // the compilation exists — so a message from it has nothing to attach to
-    // yet and is held until one appears.
+    // The compile happens in `run` and `watchRun`, which webpack awaits
+    // *before* the compilation exists — so a message from it has nothing to
+    // attach to yet and is held until one appears.
     //
     // Only failures are routed. `stats` carries warnings and errors and
     // nothing else, so the progress lines stay on the console rather than
@@ -1315,7 +1316,7 @@ const unpluginFactory: UnpluginFactory<
       },
     )
 
-    // A `beforeCompile` that throws ends the run without ever creating a
+    // A `run` or `watchRun` that throws ends the run without ever creating a
     // compilation, and that is exactly the case that produced the message.
     // Left to the buffer it would be reported nowhere at all, so whatever is
     // still held when the run ends goes to the console after all.
@@ -1327,22 +1328,34 @@ const unpluginFactory: UnpluginFactory<
     compiler.hooks.failed.tap('unplugin-style-dictionary', drainToConsole)
     compiler.hooks.done.tap('unplugin-style-dictionary', drainToConsole)
 
-    // `beforeCompile` is awaited before the compilation exists, so the
-    // tokens are on disk before webpack resolves the module that imports
-    // them. Tapped on every compilation rather than only the first: a watch
-    // rebuild needs the same guarantee, and a compile that renders what is
-    // already there skips its own write.
-    compiler.hooks.beforeCompile.tapPromise(
+    // `run` and `watchRun` are awaited before `compile()`, so the tokens are
+    // on disk before webpack resolves the module that imports them, and
+    // `watchRun` fires for every compile a watcher runs, the first included —
+    // a watch rebuild needs the same guarantee, and a compile that renders
+    // what is already there skips its own write.
+    //
+    // Not `beforeCompile`, which is where this used to be: a child compiler
+    // inherits every parent tap but `make`, `compile`, `emit`, `afterEmit`,
+    // `invalid`, `done` and `thisCompilation`, so html-webpack-plugin's child
+    // ran the whole pipeline a second time per build — the consumer's
+    // `config` function, both hooks, and a second compile under
+    // `cache: false`. `runAsChild` calls `compile()` directly and reaches
+    // neither of these. Returning early on `compiler.isChild()` cannot do the
+    // same job: the child runs the parent's tap, which closes over the
+    // parent's `compiler`, so it answers `false` either way.
+    const compileTokens = async () => {
+      isWatching = compiler.watchMode
+
+      const resolved = await resolveConfigs()
+      if (resolved.length === 0) return
+
+      await compileOnceAcrossInstances(resolved)
+      hasCompiled = true
+    }
+    compiler.hooks.run.tapPromise('unplugin-style-dictionary', compileTokens)
+    compiler.hooks.watchRun.tapPromise(
       'unplugin-style-dictionary',
-      async () => {
-        isWatching = compiler.watchMode
-
-        const resolved = await resolveConfigs()
-        if (resolved.length === 0) return
-
-        await compileOnceAcrossInstances(resolved)
-        hasCompiled = true
-      },
+      compileTokens,
     )
   }
 
@@ -1377,7 +1390,7 @@ const unpluginFactory: UnpluginFactory<
 
       // Registering the watch list is all this hook does on webpack, and it
       // has to happen here rather than beside the compile: `addWatchFile`
-      // reaches `compilation.fileDependencies`, and `beforeCompile` runs
+      // reaches `compilation.fileDependencies`, and `run` and `watchRun` run
       // before there is a compilation to add to. Compiling here as well would
       // put the race back, and run every webpack build twice.
       if (isWebpack) return
@@ -1766,8 +1779,8 @@ const unpluginFactory: UnpluginFactory<
       if (!isWatchedSource(id, patterns, generatedDestinations)) return
 
       // Same division as `buildStart`: on webpack the compile belongs to
-      // `beforeCompile`, which has already run for this compilation, so all
-      // that is left is to re-register the watch list below.
+      // `watchRun`, which has already run for this compilation, so all that
+      // is left is to re-register the watch list below.
       if (!isWebpack) await schedule(path.basename(id))
 
       // Expanded again after the build rather than reusing the list from
