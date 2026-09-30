@@ -1346,11 +1346,26 @@ Vite 6.4.3, 7.3.6 and 8.3.0, along with the confirmation that amending it in
 too and is the more sanctioned place, but it has no resolved `root` to resolve
 token paths against, so it would have to guess at what Vite computes.
 
-**The negation names each file, and must not be broadened.**
+**The negation names the source patterns, and must not be broadened.**
 `!**/node_modules/**` works and hands the entire dependency tree to the watcher;
-a leaf-file negation was measured to be enough, because chokidar still reaches a
-path that was explicitly added. Un-ignoring the package directory or the whole
-tree buys nothing and costs thousands of watched files.
+negating what Style Dictionary reads was measured to be enough, because chokidar
+still reaches a path that was explicitly added. Un-ignoring the package
+directory or the whole tree buys nothing and costs thousands of watched files.
+
+That negation is one `!<pattern>` per source pattern that itself reaches into
+`node_modules`, a literal being its own pattern. A negated source glob is not
+the broadening above: it un-ignores exactly the files the build reads and
+nothing beside them. It used to be one negation per matched file and per static
+parent directory, and chokidar tests every path it considers against the whole
+list, so start-up and every event grew with the token count — #417 measured
+1,373ms of ignore-matching at start-up for 2,000 token files against 14ms for
+the one pattern. The directory needs no entry of its own: the pattern delivers
+the edit, and a file created there later reaches the plugin's own watcher. A
+file a `**` from outside `node_modules` reached is still negated on its own,
+because negating that pattern says nothing Vite's `**/node_modules/**` does not
+overrule. The pattern form was measured to deliver an edit, with the plugin's
+own watcher refused, on Vite 6.4.3, 7.3.6 and 8.3.1, under the dev server and
+under `vite build --watch` alike.
 
 **`configResolved` resolves configurations now, and that has two consequences.**
 It needs the watch list to derive the negations, so it calls a consumer's
