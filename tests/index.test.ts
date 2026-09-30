@@ -5690,8 +5690,15 @@ const esmFamily = (directory: string) => `export default {
 }
 `
 
-// `satisfies` is the point: it is type syntax, so the file only imports at
-// all where Node strips types.
+// Type syntax, so the file is TypeScript and not JavaScript by accident. What
+// the row proves is that the watch list is read from a `.ts` config under the
+// plugin's `?t=` key — not that Node strips types. Under Vitest,
+// `src/config.ts` is transformed and its `import()` goes through Vite's module
+// runner, which transpiles the file itself, so the row passes on Node 22.12,
+// where the built package cannot load a `.ts` config at all, and with syntax
+// Node's strip-only mode rejects. `scripts/check-peers.mjs` runs a `.ts`
+// config through the built package under plain Node, which is where that is
+// decided.
 const typescript = (directory: string) =>
   esmFamily(directory).replace(/\n$/, ' satisfies Record<string, unknown>\n')
 

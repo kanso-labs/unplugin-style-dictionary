@@ -328,6 +328,16 @@ loader plugin, and what is under test is this package's entry points. And the
 webpack fixture goes through the README's CommonJS `require` form, because the
 `.default` hop is the part most likely to break.
 
+**The rolldown fixture's configuration is `sd.config.ts`, and that is the only
+place a `.ts` config meets Node's own loader.** The `.ts` row in
+`tests/index.test.ts` never does: under Vitest the plugin's `import()` goes
+through Vite's module runner, which transpiles the file itself, so the row
+passes on Node 22.12 — where the built package cannot load a `.ts` config at all
+— and with an `enum` that Node's strip-only mode rejects. `Build` runs the check
+on the pinned Node, where the fixture builds. Run by hand on a Node without
+`process.features.typescript`, it asserts the README's
+`Could not import TypeScript file` instead, so it never skips without saying so.
+
 A version outside a declared range fails at the install rather than the
 assertion — npm refuses it with ERESOLVE, which is the peer declaration doing
 its job. To prove the fixtures themselves bite, break the built package: with
