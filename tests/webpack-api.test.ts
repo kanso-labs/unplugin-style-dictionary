@@ -40,6 +40,29 @@ type Compile = (
   host?: { childCompiler?: boolean },
 ) => Promise<StatsLike | undefined>
 
+// A watcher over the same fixture, reporting each compile to `onBuild`.
+type Watch = (
+  context: string,
+  outputPath: string,
+  options: UnpluginStyleDictionaryOptions,
+  onBuild: (error: Error | null, stats: StatsLike | undefined) => void,
+) => { close: () => Promise<void> }
+
+const settle = async (ms: number) => {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+const waitUntil = async (satisfied: () => boolean, timeoutMs: number) => {
+  const deadline = Date.now() + timeoutMs
+  while (!satisfied() && Date.now() < deadline) await settle(50)
+}
+
+// The messages a compile's `stats` carries as warnings.
+const warningsOf = (stats: StatsLike | undefined) =>
+  (stats?.toJson({ all: true }).warnings ?? []).map(
+    (warning) => warning.message,
+  )
+
 // What html-webpack-plugin does to a build, reduced to the part that matters: a
 // `make` tap that runs a child compiler. A child inherits most of its parent's
 // taps, which is how a plugin tapped in the wrong place runs twice per build.
@@ -93,6 +116,7 @@ const COMPILERS: Array<{
   compile: Compile
   name: string
   reportsVerbatim: boolean
+  watch: Watch
 }> = [
   {
     compile: async (context, outputPath, options, host) =>
@@ -116,6 +140,28 @@ const COMPILERS: Array<{
       }),
     name: 'webpack',
     reportsVerbatim: true,
+    watch: (context, outputPath, options, onBuild) => {
+      const watching = webpack({
+        context,
+        entry: './entry.js',
+        mode: 'development',
+        output: { path: outputPath },
+        plugins: [webpackPlugin(options)],
+      }).watch({ aggregateTimeout: 50 }, (error, stats) => {
+        onBuild(error ?? null, stats)
+      })
+
+      return {
+        close: async () =>
+          new Promise<void>((resolve) => {
+            if (watching)
+              watching.close(() => {
+                resolve()
+              })
+            else resolve()
+          }),
+      }
+    },
   },
   {
     compile: async (context, outputPath, options, host) =>
@@ -139,6 +185,26 @@ const COMPILERS: Array<{
       }),
     name: 'rspack',
     reportsVerbatim: false,
+    watch: (context, outputPath, options, onBuild) => {
+      const watching = rspack({
+        context,
+        entry: './entry.js',
+        mode: 'development',
+        output: { path: outputPath },
+        plugins: [rspackPlugin(options)],
+      }).watch({ aggregateTimeout: 50 }, (error, stats) => {
+        onBuild(error ?? null, stats)
+      })
+
+      return {
+        close: async () =>
+          new Promise<void>((resolve) => {
+            watching.close(() => {
+              resolve()
+            })
+          }),
+      }
+    },
   },
 ]
 
@@ -173,7 +239,7 @@ const buildWithSlowConfig = async (
 
 describe.each(COMPILERS)(
   'under a real $name compiler',
-  ({ compile, name, reportsVerbatim }) => {
+  ({ compile, name, reportsVerbatim, watch }) => {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `unplugin-style-dictionary-${name}-`),
     )
@@ -295,6 +361,248 @@ describe.each(COMPILERS)(
 
       expect(stats?.toJson().errors ?? []).toEqual([])
       expect({ ended, started }).toEqual({ ended: 1, started: 1 })
+    }, 60000)
+
+    // A fixture for a watch session: a token source, an application module
+    // that is not one, and a configuration writing css and js from the token.
+    // The entry imports the js output and the module, so both are in the
+    // module graph a recompile walks.
+    const writeWatchFixture = (fixture: string) => {
+      const context = path.join(tempDir, fixture)
+      fs.mkdirSync(path.join(context, 'tokens'), { recursive: true })
+      fs.mkdirSync(path.join(context, 'generated'), { recursive: true })
+
+      const token = path.join(context, 'tokens', 'color.json')
+      const writeToken = (value: string) => {
+        fs.writeFileSync(
+          token,
+          JSON.stringify({ color: { primary: { value } } }),
+        )
+      }
+      writeToken('#000001')
+
+      const app = path.join(context, 'app.js')
+      fs.writeFileSync(app, 'export const app = 1\n')
+      fs.writeFileSync(
+        path.join(context, 'entry.js'),
+        [
+          "import { ColorPrimary } from './generated/tokens.js'",
+          "import { app } from './app.js'",
+          'export const primary = ColorPrimary',
+          'export const version = app',
+          '',
+        ].join('\n'),
+      )
+
+      const generated = (file: string) => {
+        const output = path.join(context, 'generated', file)
+        return fs.existsSync(output) ? fs.readFileSync(output, 'utf-8') : ''
+      }
+
+      // Older than the watcher, so its first recompile has nothing of the
+      // fixture's own to report — rspack counts a file written just before it
+      // started as modified.
+      const past = new Date(Date.now() - 10000)
+      for (const file of [token, app, path.join(context, 'entry.js')]) {
+        fs.utimesSync(file, past, past)
+      }
+
+      const buildPath =
+        path.join(context, 'generated').replace(/\\/g, '/') + '/'
+      const config = {
+        platforms: {
+          css: {
+            buildPath,
+            files: [{ destination: 'vars.css', format: 'css/variables' }],
+            transformGroup: 'css',
+          },
+          js: {
+            buildPath,
+            files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+            transformGroup: 'js',
+          },
+        },
+        source: [path.join(context, 'tokens', '*.json').replace(/\\/g, '/')],
+      }
+
+      return { app, config, context, generated, writeToken }
+    }
+
+    // Starts a watcher and records each compile it reports.
+    //
+    // A compile that writes the generated file makes the watcher run one more
+    // straight after it — the write lands after the compile's start time — so
+    // no case can take "the next build" to be the one its edit caused.
+    // `quiet()` waits for the watcher to settle, and `after(n, predicate)` for
+    // any build from the n-th on that satisfies `predicate`.
+    const watchSession = (
+      context: string,
+      options: UnpluginStyleDictionaryOptions,
+    ) => {
+      const builds: Array<{
+        error: Error | null
+        stats: StatsLike | undefined
+      }> = []
+      let lastBuild = Date.now()
+      const session = watch(
+        context,
+        path.join(context, 'dist'),
+        options,
+        (error, stats) => {
+          builds.push({ error, stats })
+          lastBuild = Date.now()
+        },
+      )
+
+      const quiet = async () => {
+        await waitUntil(
+          () => builds.length > 0 && Date.now() - lastBuild >= 1000,
+          20000,
+        )
+        return builds.length
+      }
+
+      const after = async (
+        from: number,
+        satisfied: (build: (typeof builds)[number]) => boolean,
+      ) => {
+        await waitUntil(() => builds.slice(from).some(satisfied), 20000)
+        return builds.slice(from)
+      }
+
+      return { after, close: session.close, quiet }
+    }
+
+    it('keeps watching through a broken token edit, and rebuilds once it is fixed', async () => {
+      // A watch recompile reached `runBuilds` with no `context`, which reads as
+      // a first build, so the default `failOnError: 'build'` threw on a broken
+      // token and ended the watch session: no later edit rebuilt anything.
+      const { config, context, generated, writeToken } =
+        writeWatchFixture('watch-recover')
+      const session = watchSession(context, { config, logLevel: 'silent' })
+
+      try {
+        const settled = await session.quiet()
+
+        writeToken('{color.missing}')
+        const since = await session.after(settled, (build) =>
+          warningsOf(build.stats).some((message) =>
+            message.includes('Compilation failed after'),
+          ),
+        )
+        expect(since.map((build) => build.error)).toEqual(since.map(() => null))
+        expect(
+          since.some((build) =>
+            warningsOf(build.stats).some((message) =>
+              message.includes('Compilation failed after'),
+            ),
+          ),
+        ).toBe(true)
+
+        // Reported rather than failed: the default fails a first build and
+        // lets a rebuild through, and this is a rebuild.
+        expect(since.map((build) => build.stats?.hasErrors())).toEqual(
+          since.map(() => false),
+        )
+
+        await session.quiet()
+        writeToken('#000002')
+        await waitUntil(() => generated('tokens.js').includes('#000002'), 20000)
+        expect(generated('tokens.js')).toContain('#000002')
+      } finally {
+        await session.close()
+      }
+    }, 60000)
+
+    it("fails a watch recompile under failOnError: 'serve', and keeps watching", async () => {
+      // `'serve'` is the setting that fails a rebuild, and it behaved like
+      // `false`: every recompile read as a first build, which `'serve'` leaves
+      // alone. Thrown from `watchRun`, the failure would end the watch
+      // session, so it goes on `compilation.errors` instead.
+      const { config, context, generated, writeToken } =
+        writeWatchFixture('watch-serve')
+      const session = watchSession(context, {
+        config,
+        failOnError: 'serve',
+        logLevel: 'silent',
+      })
+
+      try {
+        const settled = await session.quiet()
+
+        writeToken('{color.missing}')
+        const since = await session.after(
+          settled,
+          (build) => build.stats?.hasErrors() === true,
+        )
+        expect(since.map((build) => build.error)).toEqual(since.map(() => null))
+        expect(since.some((build) => build.stats?.hasErrors() === true)).toBe(
+          true,
+        )
+
+        await session.quiet()
+        writeToken('#000002')
+        await waitUntil(() => generated('tokens.js').includes('#000002'), 20000)
+        expect(generated('tokens.js')).toContain('#000002')
+      } finally {
+        await session.close()
+      }
+    }, 60000)
+
+    it('builds only the watch selection on a watch recompile', async () => {
+      // `platforms: { watch: [...] }` did nothing: every recompile built the
+      // `build` selection, which is every platform when it is omitted.
+      const { config, context, generated, writeToken } =
+        writeWatchFixture('watch-platforms')
+      const session = watchSession(context, {
+        config,
+        logLevel: 'silent',
+        platforms: { watch: ['css'] },
+      })
+
+      try {
+        await session.quiet()
+        expect(generated('vars.css')).toContain('#000001')
+        expect(generated('tokens.js')).toContain('#000001')
+
+        writeToken('#000002')
+        await waitUntil(() => generated('vars.css').includes('#000002'), 20000)
+        await session.quiet()
+
+        expect(generated('vars.css')).toContain('#000002')
+        expect(generated('tokens.js')).toContain('#000001')
+      } finally {
+        await session.close()
+      }
+    }, 60000)
+
+    it('compiles nothing for a watch recompile no token source caused', async () => {
+      // Every recompile used to call the consumer's `config` function and fire
+      // both hooks, an edit to application code included.
+      const { app, config, context } = writeWatchFixture('watch-unrelated')
+      let started = 0
+      const session = watchSession(context, {
+        config,
+        logLevel: 'silent',
+        onBuildStart: () => {
+          started++
+        },
+      })
+
+      try {
+        const settled = await session.quiet()
+        const before = started
+        expect(before).toBeGreaterThan(0)
+
+        fs.writeFileSync(app, 'export const app = 2\n')
+        const since = await session.after(settled, () => true)
+        await session.quiet()
+
+        expect(since.map((build) => build.error)).toEqual(since.map(() => null))
+        expect(started).toBe(before)
+      } finally {
+        await session.close()
+      }
     }, 60000)
 
     it('finds a config relative to the compiler context', async () => {
