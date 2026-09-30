@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.10.14](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.13...unplugin-style-dictionary-v0.10.14) (2026-09-30)
+
+
+### Bug Fixes
+
+* **build:** key the shared compile on each instance's own options ([#468](https://github.com/kanso-labs/unplugin-style-dictionary/issues/468)) ([4afd911](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4afd911d5b797a31fb7bcb515b50a47d1927b603))
+* **build:** preserve a destination's symlink and mode across the rename ([#475](https://github.com/kanso-labs/unplugin-style-dictionary/issues/475)) ([ff3c605](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ff3c6053f1efcd07df922d073a71df1b2147fb4d))
+* **build:** route copy actions through the atomic volume ([#465](https://github.com/kanso-labs/unplugin-style-dictionary/issues/465)) ([c88bffa](https://github.com/kanso-labs/unplugin-style-dictionary/commit/c88bffa8bdf2fa50f12215b7d2fefc0cdd4fa38a))
+* **build:** send the size table through the host's logger ([#485](https://github.com/kanso-labs/unplugin-style-dictionary/issues/485)) ([caa55bb](https://github.com/kanso-labs/unplugin-style-dictionary/commit/caa55bb73ea4d72c764c7d457ed3960418d26c1c))
+* **build:** skip the temporary file for a byte-identical rebuild ([#464](https://github.com/kanso-labs/unplugin-style-dictionary/issues/464)) ([d75d248](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d75d248d484837c56ff51be20bf2b2a46664f0b6))
+* **build:** sweep temporary files a killed build left in the buildPath ([#470](https://github.com/kanso-labs/unplugin-style-dictionary/issues/470)) ([a1d6084](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a1d60848ee7d28dcaba798d25a59088559278ba3))
+* **build:** validate the platforms selection before the up-to-date skip ([#469](https://github.com/kanso-labs/unplugin-style-dictionary/issues/469)) ([d2aa02e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d2aa02e32b38dad564744fdcc13d1468b69c65b2))
+* **config:** re-read token modules and watched config data on a rebuild ([#476](https://github.com/kanso-labs/unplugin-style-dictionary/issues/476)) ([fae64bb](https://github.com/kanso-labs/unplugin-style-dictionary/commit/fae64bb07fb01db9af7f4139236f0d78a7853f9b))
+* **watch:** register realpaths so rolldown sees edits through a symlink ([#462](https://github.com/kanso-labs/unplugin-style-dictionary/issues/462)) ([4164917](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4164917d029a1f2b8412c27074290ae60f9cfabd))
+* **webpack:** compile once per build rather than once per child compiler ([#471](https://github.com/kanso-labs/unplugin-style-dictionary/issues/471)) ([2acdd5d](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2acdd5dcd28bc50dea54f953a000941a46b92b4e))
+* **webpack:** rebuild when a new token file matches a glob source ([#474](https://github.com/kanso-labs/unplugin-style-dictionary/issues/474)) ([2aaa62f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2aaa62fa909e2a757bf6982e39e169217ffa02b5))
+* **webpack:** treat a watch recompile as a rebuild, not a first build ([#472](https://github.com/kanso-labs/unplugin-style-dictionary/issues/472)) ([5b88af4](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5b88af499492dbd552208ac60d0069f2606cd643))
+
 ## [0.10.13](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.12...unplugin-style-dictionary-v0.10.13) (2026-09-29)
 
 
