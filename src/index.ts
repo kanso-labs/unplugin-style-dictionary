@@ -18,6 +18,7 @@ import { colourAllowed, paint } from './colour.js'
 import { runBuilds } from './compile.js'
 import { resolveConfigOption } from './config.js'
 import { asError, errorMessage } from './errors.js'
+import { checkOptions } from './options.js'
 import {
   expandPatterns,
   realpathOf,
@@ -941,6 +942,12 @@ const unpluginFactory: UnpluginFactory<
   // so everything this plugin does with a compiler is the same on either —
   // but unplugin dispatches them by separate keys, so the flag names both.
   const isWebpack = meta.framework === 'webpack' || meta.framework === 'rspack'
+
+  // Before anything reads them. unplugin calls this as soon as a Vite, rollup
+  // or rolldown config calls the plugin, and from `apply(compiler)` under
+  // webpack and rspack, so a wrong value throws before any build starts.
+  checkOptions(options)
+
   const {
     cache = true,
     errorOverlay = true,

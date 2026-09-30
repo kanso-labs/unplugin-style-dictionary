@@ -224,6 +224,10 @@ export interface UnpluginStyleDictionaryOptions {
    *
    * Reporting happens either way, and is not suppressed by `silent`.
    *
+   * Any other value throws a `TypeError` when the plugin is created — the
+   * string `'true'` from an environment variable included, which used to
+   * behave as `false`.
+   *
    * @default 'build'
    */
   failOnError?: 'build' | 'serve' | boolean
@@ -244,7 +248,9 @@ export interface UnpluginStyleDictionaryOptions {
    *   about rather than pointing at its own `--verbose` flag.
    *
    * A compile that fails is reported at every level, so there is no
-   * `'error'`: `'silent'` is the quietest and still reports a failure.
+   * `'error'`: `'silent'` is the quietest and still reports a failure. Any
+   * other value, `'error'` included, throws a `TypeError` when the plugin is
+   * created.
    *
    * This option governs what the plugin says, not where it goes. The messages
    * are handed to the host — Vite's `config.logger`, the rollup and rolldown
@@ -342,6 +348,11 @@ export interface UnpluginStyleDictionaryOptions {
    * removed and not refreshed, so a one-shot build that scopes platforms ships
    * stale output for the rest. Scope the watch half rather than the build half
    * unless that is what you want.
+   *
+   * Any other shape throws a `TypeError` when the plugin is created: a single
+   * string, or an object with a key other than `build` and `watch` — `serve`
+   * is the easy slip, since `failOnError` says `'serve'`. Both used to build
+   * every platform.
    *
    * @default undefined, which builds every platform
    */
