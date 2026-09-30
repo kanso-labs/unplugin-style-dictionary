@@ -157,9 +157,14 @@ export async function readConfigObject(
       )
     }
   } catch (err) {
+    // Asked only once reading has failed, and of the file rather than the
+    // error: a module config that imports something missing fails with the
+    // same code as a config that is not there at all.
     if (report) {
       report(
-        `Failed to parse config file: ${item.config}. Error: ${errorMessage(err)}`,
+        fs.existsSync(item.config)
+          ? `Failed to parse config file: ${item.config}. Error: ${errorMessage(err)}`
+          : `Config file not found: ${item.config}`,
         'error',
       )
     }
@@ -227,20 +232,27 @@ export async function resolveConfigOption({
 
       // Announced, because "which configuration did it pick" was not
       // answerable from the console at all, and discovery picks from four
-      // generic names.
+      // generic names. A candidate skipped on the way is named here rather
+      // than as an error: the build has a configuration, and the advice is
+      // to name it, since `config: false` would stop discovery finding it.
       if (!discovery.announced) {
         discovery.announced = true
-        log(`Using the configuration it found at ${fullPath}`, 'info')
+        log(
+          rejected.length > 0
+            ? `Using the configuration it found at ${fullPath}, after ignoring ${rejected.join(', ')}: nothing there declares platforms, source, include or tokens. Name ${file} with the config option to stop looking.`
+            : `Using the configuration it found at ${fullPath}`,
+          'info',
+        )
       }
 
       rawConfig = file
       break
     }
 
-    // Said whether or not something usable turned up after them. A skipped
-    // candidate is the interesting half of "no configuration found": the
-    // file is right there, and the reason it was not used is not guessable.
-    if (rejected.length > 0) {
+    // A skipped candidate is the interesting half of "no configuration
+    // found": the file is right there, and the reason it was not used is not
+    // guessable.
+    if (!rawConfig && rejected.length > 0) {
       log(
         `Ignored ${rejected.join(', ')} in ${root}: nothing there declares platforms, source, include or tokens, so it does not look like a Style Dictionary configuration. Name it with the config option if it is one, or set config to false to stop looking.`,
         'error',

@@ -4266,6 +4266,117 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })
   })
 
+  // A configuration problem was said on every resolution, and a watching host
+  // resolves on every rebuild — a Vite start-up alone resolves three times. At
+  // `'error'`, so `'silent'` printed each repeat, and webpack would have filed
+  // each one as a compilation warning.
+  describe('when a configuration has a problem', () => {
+    it('folds a skipped candidate into the announcement when a later one is adopted', async () => {
+      const directory = rootWith('said-once-mixed', {
+        'config.json': JSON.stringify({ apiUrl: 'https://example.test' }),
+      })
+      const configPath = path.join(directory, 'sd.config.js')
+      fs.writeFileSync(
+        configPath,
+        `export default ${usableConfig(directory, 'said-once.css')}\n`,
+      )
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        // No `logLevel`: the announcement is a progress line, and it is where
+        // the skipped file is named now.
+        const plugin = vitePlugin({ root: directory })
+        await callBuildStart(plugin)
+        await callWatchChange(plugin, posix(configPath))
+        await callWatchChange(plugin, posix(configPath))
+
+        const errors = errorSpy.mock.calls.map((call) => String(call[0]))
+        const announced = logSpy.mock.calls
+          .map((call) => stripAnsi(String(call[0])))
+          .filter((line) => line.includes('Using the configuration it found'))
+
+        expect(
+          fs.readFileSync(path.join(directory, 'gen', 'said-once.css'), 'utf8'),
+        ).toContain('--color-brand: #123456;')
+
+        // Nothing failed, so nothing is reported as a failure.
+        expect(errors).toEqual([])
+
+        // Named once, and without advice to set `config: false` — that returns
+        // before discovery runs, so it would drop the file that was adopted.
+        expect(announced).toHaveLength(1)
+        expect(announced[0]).toContain('config.json')
+        expect(announced[0]).not.toContain('config to false')
+      } finally {
+        errorSpy.mockRestore()
+        logSpy.mockRestore()
+      }
+    })
+
+    it('says there is no configuration once, however often it looks', async () => {
+      // With nothing resolved there are no patterns to filter against, so an
+      // unrelated save resolves again. That stays; the repeat does not.
+      const directory = rootWith('said-once-none', { 'main.js': '' })
+      const unrelated = path.join(directory, 'main.js')
+
+      const said = await collectErrors(async () => {
+        const plugin = vitePlugin({ logLevel: 'silent', root: directory })
+        await callBuildStart(plugin)
+        await callWatchChange(plugin, posix(unrelated))
+        await callWatchChange(plugin, posix(unrelated))
+      })
+
+      expect(
+        said.filter((line) => line.includes('No configuration specified')),
+      ).toHaveLength(1)
+    })
+
+    it('says a named configuration is not found, once until a compile succeeds', async () => {
+      const directory = rootWith('said-once-missing', {})
+      const missing = path.join(directory, 'tokens', 'sd.config.json')
+
+      const plugin = vitePlugin({
+        config: 'tokens/sd.config.json',
+        failOnError: false,
+        logLevel: 'silent',
+        root: directory,
+      })
+
+      const said = await collectErrors(async () => {
+        await callBuildStart(plugin)
+        await callWatchChange(plugin, posix(missing))
+        await callWatchChange(plugin, posix(missing))
+      })
+
+      // A missing file is not a file that failed to parse.
+      const notFound = said.filter((line) =>
+        line.includes('Config file not found'),
+      )
+      expect(notFound).toHaveLength(1)
+      expect(notFound[0]).toContain(missing)
+      expect(said.some((line) => line.includes('Failed to parse'))).toBe(false)
+
+      // Fixed, and then broken again: the compile in between succeeded, so
+      // the problem is new and is said again.
+      fs.mkdirSync(path.dirname(missing), { recursive: true })
+      fs.writeFileSync(missing, usableConfig(directory, 'said-again.css'))
+      const again = await collectErrors(async () => {
+        await callWatchChange(plugin, posix(missing))
+        expect(
+          fs.existsSync(path.join(directory, 'gen', 'said-again.css')),
+        ).toBe(true)
+
+        fs.rmSync(missing)
+        await callWatchChange(plugin, posix(missing))
+      })
+
+      expect(
+        again.filter((line) => line.includes('Config file not found')),
+      ).toHaveLength(1)
+    })
+  })
+
   const threePlatforms = (directory: string) => {
     fs.mkdirSync(directory, { recursive: true })
 
@@ -5309,10 +5420,9 @@ describe('when the host closes its watcher', () => {
       await callBuildStart(plugin)
     })
 
+    // Its directory is gone, so the report is that the file was not found.
     expect(
-      messages.some((message) =>
-        message.includes('Failed to parse config file'),
-      ),
+      messages.some((message) => message.includes('Config file not found')),
     ).toBe(true)
   }, 30000)
 
@@ -6253,9 +6363,9 @@ describe('when a configuration cannot be used', () => {
       config: path.join(directory, 'nope.json'),
     })
 
-    expect(
-      messages.some((m) => m.includes('Failed to parse config file')),
-    ).toBe(true)
+    // Not found, rather than a parse failure: nothing was there to parse.
+    expect(messages.some((m) => m.includes('Config file not found'))).toBe(true)
+    expect(messages.some((m) => m.includes('Failed to parse'))).toBe(false)
   }, 30000)
 
   it('reports a config whose JSON is half-written', async () => {

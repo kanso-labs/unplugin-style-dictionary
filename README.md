@@ -165,10 +165,15 @@ With no `config`, the root is searched for `sd.config.json`, `config.json`,
 `sd.config.js` and `sd.config.mjs`, in that order — and the first one that
 **looks like a Style Dictionary configuration** wins. That means declaring at
 least one of `platforms`, `source`, `include` or `tokens`. A candidate that
-fails the check is reported and skipped rather than adopted, so an unrelated
-`config.json` — an extremely common name for something else — no longer gets
-compiled over and added to the watch set. The path that was picked is printed,
-so which configuration a build used is answerable from the console.
+fails the check is skipped rather than adopted, so an unrelated `config.json` —
+an extremely common name for something else — no longer gets compiled over and
+added to the watch set. The path that was picked is printed, along with any file
+skipped on the way, so which configuration a build used is answerable from the
+console. When nothing is adopted, the skipped files are reported as an error.
+
+A configuration problem — nothing found, or a named `config` file that is
+missing or will not parse — is said once rather than on every rebuild, and again
+only if it comes back after a build that worked.
 
 `config.json` stays in the list because Style Dictionary's own CLI defaults to
 it, so a project relying on that default keeps working.
@@ -881,9 +886,10 @@ export interface UnpluginStyleDictionaryOptions {
    * first one that *looks like a Style Dictionary configuration* wins — it has
    * to declare at least one of `platforms`, `source`, `include` or `tokens` —
    * and the path it picked is announced, so which file a build used is
-   * answerable from the console. A candidate that fails that check is reported
-   * and skipped rather than adopted, because `config.json` is an extremely
-   * common name for something else entirely.
+   * answerable from the console. A candidate that fails that check is skipped
+   * rather than adopted, because `config.json` is an extremely common name for
+   * something else entirely. It is named in that announcement when a later
+   * candidate is adopted, and reported as an error when none is.
    *
    * **`false` turns discovery off.** Two of the four names are modules rather
    * than data, and reading a module means running it: a `sd.config.js` in the
