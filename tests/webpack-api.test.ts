@@ -1,4 +1,7 @@
-import type { Stats as RspackStats } from '@rspack/core'
+import type {
+  Compiler as RspackCompiler,
+  Stats as RspackStats,
+} from '@rspack/core'
 
 import { rspack } from '@rspack/core'
 import fs from 'node:fs'
@@ -34,7 +37,36 @@ type Compile = (
   context: string,
   outputPath: string,
   options: UnpluginStyleDictionaryOptions,
+  host?: { childCompiler?: boolean },
 ) => Promise<StatsLike | undefined>
+
+// What html-webpack-plugin does to a build, reduced to the part that matters: a
+// `make` tap that runs a child compiler. A child inherits most of its parent's
+// taps, which is how a plugin tapped in the wrong place runs twice per build.
+// One per host, because each types its compiler as its own.
+const webpackChildProbe = {
+  apply: (compiler: webpack.Compiler) => {
+    compiler.hooks.make.tapAsync('child-probe', (compilation, done) => {
+      compilation
+        .createChildCompiler('child-probe', {}, [])
+        .runAsChild((error) => {
+          done(error ?? undefined)
+        })
+    })
+  },
+}
+
+const rspackChildProbe = {
+  apply: (compiler: RspackCompiler) => {
+    compiler.hooks.make.tapAsync('child-probe', (compilation, done) => {
+      compilation
+        .createChildCompiler('child-probe', {}, [])
+        .runAsChild((error) => {
+          done(error ?? undefined)
+        })
+    })
+  },
+}
 
 // What both `Stats` objects offer that these assertions read. webpack and
 // rspack each export their own, and neither is assignable to the other.
@@ -63,7 +95,7 @@ const COMPILERS: Array<{
   reportsVerbatim: boolean
 }> = [
   {
-    compile: async (context, outputPath, options) =>
+    compile: async (context, outputPath, options, host) =>
       new Promise<undefined | webpack.Stats>((resolve, reject) => {
         webpack(
           {
@@ -71,7 +103,10 @@ const COMPILERS: Array<{
             entry: './entry.js',
             mode: 'development',
             output: { path: outputPath },
-            plugins: [webpackPlugin(options)],
+            plugins: [
+              webpackPlugin(options),
+              ...(host?.childCompiler ? [webpackChildProbe] : []),
+            ],
           },
           (error, result) => {
             if (error) reject(error)
@@ -83,7 +118,7 @@ const COMPILERS: Array<{
     reportsVerbatim: true,
   },
   {
-    compile: async (context, outputPath, options) =>
+    compile: async (context, outputPath, options, host) =>
       new Promise<RspackStats | undefined>((resolve, reject) => {
         rspack(
           {
@@ -91,7 +126,10 @@ const COMPILERS: Array<{
             entry: './entry.js',
             mode: 'development',
             output: { path: outputPath },
-            plugins: [rspackPlugin(options)],
+            plugins: [
+              rspackPlugin(options),
+              ...(host?.childCompiler ? [rspackChildProbe] : []),
+            ],
           },
           (error, result) => {
             if (error) reject(error)
@@ -214,6 +252,49 @@ describe.each(COMPILERS)(
       expect(
         fs.readFileSync(path.join(context, 'generated', 'tokens.js'), 'utf-8'),
       ).toContain('#00ff00')
+    }, 60000)
+
+    it('compiles once per build when a plugin runs a child compiler', async () => {
+      // A child compiler inherits every parent tap but a handful, and
+      // `beforeCompile` is among the inherited: compiling there ran the whole
+      // pipeline twice per build — the consumer's `config` function, both
+      // hooks, and a second compile under `cache: false`. `run` and `watchRun`
+      // are not inherited, and a child never reaches either.
+      const context = writeRaceFixture('child')
+
+      let started = 0
+      let ended = 0
+      const stats = await compile(
+        context,
+        path.join(context, 'dist'),
+        {
+          cache: false,
+          config: {
+            platforms: {
+              js: {
+                buildPath:
+                  path.join(context, 'generated').replace(/\\/g, '/') + '/',
+                files: [{ destination: 'tokens.js', format: 'javascript/es6' }],
+                transformGroup: 'js',
+              },
+            },
+            source: [
+              path.join(context, 'tokens', '*.json').replace(/\\/g, '/'),
+            ],
+          },
+          onBuildEnd: () => {
+            ended++
+          },
+          onBuildStart: () => {
+            started++
+          },
+          silent: true,
+        },
+        { childCompiler: true },
+      )
+
+      expect(stats?.toJson().errors ?? []).toEqual([])
+      expect({ ended, started }).toEqual({ ended: 1, started: 1 })
     }, 60000)
 
     it('finds a config relative to the compiler context', async () => {

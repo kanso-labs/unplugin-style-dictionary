@@ -1322,9 +1322,10 @@ reports a command and a mode; the rest is read where it exists and followed from
 webpack's `buildStart` context carries no `meta` at all, so neither field can
 come from there — both come off the compiler the `webpack` hook is handed.
 `compiler.watchMode` is only set once `watch()` has been called, which is after
-that hook runs, so it is read per compile in `beforeCompile` rather than when
-the plugin is installed. A rolldown hook runs at `generate()` rather than at
-`rolldown()`, which is worth knowing before writing a probe that sees nothing.
+that hook runs, so it is read per compile in `run` and `watchRun` rather than
+when the plugin is installed. A rolldown hook runs at `generate()` rather than
+at `rolldown()`, which is worth knowing before writing a probe that sees
+nothing.
 
 **A host's error channel is not a place to report to.** Rollup's `this.error`
 aborts the bundle — measured: a `buildStart` calling it ends the run with
@@ -1389,11 +1390,21 @@ bundler rather than its package.
 **webpack's compile runs before its compilation exists.** unplugin gives webpack
 no `this.warn` at all — its `buildStart` context is exactly `parse`,
 `addWatchFile`, `emitFile`, `getWatchFiles` and `getNativeBuildContext`,
-measured — and the plugin compiles in `beforeCompile`, which webpack awaits
+measured — and the plugin compiles in `run` and `watchRun`, which webpack awaits
 _before_ creating the compilation a message would attach to. So messages are
-buffered and flushed on `compilation`. A `beforeCompile` that throws ends the
-run without ever creating one, which is exactly the case that produced the
+buffered and flushed on `compilation`. A `run` or `watchRun` that throws ends
+the run without ever creating one, which is exactly the case that produced the
 message, so `failed` and `done` drain whatever is still held to the console.
+
+**Not `beforeCompile`, which is where the compile used to be.** A child compiler
+inherits every parent tap except `make`, `compile`, `emit`, `afterEmit`,
+`invalid`, `done` and `thisCompilation` — webpack's `createChildCompiler` and
+rspack's alike — so html-webpack-plugin's child ran the whole pipeline a second
+time per build: the consumer's `config` function, both hooks, and a second
+compile under `cache: false`. `runAsChild` calls `compile()` directly and
+reaches neither `run` nor `watchRun`. Returning early on `compiler.isChild()`
+cannot do the same job: the child runs the parent's tap, which closes over the
+parent's `compiler`, so it answers `false` on both calls.
 
 **Colour is three signals in order, never one conjunction.**
 `!NO_COLOR && FORCE_COLOR !== '0' && stream.isTTY` looks like it honours all

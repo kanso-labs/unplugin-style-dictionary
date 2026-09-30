@@ -326,8 +326,8 @@ describe('every target compiles tokens through its own bundler', () => {
       // Two places a message can land, and the assertion accepts either.
       // Three of the four hosts take the report on their own channel now; the
       // console is what is left where a host has none to offer, and on webpack
-      // where a `beforeCompile` that throws ends the run before a compilation
-      // ever exists to attach it to.
+      // where a `run` that throws ends the run before a compilation ever
+      // exists to attach it to.
       const messages: string[] = []
       const errorSpy = vi
         .spyOn(console, 'error')
