@@ -596,8 +596,12 @@ describe.each([
         path.join(tokens, 'accent.json'),
         JSON.stringify({ color: { accent: { value: '#aa0000' } } }),
       )
+      // The generated file changes inside the compile, before the host
+      // reports the build it belongs to, so both are waited for.
       await waitUntil(
-        () => fs.readFileSync(generated, 'utf-8').includes('#aa0000'),
+        () =>
+          builds > beforeTopLevel &&
+          fs.readFileSync(generated, 'utf-8').includes('#aa0000'),
         20000,
       )
       expect(builds).toBeGreaterThan(beforeTopLevel)
@@ -610,7 +614,9 @@ describe.each([
         JSON.stringify({ color: { extra: { value: '#bb0000' } } }),
       )
       await waitUntil(
-        () => fs.readFileSync(generated, 'utf-8').includes('#bb0000'),
+        () =>
+          builds > beforeNested &&
+          fs.readFileSync(generated, 'utf-8').includes('#bb0000'),
         20000,
       )
       expect(builds).toBeGreaterThan(beforeNested)
