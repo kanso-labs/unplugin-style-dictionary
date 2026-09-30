@@ -1367,7 +1367,15 @@ describe('unplugin-style-dictionary (vite target)', () => {
     await callBuildStart(
       vitePlugin({ config: fixture.configPath, silent: true }),
     )
+    const built = fs.statSync(fixture.output).mtimeMs
     fs.writeFileSync(fixture.output, 'not what the build wrote')
+
+    // Stamped rather than left to the clock. A rewrite inside the clock tick
+    // the compile wrote in keeps the mtime the compile left, and on Windows
+    // that tick is about 15ms, so this case read a rewrite as the build's
+    // own output there. Later than the build, as a real rewrite would be.
+    const rewritten = new Date(built + 60_000)
+    fs.utimesSync(fixture.output, rewritten, rewritten)
 
     await callBuildStart(
       vitePlugin({ config: fixture.configPath, silent: true }),
