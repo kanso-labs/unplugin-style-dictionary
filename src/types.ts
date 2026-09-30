@@ -281,6 +281,10 @@ export interface UnpluginStyleDictionaryOptions {
   /**
    * Called when a build fails, with whatever was thrown.
    *
+   * A failure inside Style Dictionary arrives wrapped in an `Error` whose
+   * message names the configuration it came from, with Style Dictionary's own
+   * error as its `cause`. One the plugin raises itself already names it.
+   *
    * It fires whatever `failOnError` is set to, and before that option decides
    * whether to rethrow — the two answer different questions, and under a dev
    * server the default is not to throw at all.

@@ -4377,6 +4377,116 @@ describe('unplugin-style-dictionary (vite target)', () => {
     })
   })
 
+  // One configuration over the shared token file, as an object, writing
+  // `destination` in `format`.
+  const inline = (destination: string, format: string) => ({
+    platforms: {
+      css: {
+        buildPath: tempDir.replace(/\\/g, '/') + '/',
+        files: [{ destination, format }],
+        transformGroup: 'css',
+      },
+    },
+    source: [tokenFile.replace(/\\/g, '/')],
+  })
+
+  // Style Dictionary's own errors name neither the configuration nor the file
+  // behind them, so with several configurations a failure could have come from
+  // any of them — in the log line, the overlay and `onBuildError` alike.
+  describe('when Style Dictionary fails a build', () => {
+    it('names the configuration it failed in, and keeps its own error as the cause', async () => {
+      const failures: unknown[] = []
+
+      const said = await collectErrors(async () => {
+        await expect(
+          callBuildStart(
+            vitePlugin({
+              config: [
+                inline('first.css', 'css/variables'),
+                inline('second.css', 'css/no-such-format'),
+                inline('third.css', 'css/variables'),
+              ],
+              logLevel: 'silent',
+              onBuildError: (error) => {
+                failures.push(error)
+              },
+            }),
+          ),
+        ).rejects.toThrow('The configuration at position 2 failed')
+      })
+
+      expect(
+        said.some(
+          (line) =>
+            line.includes('Compilation failed') &&
+            line.includes('The configuration at position 2 failed'),
+        ),
+      ).toBe(true)
+
+      const [failure] = failures
+      if (!(failure instanceof Error)) {
+        throw new TypeError('onBuildError was handed a non-Error')
+      }
+      expect(failure.message).toContain('The configuration at position 2')
+
+      // Style Dictionary's own error, still reachable for a hook that wants it.
+      const { cause } = failure
+      if (!(cause instanceof Error)) {
+        throw new TypeError('the failure carries no Error as its cause')
+      }
+      expect(cause.message).toContain('css/no-such-format')
+      expect(cause.message).not.toContain('The configuration at position')
+    })
+
+    it('names a configuration that resolves no tokens only once', async () => {
+      // The plugin's own errors already open with the configuration's name,
+      // so only what Style Dictionary throws is named on the way out.
+      const said = await collectErrors(async () => {
+        await expect(
+          callBuildStart(
+            vitePlugin({
+              config: [
+                {
+                  ...inline('empty.css', 'css/variables'),
+                  source: [posix(path.join(tempDir, 'none', '*.json'))],
+                },
+              ],
+              logLevel: 'silent',
+            }),
+          ),
+        ).rejects.toThrow('resolved no tokens')
+      })
+
+      const line = said.find((entry) => entry.includes('resolved no tokens'))
+      expect(line?.split('The configuration at position 1')).toHaveLength(2)
+    })
+
+    it('names the change a failed rebuild followed', async () => {
+      const plugin = vitePlugin({
+        config: configFile,
+        failOnError: false,
+        logLevel: 'silent',
+      })
+      await callBuildStart(plugin)
+
+      fs.writeFileSync(tokenFile, '{ "color": { "primary": { "value": #f } } }')
+
+      const said = await collectErrors(async () => {
+        await callWatchChange(plugin, posix(tokenFile))
+      })
+
+      // The change rather than the culprit: after a debounced burst it is the
+      // last file that changed, which is not necessarily the broken one.
+      expect(
+        said.some((line) =>
+          line.includes(
+            `Compilation failed after a change in ${path.basename(tokenFile)}`,
+          ),
+        ),
+      ).toBe(true)
+    })
+  })
+
   const threePlatforms = (directory: string) => {
     fs.mkdirSync(directory, { recursive: true })
 

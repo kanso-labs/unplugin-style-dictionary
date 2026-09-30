@@ -231,7 +231,9 @@ export async function runBuilds(
       // line explaining why a build wrote nothing. `log.warnings` is not
       // touched either way: a consumer's `warnings: 'error'` turning a
       // missing output file into a thrown build is their decision.
-      await sd.extend(undefined, { mutateOriginal: true, verbosity })
+      await namingConfig(item, index, async () =>
+        sd.extend(undefined, { mutateOriginal: true, verbosity }),
+      )
 
       // **Before the build, and that is the whole of it.** A token set that
       // resolved to nothing is not an error anywhere in this stack: Style
@@ -293,7 +295,7 @@ export async function runBuilds(
       }
 
       if (selectedPlatforms === undefined) {
-        await sd.buildAllPlatforms()
+        await namingConfig(item, index, async () => sd.buildAllPlatforms())
       } else {
         // `cache: false`, and a configuration that would not parse ahead of
         // `extend`, arrive here without the check above having run.
@@ -305,7 +307,7 @@ export async function runBuilds(
         // choice over configurations it owns, not this plugin's over a
         // selection a consumer wrote.
         for (const name of selectedPlatforms) {
-          await sd.buildPlatform(name)
+          await namingConfig(item, index, async () => sd.buildPlatform(name))
         }
       }
 
@@ -388,7 +390,16 @@ export async function runBuilds(
     }
   } catch (err) {
     const duration = Date.now() - startTime
-    log(`Compilation failed after ${duration}ms: ${errorMessage(err)}`, 'error')
+
+    // The change a rebuild followed, worded as a change rather than as the
+    // culprit: after a debounced burst `context` is the last file that
+    // changed, which is not necessarily the one that broke the build.
+    log(
+      context
+        ? `Compilation failed after a change in ${context} (${duration}ms): ${errorMessage(err)}`
+        : `Compilation failed after ${duration}ms: ${errorMessage(err)}`,
+      'error',
+    )
 
     // Ahead of the throw decision on purpose, so the overlay sees a failure
     // whatever `failOnError` does with it. Under the dev server's default
@@ -589,6 +600,30 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     'then' in value &&
     typeof value.then === 'function'
   )
+}
+
+// Runs one of Style Dictionary's own steps for a configuration, and names the
+// configuration in anything it throws. Its messages name neither the
+// configuration nor the file behind them, so with several configurations a
+// failure could have come from any of them — in the log line, the overlay and
+// `onBuildError` alike. `cause` keeps its own error reachable.
+//
+// Only Style Dictionary's steps, never the whole loop: the plugin's own errors
+// already open with `describeConfig`, and wrapping those would name the
+// configuration twice.
+async function namingConfig<T>(
+  item: ResolvedConfig,
+  index: number,
+  step: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await step()
+  } catch (err) {
+    throw new Error(
+      `${describeConfig(item, index)} failed: ${errorMessage(err)}`,
+      { cause: err },
+    )
+  }
 }
 
 // `volume`, with every path Style Dictionary writes through it noted in
