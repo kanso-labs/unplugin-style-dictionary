@@ -419,20 +419,28 @@ describe('unplugin-style-dictionary (vite target)', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {
-      // Initial build, then a simulated watch-triggered rebuild.
       await callBuildStart(plugin)
-      await callBuildStart(plugin)
+
+      // A real watch rebuild rather than a second `buildStart`, which the
+      // up-to-date check would skip: the config function re-registers the
+      // format, and the edited token has to come out through it.
+      fs.writeFileSync(
+        tokenFile,
+        JSON.stringify({ color: { primary: { value: '#ff0000' } } }),
+      )
+      await callWatchChange(plugin, posix(tokenFile))
+
+      // Read before the restore below, which clears what the spies recorded:
+      // asserted after it, these passed however much was printed.
+      expect(warnSpy.mock.calls).toEqual([])
+      expect(errorSpy.mock.calls).toEqual([])
     } finally {
       warnSpy.mockRestore()
       errorSpy.mockRestore()
     }
 
-    expect(warnSpy).not.toHaveBeenCalled()
-    expect(errorSpy).not.toHaveBeenCalled()
-
-    expect(fs.existsSync(repeatOutputFile)).toBe(true)
     const content = fs.readFileSync(repeatOutputFile, 'utf-8')
-    expect(content).toContain('color-primary=#0070f3')
+    expect(content).toContain('color-primary=#ff0000')
   })
 
   it('never exposes a partially written file to a concurrent reader', async () => {
