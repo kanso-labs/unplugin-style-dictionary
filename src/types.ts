@@ -11,14 +11,21 @@ import type { Config } from 'style-dictionary'
  * build (e.g. `tsdown`/`rolldown build` without `--watch`) only builds once, in
  * `buildStart`.
  *
- * Everything the plugin says goes through the host rather than to the console:
- * Vite's `config.logger`, the plugin context under rollup and rolldown, and
- * `compilation.warnings` under webpack, which is what puts a failed compile in
- * `stats.toJson()`. A failure is reported on the warning channel and never the
- * error one — rollup's `this.error` aborts the bundle, and that decision is
- * `failOnError`'s alone. Where no host offers a channel the console is used,
- * with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the stream is a
- * terminal.
+ * What the plugin says goes through the host wherever the host has a channel
+ * for it: Vite's `config.logger`, the plugin context under rollup and
+ * rolldown, and `compilation.warnings` under webpack and rspack, which is what
+ * puts a failed compile in `stats.toJson()`. The progress lines and the size
+ * table take the host's `info` channel, and webpack and rspack have none, so
+ * there both go to the console. A failure is reported on the warning channel
+ * and never the error one — rollup's `this.error` aborts the bundle, and that
+ * decision is `failOnError`'s alone. Where no host offers a channel the console
+ * is used, with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the
+ * stream is a terminal.
+ *
+ * Style Dictionary's own lines are not the plugin's. The platform name and the
+ * `✔︎` for each file it wrote are its own `console` calls, so they reach the
+ * console under every host, whatever the host's log level. `logLevel: 'silent'`
+ * quiets them, as does `log.verbosity: 'silent'` in the configuration.
  *
  * The three `onBuild*` hooks are called synchronously and their return value
  * is not awaited, so a build never waits for one. A hook may still be written

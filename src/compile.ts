@@ -18,7 +18,7 @@ import type { DestinationRecord } from './up-to-date.js'
 import { configForBuild, describeConfig, readConfigObject } from './config.js'
 import { asError, errorMessage } from './errors.js'
 import { patternsMatchingNothing, sourcePatternsOf } from './patterns.js'
-import { reportSizes } from './size-report.js'
+import { sizeTable } from './size-report.js'
 import {
   configFingerprint,
   declaredDestinations,
@@ -37,7 +37,8 @@ import {
 // assigned after the factory has run — `root` by `adoptCompiler` or
 // `configResolved`, the overlay callback by `configureServer` — so a value
 // copied when this was built would be the working directory and `undefined`
-// for good. `generatedDestinations` is the instance's own record of what it
+// for good. `log` and `logTable` read the message host when they are called,
+// for the same reason. `generatedDestinations` is the instance's own record of what it
 // wrote, and `destinationRecords` is the process's record of which
 // configuration last wrote each file and what it read, with
 // `persistedRecordFiles` naming the file each root's copy persists to;
@@ -48,6 +49,7 @@ export interface PluginInstance {
   failOnError: NonNullable<UnpluginStyleDictionaryOptions['failOnError']>
   generatedDestinations: Set<string>
   log: (message: string, type: 'error' | 'info' | 'success') => void
+  logTable: (render: (colour: boolean) => string[]) => void
   notifyBuildOutcome: (error: Error | null) => void
   onBuildEnd: UnpluginStyleDictionaryOptions['onBuildEnd']
   onBuildError: UnpluginStyleDictionaryOptions['onBuildError']
@@ -57,7 +59,6 @@ export interface PluginInstance {
   quiet: boolean
   report: boolean
   root: () => string
-  stdoutColour: boolean
   verbosity: 'default' | 'silent' | 'verbose' | undefined
   volume: typeof fs
   watch: UnpluginStyleDictionaryOptions['watch']
@@ -75,6 +76,7 @@ export async function runBuilds(
     failOnError,
     generatedDestinations,
     log,
+    logTable,
     notifyBuildOutcome,
     onBuildEnd,
     onBuildError,
@@ -83,7 +85,6 @@ export async function runBuilds(
     platformsOption,
     quiet,
     report,
-    stdoutColour,
     verbosity,
     volume,
     watch,
@@ -477,7 +478,7 @@ export async function runBuilds(
   // where that cost buys nothing at all.
   if (report && !quiet && !everythingSkipped && generatedFiles.size > 0) {
     try {
-      reportSizes({ root, stdoutColour }, generatedFiles)
+      logTable((colour) => sizeTable({ colour, root }, generatedFiles))
     } catch (err) {
       // At `'error'`, so it is said at every level including `silent`,
       // exactly as a compile failure is — and worded so it cannot be read
