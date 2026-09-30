@@ -698,6 +698,13 @@ dev server down from inside a step meant to reformat a file.
 decides whether to rethrow. The two answer different questions: one is whether
 the host stops, the other is that a build went wrong.
 
+**A failure names the configuration it came from.** Style Dictionary's own
+errors name neither the configuration nor the file behind them, so the plugin
+wraps them: the message opens with the configuration's path, or its position in
+the list, and Style Dictionary's error is the `cause`. A failed rebuild also
+names the change it followed — the last file to change, which is not necessarily
+the one that broke the build.
+
 ## Public API
 
 Small on purpose. Five bundler entry points, one root entry, and two types.
@@ -1008,6 +1015,10 @@ export interface UnpluginStyleDictionaryOptions {
 
   /**
    * Called when a build fails, with whatever was thrown.
+   *
+   * A failure inside Style Dictionary arrives wrapped in an `Error` whose
+   * message names the configuration it came from, with Style Dictionary's own
+   * error as its `cause`. One the plugin raises itself already names it.
    *
    * It fires whatever `failOnError` is set to, and before that option decides
    * whether to rethrow — the two answer different questions, and under a dev
