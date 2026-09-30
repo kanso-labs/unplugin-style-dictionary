@@ -1308,14 +1308,12 @@ const unpluginFactory: UnpluginFactory<
     return resolved
   }
 
-  // Parse token files to watch
-  const getWatchTargets = async (
+  // The watch list's patterns, compiled, without walking the filesystem for
+  // what they match today — which is all a decision about one changed path
+  // needs, and the walk is the expensive half on a large token set.
+  const deriveWatchPatterns = async (
     resolvedConfigs: ResolvedConfig[],
-  ): Promise<{
-    matcher: WatchMatcher
-    paths: string[]
-    patterns: WatchPatterns
-  }> => {
+  ): Promise<{ matcher: WatchMatcher; patterns: WatchPatterns }> => {
     const patterns = await watchPatternsOf(
       { log: logConfig, root, watch: options.watch },
       resolvedConfigs,
@@ -1326,6 +1324,19 @@ const unpluginFactory: UnpluginFactory<
     // list refreshes the one `watchChange` filters against.
     const matcher = compileWatchPatterns(patterns)
     cachedMatcher = matcher
+
+    return { matcher, patterns }
+  }
+
+  // Parse token files to watch
+  const getWatchTargets = async (
+    resolvedConfigs: ResolvedConfig[],
+  ): Promise<{
+    matcher: WatchMatcher
+    paths: string[]
+    patterns: WatchPatterns
+  }> => {
+    const { matcher, patterns } = await deriveWatchPatterns(resolvedConfigs)
 
     return { matcher, paths: await expandPatterns(patterns, log), patterns }
   }
@@ -1971,9 +1982,24 @@ const unpluginFactory: UnpluginFactory<
 
         // Runs once per rebuild rather than once per event, which is why it
         // is handed to the scheduler rather than done in the listener.
+        //
+        // The watcher is handed only what it does not have: a path new since
+        // the last list, and one that no longer exists. Re-adding the whole
+        // unchanged list cost chokidar tens of milliseconds a save on a large
+        // token set. The missing half is not waste — on chokidar's
+        // non-fsevents path, which Linux takes, adding a missing path is what
+        // watches its parent for that name, so a deleted literal source is
+        // seen when it comes back. Diffing against the last list alone would
+        // never add it again.
         refreshServerWatchList = async (rebuilt) => {
+          const previous = new Set(targets.paths)
           targets = await getWatchTargets(rebuilt)
-          server.watcher.add(targets.paths)
+
+          const adding = targets.paths.filter(
+            (file) => !previous.has(file) || !fs.existsSync(file),
+          )
+          if (adding.length > 0) server.watcher.add(adding)
+
           watchNodeModules(targets.paths)
         }
 
@@ -2070,8 +2096,10 @@ const unpluginFactory: UnpluginFactory<
       // Derived again rather than trusted from the cache, because the cache
       // is what decided this path was worth resolving and not what decides a
       // rebuild. A config edit reaches here through its own filename and can
-      // have dropped the very source the cached list matched.
-      const { matcher, patterns } = await getWatchTargets(resolved)
+      // have dropped the very source the cached list matched. The patterns
+      // alone: the decision is about one path, and walking the tree for what
+      // they match today bought nothing here.
+      const { matcher, patterns } = await deriveWatchPatterns(resolved)
       // Without this check, watchChange fires for *any* changed file in the
       // host bundler's module graph — including our own generated output,
       // since consuming code imports it. Every regenerate is itself a
@@ -2087,6 +2115,13 @@ const unpluginFactory: UnpluginFactory<
 
       // Expanded again after the build rather than reusing the list from
       // before it, so a token file the build itself produced is registered.
+      //
+      // Not under a dev server, whose refresh has already handed its watcher
+      // every path: Vite's `addWatchFile` reaches the watcher only for a file
+      // outside the root, so this walk repeated that one. `vite build
+      // --watch`, rollup, rolldown and webpack keep it — it is how they learn
+      // the list.
+      if (refreshServerWatchList) return
       addWatchFiles(this, await expandPatterns(patterns, log))
     },
 
