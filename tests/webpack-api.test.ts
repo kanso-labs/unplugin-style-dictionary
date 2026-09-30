@@ -790,5 +790,60 @@ describe.each(COMPILERS)(
       expect(seen[0]?.command).toBe('build')
       expect(seen[0]?.watch).toBe(false)
     }, 60000)
+
+    it(`tells a config function ${name} watches under compiler.watch()`, async () => {
+      // \`watch\` comes from \`compiler.watchMode\`, which only \`watch()\` sets. The
+      // one-shot case above asserts \`false\`, which is also the initial value,
+      // so it could not see the reading go; only a real watcher can.
+      const context = path.join(tempDir, 'watch-context')
+      const tokensDirectory = path.join(context, 'tokens')
+      fs.mkdirSync(tokensDirectory, { recursive: true })
+      fs.writeFileSync(path.join(context, 'entry.js'), 'export default 1\n')
+      fs.writeFileSync(
+        path.join(tokensDirectory, 'color.json'),
+        JSON.stringify({ color: { brand: { value: '#0070f3' } } }),
+      )
+
+      const seen: Array<{ command: string; mode: string; watch: boolean }> = []
+      let built = false
+      const session = watch(
+        context,
+        path.join(context, 'dist'),
+        {
+          config: (buildContext) => {
+            seen.push({ ...buildContext })
+
+            return {
+              platforms: {
+                js: {
+                  buildPath:
+                    path.join(context, 'generated').replace(/\\/g, '/') + '/',
+                  files: [
+                    { destination: 'tokens.js', format: 'javascript/es6' },
+                  ],
+                  transformGroup: 'js',
+                },
+              },
+              source: [
+                path.join(tokensDirectory, '*.json').replace(/\\/g, '/'),
+              ],
+            }
+          },
+          logLevel: 'silent',
+        },
+        () => {
+          built = true
+        },
+      )
+
+      try {
+        await waitUntil(() => built, 20000)
+      } finally {
+        await session.close()
+      }
+
+      expect(seen.length).toBeGreaterThan(0)
+      expect(seen[0]?.watch).toBe(true)
+    }, 60000)
   },
 )
