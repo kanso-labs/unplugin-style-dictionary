@@ -3714,6 +3714,46 @@ describe('unplugin-style-dictionary (vite target)', () => {
       expect(fs.existsSync(outputFile)).toBe(true)
     })
 
+    it("reports Vite's own mode, not the one its command implies", async () => {
+      // Every other case passes \`mode: 'production'\` with \`command: 'build'\`,
+      // which is exactly what the plugin derives without asking the host — so
+      // none of them could see \`config.mode\` stop being read. A mode only
+      // the host can supply is what tells the reading from the fallback.
+      const seen: StyleDictionaryConfigContext[] = []
+
+      const plugin = vitePlugin({
+        config: (context) => {
+          seen.push(context)
+
+          return {
+            platforms: {
+              css: {
+                buildPath: tempDir.replace(/\\/g, '/') + '/',
+                files: [
+                  { destination: 'staging.css', format: 'css/variables' },
+                ],
+                transformGroup: 'css',
+              },
+            },
+            source: [tokenFile.replace(/\\/g, '/')],
+          }
+        },
+        logLevel: 'silent',
+      })
+
+      if (!isPluginHook<[Record<string, unknown>]>(plugin.configResolved)) {
+        throw new TypeError('configResolved is not a callable hook')
+      }
+      await plugin.configResolved.call(
+        { addWatchFile: () => {} },
+        { build: { watch: null }, command: 'build', mode: 'staging' },
+      )
+      await callBuildStart(plugin)
+
+      expect(seen.length).toBeGreaterThan(0)
+      expect(seen[0]?.mode).toBe('staging')
+    })
+
     it('reports watch mode when the host says so', async () => {
       // `meta.watchMode` is what rollup, rolldown and Vite all carry, and the
       // reason `watch` is read from the host rather than inferred from
