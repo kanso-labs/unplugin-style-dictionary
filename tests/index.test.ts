@@ -2869,6 +2869,22 @@ describe('unplugin-style-dictionary (vite target)', () => {
     }
   })
 
+  it('fails the one-shot build under failOnError: true', async () => {
+    // `true` fails every build, the first included, and nothing pinned it: no
+    // case used the value at all.
+    const { config } = writeBrokenReferenceFixture('broken-reference-true')
+
+    const errors = await collectErrors(async () => {
+      await expect(
+        callBuildStart(vitePlugin({ config, failOnError: true, silent: true })),
+      ).rejects.toThrow(/reference/i)
+    })
+
+    expect(
+      errors.some((message) => message.includes('Compilation failed after')),
+    ).toBe(true)
+  })
+
   it('lets a dev server survive the same broken token set', async () => {
     // The default is `'build'`, so a watch-triggered rebuild reports and
     // carries on. A half-typed token file mid-session should not take the
@@ -2904,6 +2920,41 @@ describe('unplugin-style-dictionary (vite target)', () => {
       errorSpy.mockRestore()
     }
   })
+
+  it.each(['serve', true] as const)(
+    'fails a broken rebuild under failOnError: %s',
+    async (failOnError) => {
+      // The two settings that fail a rebuild, where the default carries on.
+      // No case drove a rebuild with either.
+      const { config, token } = writeBrokenReferenceFixture(
+        `broken-on-rebuild-${String(failOnError)}`,
+      )
+      fs.writeFileSync(
+        token,
+        JSON.stringify({ color: { primary: { value: '#0070f3' } } }),
+      )
+
+      const plugin = vitePlugin({ config, failOnError, silent: true })
+      await callBuildStart(plugin)
+
+      fs.writeFileSync(
+        token,
+        JSON.stringify({
+          color: { primary: { value: '{color.nothing.here}' } },
+        }),
+      )
+
+      const errors = await collectErrors(async () => {
+        await expect(callWatchChange(plugin, token)).rejects.toThrow(
+          /reference/i,
+        )
+      })
+
+      expect(
+        errors.some((message) => message.includes('Compilation failed after')),
+      ).toBe(true)
+    },
+  )
 
   it.each([
     { failOnError: false as const, label: 'false' },
@@ -3003,6 +3054,51 @@ describe('unplugin-style-dictionary (vite target)', () => {
     // And the file really was not written, so the message is the only way a
     // consumer would know.
     expect(fs.existsSync(path.join(tempDir, 'unmatched.css'))).toBe(false)
+  })
+
+  it("hands logLevel: 'verbose' to Style Dictionary", async () => {
+    // Only a message Style Dictionary words differently at `verbose` can tell
+    // it from `default`: an unmatchable filter prints the same sentence at
+    // both. Colliding tokens are listed at `verbose`, and at `default` the
+    // warning points at `--verbose` instead.
+    const directory = path.join(tempDir, 'verbose-collision')
+    fs.mkdirSync(directory, { recursive: true })
+    for (const [file, value] of [
+      ['a.json', '#111111'],
+      ['b.json', '#222222'],
+    ]) {
+      fs.writeFileSync(
+        path.join(directory, file),
+        JSON.stringify({ color: { primary: { value } } }),
+      )
+    }
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await callBuildStart(
+        vitePlugin({
+          cache: false,
+          config: {
+            platforms: {
+              css: {
+                buildPath: posix(directory) + '/',
+                files: [{ destination: 'vars.css', format: 'css/variables' }],
+                transformGroup: 'css',
+              },
+            },
+            source: [
+              posix(path.join(directory, 'a.json')),
+              posix(path.join(directory, 'b.json')),
+            ],
+          },
+          logLevel: 'verbose',
+        }),
+      )
+      const said = logSpy.mock.calls.map((call) => String(call[0])).join('\n')
+      expect(said).toContain('Collision detected at: color.primary')
+    } finally {
+      logSpy.mockRestore()
+    }
   })
 
   it.each([
@@ -3229,6 +3325,8 @@ describe('unplugin-style-dictionary (vite target)', () => {
       // would have seen every file on the first build and nothing on any edit
       // after it.
       const ended: string[][] = []
+      // And `onBuildStart` fires for the rebuild too, which no case counted.
+      let started = 0
 
       const plugin = vitePlugin({
         config: configFile,
@@ -3236,9 +3334,13 @@ describe('unplugin-style-dictionary (vite target)', () => {
         onBuildEnd: (files) => {
           ended.push(files)
         },
+        onBuildStart: () => {
+          started++
+        },
       })
 
       await callBuildStart(plugin)
+      expect(started).toBe(1)
       expect(ended).toHaveLength(1)
       expect(ended[0]).toEqual([outputFile])
 
@@ -3248,6 +3350,7 @@ describe('unplugin-style-dictionary (vite target)', () => {
       )
       await callWatchChange(plugin, tokenFile)
 
+      expect(started).toBe(2)
       expect(ended).toHaveLength(2)
       expect(ended[1]).toEqual([outputFile])
       expect(fs.readFileSync(outputFile, 'utf-8')).toContain(
