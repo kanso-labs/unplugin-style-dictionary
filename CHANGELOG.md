@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.10.15](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.14...unplugin-style-dictionary-v0.10.15) (2026-10-01)
+
+
+### Bug Fixes
+
+* **build:** name the configuration and the triggering file in a failure ([#488](https://github.com/kanso-labs/unplugin-style-dictionary/issues/488)) ([1f4042a](https://github.com/kanso-labs/unplugin-style-dictionary/commit/1f4042ae049e498c4b1d72a3eacafce59d04a4ce))
+* **config:** report a configuration problem once, not on every resolve ([#487](https://github.com/kanso-labs/unplugin-style-dictionary/issues/487)) ([5b6cab9](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5b6cab9245643296e57cbcc668e468921b734605))
+* **options:** reject an unknown failOnError, platforms or logLevel value ([#490](https://github.com/kanso-labs/unplugin-style-dictionary/issues/490)) ([ddd0333](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ddd0333a491c3b942edb245ac521d2eb8e9fd9fb))
+
+
+### Performance Improvements
+
+* **vite:** negate node_modules token patterns, not every matched file ([#492](https://github.com/kanso-labs/unplugin-style-dictionary/issues/492)) ([4bba9a1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4bba9a12145616f262110a0128f93d467332e2f0))
+* **vite:** stop re-walking tokens and re-adding the watch list per edit ([#495](https://github.com/kanso-labs/unplugin-style-dictionary/issues/495)) ([0542a66](https://github.com/kanso-labs/unplugin-style-dictionary/commit/0542a669c361e970a498cd2a2e8ede5194646f5c))
+* **watch:** compile the watch patterns once per list, not per event ([#493](https://github.com/kanso-labs/unplugin-style-dictionary/issues/493)) ([5f52f9d](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5f52f9daab1540b0325970c8fb1c4d624a958467))
+
+
+### Dependencies
+
+* update actions/upload-code-coverage action to v1.4.4 ([#499](https://github.com/kanso-labs/unplugin-style-dictionary/issues/499)) ([ced43df](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ced43df60ab6fadc885a6ab3a0a756f487edc149))
+* update dependency @rspack/core to v2.2.8 ([#500](https://github.com/kanso-labs/unplugin-style-dictionary/issues/500)) ([b50969c](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b50969cbc901c161659d6ffaccabe8c48a3a0e78))
+* update dependency brace-expansion to v5.0.12 ([#486](https://github.com/kanso-labs/unplugin-style-dictionary/issues/486)) ([fa43285](https://github.com/kanso-labs/unplugin-style-dictionary/commit/fa4328530868c654f0a925d9619edf9dc19ccc02))
+* update dependency oxfmt to v0.71.0 ([#501](https://github.com/kanso-labs/unplugin-style-dictionary/issues/501)) ([00fde99](https://github.com/kanso-labs/unplugin-style-dictionary/commit/00fde997a4a0edac6381a304fbb642d2c667e09f))
+* update dependency typescript-eslint to v8.71.0 ([#502](https://github.com/kanso-labs/unplugin-style-dictionary/issues/502)) ([b3f59e1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b3f59e14f64290dbd6a7583749f3b6f60f28af82))
+* update kanso-labs/actions action to v4.1.0 ([#505](https://github.com/kanso-labs/unplugin-style-dictionary/issues/505)) ([ddba72b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ddba72b8b17e4c6941c5d5d4222ee91c69f8ba42))
+* update oxlint to v1.86.0 ([#503](https://github.com/kanso-labs/unplugin-style-dictionary/issues/503)) ([7bb969e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/7bb969eea234f9b31c541d41eb32adce991697b8))
+
 ## [0.10.14](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.13...unplugin-style-dictionary-v0.10.14) (2026-09-30)
 
 
