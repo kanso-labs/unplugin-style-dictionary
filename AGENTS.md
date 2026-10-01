@@ -488,9 +488,10 @@ the job log rather than the check mark.
 
 Everything shared comes from `kanso-labs/actions` at an exact release tag, never
 a moving major — `actions/setup-node`, `actions/lint-workflows`,
-`_release-please.yaml`, `_publish-npm.yaml` and `_renovate-command.yaml`. A
-change over there reaches this repository only when Renovate bumps the pin,
-which is deliberate — see that repository's `AGENTS.md`.
+`_release-please.yaml`, `_publish-npm.yaml`, `_renovate-command.yaml` and
+`_dependabot-auto-merge.yaml`. A change over there reaches this repository only
+when Renovate bumps the pin, which is deliberate — see that repository's
+`AGENTS.md`.
 
 **`typescript` is held below 7, and the hold is not this repository's choice.**
 `typescript-eslint` peers `typescript >=4.8.4 <6.1.0`, and no published version
@@ -519,6 +520,30 @@ switches off what oxlint covers — but that is a change to cost on its own.
 `renovate-command.yaml` is what makes `@renovate rebase` work on a dependency
 pull request here. Only the copy on `main` ever runs: `issue_comment` is a
 repository-level event, so a change to that file cannot be tested from a branch.
+
+**Dependabot's pull requests merge themselves too, through
+`dependabot-auto-merge.yaml`.** Dependabot opens security fixes only — this
+repository configures no version updates for it — and they are often for a
+dependency only `package-lock.json` names, which Renovate's npm manager cannot
+see: #486 bumped `brace-expansion`, which `eslint` reaches through `minimatch`.
+Renovate's only route to one is its weekly lock-file refresh, so Dependabot's
+pull request is the fast path, and it used to wait for a person. The shared
+workflow turns auto-merge on for minor and patch fixes, the rule Renovate's
+preset applies, with no waiting period.
+
+Three things follow from how it works:
+
+- **It merges with `GITHUB_TOKEN`, so the merge starts no workflow run.** The
+  push to `main` runs no `Build`, `Lint` or `Test` there, and does not refresh
+  the release pull request until something else pushes. Releasing loses nothing:
+  the daily `Release Please` run reads `main` whatever pushed it, and the
+  release pull request runs the four required checks before anything ships.
+- **Auto-merge waits on `Lint`, and `Lint` checks the title.** A Dependabot
+  title that commitlint rejects leaves the pull request waiting for ever, which
+  is what Dependabot's default title did on #486.
+- **Like `renovate-command.yaml`, only `main`'s copy runs**, here because a
+  Dependabot pull request takes its workflows from the merge ref and Dependabot
+  never edits one.
 
 ## Commits and pull requests
 
