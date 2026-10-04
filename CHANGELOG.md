@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.16](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.15...unplugin-style-dictionary-v0.10.16) (2026-10-04)
+
+
+### Dependencies
+
+* update dependency globals to v17.13.0 ([#512](https://github.com/kanso-labs/unplugin-style-dictionary/issues/512)) ([35aa417](https://github.com/kanso-labs/unplugin-style-dictionary/commit/35aa417ec95d3b3f595b7a6a0b2a3099ff54ea5b))
+* update dependency rolldown to v1.2.12 ([#508](https://github.com/kanso-labs/unplugin-style-dictionary/issues/508)) ([223023e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/223023ef2074696fdb6e388f8792f956ceecc7b4))
+* update dependency rollup to v4.63.6 ([#510](https://github.com/kanso-labs/unplugin-style-dictionary/issues/510)) ([5326416](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5326416f308d52f32feef58aa7361e95da9b2076))
+* update dependency vite to v8.3.2 ([#511](https://github.com/kanso-labs/unplugin-style-dictionary/issues/511)) ([b47ffe5](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b47ffe5c16935c170a7f080440fe8e84ff3bdf7e))
+* update vitest to v5.0.3 ([#506](https://github.com/kanso-labs/unplugin-style-dictionary/issues/506)) ([1aff10f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/1aff10fe2f993455f83f6d0502f92d835e6b165b))
+
 ## [0.10.15](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.14...unplugin-style-dictionary-v0.10.15) (2026-10-01)
 
 
