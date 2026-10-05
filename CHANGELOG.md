@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.17](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.16...unplugin-style-dictionary-v0.10.17) (2026-10-05)
+
+
+### Dependencies
+
+* update dependency @types/node to v26.6.4 ([#515](https://github.com/kanso-labs/unplugin-style-dictionary/issues/515)) ([0b91bc8](https://github.com/kanso-labs/unplugin-style-dictionary/commit/0b91bc8de3721a773b52ab78bba0302e0d22ba2e))
+* update dependency publint to v0.3.25 ([#513](https://github.com/kanso-labs/unplugin-style-dictionary/issues/513)) ([c037a1b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/c037a1bdc451ad6c316717272427f065813dfd63))
+* update dependency rollup to v4.64.0 ([#516](https://github.com/kanso-labs/unplugin-style-dictionary/issues/516)) ([86ed48b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/86ed48b05373f5fcb5ebf78f266d7a9e80053ac9))
+
 ## [0.10.16](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.15...unplugin-style-dictionary-v0.10.16) (2026-10-04)
 
 
