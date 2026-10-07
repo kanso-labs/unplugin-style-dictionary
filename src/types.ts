@@ -47,9 +47,9 @@ export interface StyleDictionaryConfigContext {
  * Every target compiles tokens before the build that consumes them. Live
  * rebuild-on-change is driven by the host bundler's watch mode, because token
  * source files sit outside the module graph: Vite's dev server, `rollup
- * --watch`, `webpack --watch` and `rspack --watch` all rebuild on a token
- * change, and a one-shot build (e.g. `tsdown`/`rolldown build` without
- * `--watch`) only builds once, in `buildStart`.
+ * --watch`, `rolldown.watch()`, `webpack --watch` and `rspack --watch` all
+ * rebuild on a token change, and a one-shot build (e.g. `tsdown`/`rolldown
+ * build` without `--watch`) only builds once, in `buildStart`.
  *
  * What the plugin says goes through the host wherever the host has a channel
  * for it: Vite's `config.logger`, the plugin context under rollup and
@@ -78,11 +78,12 @@ export interface StyleDictionaryConfigContext {
  * makes one a `no-misused-promises` error under the type-aware lint rules a
  * consumer is likely to be running — for a hook this documents as supported.
  *
- * Rolldown's watch mode is the exception, and it is not about glob patterns.
- * `addWatchFile` is accepted either way, but what happens next differs by
- * platform — on macOS a file registered through it is watched by nothing, while
- * on a Linux runner the same edit reaches a rebuild. Do not rely on a token
- * edit triggering a rebuild there.
+ * Rolldown's watch mode rebuilds on macOS as well, a token reached through a
+ * symbolic link included. Its watcher there drops the events for a path
+ * registered through a link — a workspace package linked into `node_modules`,
+ * or a project under `/var` or `/tmp`, both links on macOS — so each such path
+ * is registered by its realpath beside it, and the event is mapped back to the
+ * spelling the `source` patterns use.
  */
 export interface UnpluginStyleDictionaryOptions {
   /**
