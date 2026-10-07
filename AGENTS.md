@@ -589,10 +589,55 @@ Three things follow from how it works:
   release pull request runs the four required checks before anything ships.
 - **Auto-merge waits on `Lint`, and `Lint` checks the title.** A Dependabot
   title that commitlint rejects leaves the pull request waiting for ever, which
-  is what Dependabot's default title did on #486.
+  is what Dependabot's default title did on #486. `.github/dependabot.yaml` is
+  what gives it a title that passes — see below.
 - **Like `renovate-command.yaml`, only `main`'s copy runs**, here because a
   Dependabot pull request takes its workflows from the merge ref and Dependabot
   never edits one.
+
+**`.github/dependabot.yaml` titles and labels those security updates like
+Renovate's.** Without it, #486 arrived as
+`chore(deps-dev): Bump brace-expansion from 5.0.9 to 5.0.12 in the npm_and_yarn group across 1 directory`,
+which commitlint rejects twice over — 103 characters against a limit of 100, and
+a sentence-case subject — and which would have released nothing had it passed.
+It also carried Dependabot's own `dependencies` and `javascript` labels. Each
+ecosystem a security update can arrive for has an entry: `npm` and
+`github-actions`, since one without an entry keeps the defaults. Each entry sets
+`open-pull-requests-limit: 0`, which turns version updates off and leaves
+security updates on, `commit-message.prefix: deps`, and the label pair, which
+replaces Dependabot's own.
+
+What it produces was measured rather than assumed, because Dependabot's title
+rules are not where its configuration suggests:
+
+- **The word after the prefix keeps the case of this repository's history.**
+  dependabot-core decides it in `capitalize_first_word?`
+  (`pull_request_creator/pr_name_prefixer.rb`) from recent commits, whatever the
+  prefix says, and every commit here is lowercase after its colon. Across 100
+  recent grouped security updates with a deps-style prefix, 92 read `bump`, and
+  all 6 with exactly `deps:` read `deps: bump`. A capital would fail
+  `subject-case`, so a history of capitalised subjects would undo this.
+- **Grouping is a repository setting, not configuration**, and it has to be off
+  here. "Grouped security updates", under Settings → Advanced Security, appends
+  ` in the npm_and_yarn group across 1 directory` to the title, and with it 196
+  of the 578 package names in `package-lock.json` take the title past 100
+  characters at #486's version lengths. Ungrouped, the longest title is 74, or
+  85 with the `[security]` marker dependabot-core can put after the prefix. This
+  file has no switch for it: GitHub documents `groups` rules here as a way to
+  group updates, not to stop grouping them, and `group-by: dependency-name`
+  would drop the versions from the title instead.
+- **`.yaml` is read.** dependabot-core's `CONFIG_FILE_PATHS` names
+  `.github/dependabot.yml` and `.github/dependabot.yaml`, so this file can match
+  every other YAML file here, unlike `.github/codecov.yml`.
+
+**Do not add Dependabot's titles to commitlint's `ignores` instead.** An ignored
+title skips `type-enum` with every other rule, so a security fix would reach
+`main` as a `chore` that releases nothing, or with no type at all.
+
+Turning Dependabot's security updates off in favour of Renovate was the other
+candidate, and #486 is why it lost: Renovate's npm manager cannot see a
+dependency only `package-lock.json` names, so such a fix would wait for the
+weekly lock-file refresh instead of arriving with the alert.
 
 ## Commits and pull requests
 
@@ -778,11 +823,13 @@ Where its two labels come from depends on whether an issue stands behind it:
 
 **A dependency bump carries the label pair and nothing else.** Renovate attaches
 `kind:tooling` and `area:packaging` to every pull request it opens, through the
-`labels` key in `.github/renovate.json`, so a bump is findable from the issue
-list and from search; it takes no milestone and no project item, on purpose —
-bumps outnumber the plan's own pull requests, and on the `v1.0.0` milestone they
-would drown the only question it answers. The `chore(main): release …` pull
-request is release-please's, and carries only its own `autorelease:` labels.
+`labels` key in `.github/renovate.json`, and Dependabot's security updates carry
+the same pair through `.github/dependabot.yaml`, so a bump is findable from the
+issue list and from search; it takes no milestone and no project item, on
+purpose — bumps outnumber the plan's own pull requests, and on the `v1.0.0`
+milestone they would drown the only question it answers. The
+`chore(main): release …` pull request is release-please's, and carries only its
+own `autorelease:` labels.
 
 ### What an issue says
 
