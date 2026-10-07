@@ -28,8 +28,18 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import semver from 'semver'
 
 const root = new URL('..', import.meta.url).pathname
+
+// The age every npm upgrade here waits out before Renovate raises it, set by
+// the `security:minimumReleaseAgeNpm` preset `.github/renovate.json` extends —
+// the number lives in that preset, not in a file here. The fixtures follow the
+// registry only up to the same cutoff, so a bundler release broken and then
+// fixed or yanked inside the window does not turn `Build` red meanwhile; a
+// release that is genuinely incompatible still does, once it is old enough.
+const MINIMUM_RELEASE_AGE_DAYS = 3
+const cutoff = Date.now() - MINIMUM_RELEASE_AGE_DAYS * 24 * 60 * 60 * 1000
 
 // Every fixture writes this, and every fixture asserts on it.
 //
@@ -208,6 +218,10 @@ const WEBPACK_DRIVER = `
  * the file at all. Where `process.features.typescript` is off — Node 22 before
  * 22.18 — the documented failure is asserted instead, so the check never skips
  * without saying so.
+ *
+ * `versions` maps each package to the range it is resolved through, which
+ * `resolveBeforeCutoff` holds to releases past Renovate's minimum age.
+ * @type {{ bundler: string, config?: string, driver: string, end: string, serve?: string, versions: Record<string, string> }[]}
  */
 const FIXTURES = [
   {
@@ -340,6 +354,90 @@ function readPackReport(json) {
 }
 
 /**
+ * What `npm view <name> time dist-tags --json` reports, narrowed from the
+ * `any` that `JSON.parse` hands back.
+ * @param {string} json
+ * @returns {{ latest: string | undefined, time: Record<string, string> }}
+ */
+function readViewReport(json) {
+  /** @type {unknown} */
+  const parsed = JSON.parse(json)
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('npm view --json reported an unexpected shape')
+  }
+
+  /** @type {unknown} */
+  const time = 'time' in parsed ? parsed.time : undefined
+  /** @type {unknown} */
+  const tags = 'dist-tags' in parsed ? parsed['dist-tags'] : undefined
+  if (typeof time !== 'object' || time === null) {
+    throw new Error('npm view --json reported no publish times')
+  }
+
+  /** @type {Record<string, string>} */
+  const published = {}
+  for (const [version, stamp] of Object.entries(time)) {
+    if (typeof stamp === 'string') published[version] = stamp
+  }
+
+  /** @type {unknown} */
+  const latest =
+    typeof tags === 'object' && tags !== null && 'latest' in tags
+      ? tags.latest
+      : undefined
+
+  return {
+    latest: typeof latest === 'string' ? latest : undefined,
+    time: published,
+  }
+}
+
+/**
+ * The version `range` resolves to among the releases of `name` published
+ * before the cutoff. The `latest` tag where it qualifies, since npm prefers it
+ * over a higher version under another tag, and otherwise the highest version
+ * that does.
+ *
+ * Each range is resolved here and installed exactly, rather than handing npm
+ * `--before`, because `--before` reaches the tarball's own exact pins too: a
+ * runtime dependency bumped inside the window — a security fix, which
+ * Dependabot raises and automerges with no waiting period — would stop every
+ * install.
+ * @param {string} name
+ * @param {string} range
+ * @returns {string}
+ */
+function resolveBeforeCutoff(name, range) {
+  const { latest, time } = readViewReport(
+    execFileSync('npm', ['view', name, 'time', 'dist-tags', '--json'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  )
+
+  /** @param {string} version */
+  const qualifies = (version) =>
+    semver.satisfies(version, range) &&
+    Date.parse(time[version] ?? '') <= cutoff
+
+  if (latest !== undefined && qualifies(latest)) return latest
+
+  const highest = semver.maxSatisfying(
+    Object.keys(time).filter(
+      (version) => semver.valid(version) !== null && qualifies(version),
+    ),
+    range,
+  )
+  if (highest === null) {
+    throw new Error(
+      `no release of ${name} matching ${range} is ${MINIMUM_RELEASE_AGE_DAYS} days old yet`,
+    )
+  }
+
+  return highest
+}
+
+/**
  * Runs one phase of a fixture and prints its line. A failure is recorded
  * rather than thrown, so a build that fails still leaves the dev server beside
  * it to report on its own.
@@ -442,7 +540,10 @@ const packed = readPackReport(
   ),
 )
 const tarball = path.join(tarballDirectory, packed.filename)
-console.log(`  ${packed.filename} (${packed.files.length} files)\n`)
+console.log(`  ${packed.filename} (${packed.files.length} files)`)
+console.log(
+  `  peers published before ${new Date(cutoff).toISOString()}, ${MINIMUM_RELEASE_AGE_DAYS} days ago\n`,
+)
 
 // What a Node without type stripping says about a `.ts` config: Style
 // Dictionary's own message, which README points at.
@@ -469,7 +570,7 @@ for (const {
       writeFixture(directory, driver, config, serve)
 
       const specifiers = Object.entries(versions).map(
-        ([name, range]) => `${name}@${range}`,
+        ([name, range]) => `${name}@${resolveBeforeCutoff(name, range)}`,
       )
 
       // `--ignore-scripts` matches every other install here, and keeps a
