@@ -99,6 +99,13 @@ export default defineConfig({
 })
 ```
 
+Keep the generated files out of Vite's `build.outDir`, which is `dist` unless
+you change it. When that directory sits inside the project root, `vite build`
+empties it once this plugin has compiled, and again on every
+`vite build --watch` rebuild, so tokens written there are gone by the time the
+build finishes. Write them somewhere else, such as `build/`, or set
+`build.emptyOutDir` to `false`.
+
 ### Rolldown
 
 ```typescript
@@ -236,7 +243,7 @@ StyleDictionary({
     platforms: {
       css: {
         transformGroup: 'css',
-        buildPath: 'dist/css/',
+        buildPath: 'build/css/',
         files: [{ destination: 'variables.css', format: 'css/variables' }],
       },
     },
@@ -270,7 +277,7 @@ styleDictionaryPlugin({
     platforms: {
       css: {
         transformGroup: 'css',
-        buildPath: 'dist/',
+        buildPath: 'build/',
         files: [{ destination: 'vars.css', format: 'css/variables' }],
       },
       // Shells out to a native toolchain, so it is worth a minute of a real
@@ -314,7 +321,7 @@ export default defineConfig({
           platforms: {
             custom: {
               transformGroup: 'css',
-              buildPath: 'dist/',
+              buildPath: 'build/',
               files: [
                 { destination: 'tokens.txt', format: 'custom/my-format' },
               ],
@@ -441,6 +448,14 @@ the log mentioning it.
 So treat the build directory as disposable: delete it when a configuration
 changes shape, and keep it out of version control and out of any directory
 holding hand-written files.
+
+Keep it out of the bundler's own output directory as well, which is the opposite
+problem. Vite empties `build.outDir` when it starts writing its bundle, after
+this plugin has compiled, whenever that directory sits inside the project root —
+`dist`, by default — so a `buildPath` under it leaves nothing behind after
+`vite build`, and nothing after a `vite build --watch` rebuild either. An
+`outDir` outside the root is not emptied unless `build.emptyOutDir` asks for it.
+Put the `buildPath` somewhere else, or set `build.emptyOutDir` to `false`.
 
 There is deliberately no `clean` option. Style Dictionary's
 `cleanAllPlatforms()` does not solve this — it removes the destinations the
