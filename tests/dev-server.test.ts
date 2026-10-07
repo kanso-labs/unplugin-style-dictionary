@@ -751,6 +751,76 @@ describe('under a real vite dev server', () => {
     }
   }, 30000)
 
+  it('pushes a token file that fails to parse to the overlay and onBuildError', async () => {
+    // A half-typed token file is the commonest editing mistake, and its JSDoc
+    // once said it rejected out of band and reached neither the overlay nor
+    // `onBuildError`. It reaches both, because Style Dictionary's
+    // initialisation runs inside the build's `try` — `{ init: false }` on the
+    // constructor, and the `extend` the plugin awaits itself. Dropping that
+    // option puts the constructor's own `init()` back, whose rejection nobody
+    // holds, and the rejection recorded below is what fails then.
+    const { configFile, directory, generated, tokenSource } = writeFixture(
+      'overlay-parse-error',
+    )
+
+    const reported: unknown[] = []
+    const { logged, server: running } = await bootServing(
+      directory,
+      configFile,
+      {
+        onBuildError: (error) => {
+          reported.push(error)
+        },
+      },
+    )
+    await waitUntil(() => fs.existsSync(generated), 10000)
+
+    const { frames, socket } = await connectHmrClient(running)
+    await settle(300)
+    frames.length = 0
+
+    const rejections: unknown[] = []
+    const recordRejection = (reason: unknown) => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', recordRejection)
+
+    try {
+      // Cut short partway through, as an editor saving mid-keystroke would
+      // leave it.
+      fs.writeFileSync(
+        tokenSource,
+        JSON.stringify({ color: { brand: { value: '#ff0000' } } }).slice(0, -3),
+      )
+      await waitUntil(() => frames.some((f) => f.type === 'error'), 10000)
+
+      const failure = frames.find((f) => f.type === 'error')
+      expect(failure?.err?.plugin).toBe('unplugin-style-dictionary')
+      expect(failure?.err?.message).toContain('JSON5: invalid end of input')
+
+      await waitUntil(() => reported.length > 0, 10000)
+      expect(
+        reported.map((error) =>
+          error instanceof Error ? error.message : String(error),
+        ),
+      ).toEqual([expect.stringContaining('JSON5: invalid end of input')])
+
+      expect(
+        logged.some((line) => String(line).includes('Compilation failed')),
+      ).toBe(true)
+
+      // A rejection is reported a tick after it is orphaned, so give it one.
+      await settle(50)
+      expect(rejections).toEqual([])
+
+      // The page went on rendering the last good file.
+      expect(fs.readFileSync(generated, 'utf-8')).toContain('#0070f3')
+    } finally {
+      process.off('unhandledRejection', recordRejection)
+      socket.close()
+    }
+  }, 30000)
+
   it('reports and shows a rebuild that fails outside the compile', async () => {
     // `drain` wraps two different things: resolving the configurations, and
     // building them. `runBuilds` reports its own failure, so the catch only
