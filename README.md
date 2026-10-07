@@ -720,12 +720,12 @@ the one that broke the build.
 
 Small on purpose. Five bundler entry points, one root entry, and two types.
 
-| Import                                                      | What it is                                                                                                                        |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `…/vite`, `…/rolldown`, `…/rollup`, `…/rspack`, `…/webpack` | Default export: the plugin for that bundler. Call it with the options below.                                                      |
-| `…` (the root)                                              | Default export, also named `unplugin`: the unplugin instance, carrying `.vite`, `.rolldown`, `.rollup`, `.rspack` and `.webpack`. |
-| `UnpluginStyleDictionaryOptions`                            | The options type, exported from every entry above.                                                                                |
-| `StyleDictionaryConfigContext`                              | What the function form of `config` is handed, exported from every entry above.                                                    |
+| Import                                                      | What it is                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `…/vite`, `…/rolldown`, `…/rollup`, `…/rspack`, `…/webpack` | Default export: the plugin for that bundler. Call it with the options below.                                                                                                                                                                                                                                                                                                                        |
+| `…` (the root)                                              | Default export, also named `unplugin`: the unplugin instance. Its `.vite`, `.rolldown`, `.rollup`, `.rspack` and `.webpack` are the five supported targets, the same plugins the subpaths export. It also carries unplugin's own `.esbuild`, `.farm`, `.unloader`, `.rsbuild`, `.bun` and `.raw`, which are not supported here: `.esbuild` throws on its first build, and nothing tests the others. |
+| `UnpluginStyleDictionaryOptions`                            | The options type, exported from every entry above.                                                                                                                                                                                                                                                                                                                                                  |
+| `StyleDictionaryConfigContext`                              | What the function form of `config` is handed, exported from every entry above.                                                                                                                                                                                                                                                                                                                      |
 
 Anything not in that table is internal, whatever a build output happens to
 contain. In particular the watch filter and the raw unplugin factory are not
@@ -734,14 +734,23 @@ takes a second `meta` argument — the bundler-identifying `UnpluginContextMeta`
 that a consumer would have to construct by hand, so calling it the obvious way
 is a type error rather than a plugin.
 
-Reach for the root entry when you need a target that has no subpath of its own,
-or when one configuration object feeds more than one bundler:
+Reach for the root entry when one configuration object feeds more than one
+bundler:
 
 ```typescript
 import styleDictionary from '@kanso-labs/unplugin-style-dictionary'
 
-const plugin = styleDictionary.rollup({ config: 'sd.config.json' })
+const options = { config: 'sd.config.json' }
+
+const forRollup = styleDictionary.rollup(options)
+const forWebpack = styleDictionary.webpack(options)
 ```
+
+It is not a way to reach a bundler that has no subpath. Every target without one
+is unplugin's own and unsupported here. esbuild in particular fails outright:
+the plugin registers its watch list before it compiles, and unplugin's esbuild
+context throws on that registration, so `.esbuild` writes nothing even for a
+one-shot build.
 
 ## Options Reference
 

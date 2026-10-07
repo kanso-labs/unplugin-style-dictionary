@@ -1471,6 +1471,17 @@ whose watch behaviour is a documented absence. Not built. farm, unloader,
 rsbuild and bun stay out too, for the reason the issue gives: an optional peer
 and a `scripts/check-package.mjs` entry each, for no demonstrated demand.
 
+**esbuild is reachable today all the same, as `.esbuild` on the root export, and
+it throws there.** The root export is the whole unplugin instance, so it carries
+every key unplugin builds, these five and `raw` included. It is not even a
+one-shot target through that key: `buildStart` registers the watch list before
+it compiles, so the first `addWatchFile` throws and nothing is written —
+measured by driving `.esbuild` through unplugin 3.4.0's adapter with a stub
+build, which threw
+`unplugin/esbuild: addWatchFile outside supported hooks (resolveId, load, transform)`
+and left the destination missing. README's Public API section says so, and names
+the root entry only for one configuration feeding several bundlers.
+
 **rspack decorates a diagnostic before it reaches `stats`; webpack does not.**
 The plugin pushes a plain `new Error(message)` onto `compilation.warnings` on
 both. webpack hands that back byte for byte, while rspack reframes it with a `⚠`
