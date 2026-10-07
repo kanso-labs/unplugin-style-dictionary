@@ -207,6 +207,11 @@ const identityOf = (file: string) => {
   return `${stats.ino}:${stats.mtimeMs}`
 }
 
+// Text of exactly `length` characters that no build writes, so a rewrite can
+// keep a destination's size while changing what it holds.
+const rewriteOfLength = (length: number) =>
+  'not what the build wrote'.padEnd(length, '.').slice(0, length)
+
 describe('unplugin-style-dictionary (vite target)', () => {
   // A fixture directory per run, rather than one shared `temp-test-tokens` at
   // the repo root. Every path below is derived from it, and the whole suite
@@ -1379,14 +1384,19 @@ describe('unplugin-style-dictionary (vite target)', () => {
     await callBuildStart(
       vitePlugin({ config: fixture.configPath, silent: true }),
     )
-    const built = fs.statSync(fixture.output).mtimeMs
-    fs.writeFileSync(fixture.output, 'not what the build wrote')
+    const built = fs.statSync(fixture.output)
+
+    // The same length, written in place, so the size and the inode are as
+    // the compile left them and only the mtime can see the rewrite.
+    fs.writeFileSync(fixture.output, rewriteOfLength(built.size))
+    expect(fs.statSync(fixture.output).size).toBe(built.size)
+    expect(fs.statSync(fixture.output).ino).toBe(built.ino)
 
     // Stamped rather than left to the clock. A rewrite inside the clock tick
     // the compile wrote in keeps the mtime the compile left, and on Windows
     // that tick is about 15ms, so this case read a rewrite as the build's
     // own output there. Later than the build, as a real rewrite would be.
-    const rewritten = new Date(built + 60_000)
+    const rewritten = new Date(built.mtimeMs + 60_000)
     fs.utimesSync(fixture.output, rewritten, rewritten)
 
     await callBuildStart(
@@ -1394,6 +1404,80 @@ describe('unplugin-style-dictionary (vite target)', () => {
     )
 
     expect(fixture.counter.calls).toBe(2)
+    expect(fs.readFileSync(fixture.output, 'utf8')).toContain('color-primary=')
+  })
+
+  // Builds twice, stamping the output to a whole second in between, and
+  // returns that stamp. `utimes` keeps microseconds while a compile's own
+  // write carries nanoseconds, so only a whole second can be put back on the
+  // file exactly. The second build renders the same bytes, so the
+  // byte-identical write leaves the stamp in place and the record holds it.
+  // A minute back, so the stamp differs from the compile's own mtime even on
+  // a filesystem that stamps whole seconds.
+  const buildWithWholeSecondStamp = async (
+    fixture: ReturnType<typeof freshnessFixture>,
+  ) => {
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    const stamp = new Date(
+      Math.floor(fs.statSync(fixture.output).mtimeMs / 1000) * 1000 - 60_000,
+    )
+    fs.utimesSync(fixture.output, stamp, stamp)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+    expect(fixture.counter.calls).toBe(2)
+    expect(fs.statSync(fixture.output).mtimeMs).toBe(stamp.getTime())
+
+    return stamp
+  }
+
+  it('compiles over an output rewritten in place with another length that kept its mtime', async () => {
+    // The shape of a rewrite inside the timestamp tick the compile wrote in,
+    // which keeps the mtime the record holds: about 15ms on Windows, and a
+    // whole second or more on HFS+, ext3 and FAT. Written in place, so the
+    // inode stays too, and only the size can see it.
+    const fixture = freshnessFixture('rewritten-output-length')
+    const stamp = await buildWithWholeSecondStamp(fixture)
+    const built = fs.statSync(fixture.output)
+
+    fs.writeFileSync(fixture.output, rewriteOfLength(built.size + 8))
+    fs.utimesSync(fixture.output, stamp, stamp)
+    expect(fs.statSync(fixture.output).mtimeMs).toBe(built.mtimeMs)
+    expect(fs.statSync(fixture.output).ino).toBe(built.ino)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(3)
+    expect(fs.readFileSync(fixture.output, 'utf8')).toContain('color-primary=')
+  })
+
+  it('compiles over an output replaced by a rename that kept its mtime and size', async () => {
+    // How atomic-save editors, `rsync` and this plugin's own writer replace a
+    // file: a new one renamed over it. The same length and the mtime put
+    // back, so only the inode can see it.
+    const fixture = freshnessFixture('replaced-output')
+    const stamp = await buildWithWholeSecondStamp(fixture)
+    const built = fs.statSync(fixture.output)
+
+    const replacement = `${fixture.output}.replacement`
+    fs.writeFileSync(replacement, rewriteOfLength(built.size))
+    fs.utimesSync(replacement, stamp, stamp)
+    fs.renameSync(replacement, fixture.output)
+    expect(fs.statSync(fixture.output).mtimeMs).toBe(built.mtimeMs)
+    expect(fs.statSync(fixture.output).size).toBe(built.size)
+    expect(fs.statSync(fixture.output).ino).not.toBe(built.ino)
+
+    await callBuildStart(
+      vitePlugin({ config: fixture.configPath, silent: true }),
+    )
+
+    expect(fixture.counter.calls).toBe(3)
     expect(fs.readFileSync(fixture.output, 'utf8')).toContain('color-primary=')
   })
 

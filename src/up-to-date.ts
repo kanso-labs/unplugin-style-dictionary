@@ -25,16 +25,29 @@ import {
 
 // What is known about the compile that last built one destination: which
 // configuration it was, the newest source it saw before it read any of them,
-// and the file's mtime once it was done. `newestSource` is `null` where that
-// compile did not look, which is when `cache` was off or the sources could not
-// be established. `written` is `null` where the compile declared the file and
-// Style Dictionary declined to write it — a filter matching no tokens — so
-// there is nothing on disk for it to vouch for. `persisted` marks a record an
-// earlier process left.
+// and the file's mtime, size and inode once it was done. `newestSource` is
+// `null` where that compile did not look, which is when `cache` was off or the
+// sources could not be established. `written` is `null` where the compile
+// declared the file and Style Dictionary declined to write it — a filter
+// matching no tokens — so there is nothing on disk for it to vouch for, and
+// `size` and `ino` are `null` with it. `persisted` marks a record an earlier
+// process left.
+//
+// The mtime alone cannot vouch for the file. It moves only by a whole
+// timestamp tick — about 15ms on Windows, a second or more on HFS+, ext3 and
+// FAT — so a rewrite inside the tick the compile wrote in keeps it. `size`
+// sees a rewrite of another length, and `ino` a file replaced by a rename,
+// which is how atomic-save editors, `rsync` and this plugin's own writer
+// write. Both come from the stat the check already makes, so neither costs a
+// read. **Not `ctimeMs`**: it is stamped from the same clock as the mtime, so
+// it misses the same rewrites, and it moves on a `chmod` or an extended
+// attribute that changes nothing a build would.
 export interface DestinationRecord {
   fingerprint: string
+  ino: null | number
   newestSource: null | number
   persisted?: true
+  size: null | number
   written: null | number
 }
 
@@ -43,7 +56,9 @@ export interface DestinationRecord {
 // the hooks a configuration names and the Style Dictionary version to the
 // fingerprint, and started comparing it for a configuration given as a path.
 // 3 records a declared file the compile did not write, with `written: null`.
-const RECORDS_VERSION = 3
+// 4 records each written file's `size` and `ino` beside its mtime, which a
+// version-3 record carries neither of and must not be read as matching.
+const RECORDS_VERSION = 4
 
 // A stable identity for one resolved configuration, or `null` where it
 // cannot have one. Functions are serialised by source rather than dropped,
@@ -213,8 +228,18 @@ export function isUpToDate(
     // The file has moved since this configuration wrote it, so something
     // wrote it afterwards and nothing here can say what it holds. Its mtime
     // is no evidence either way: an edit to generated output is newer than
-    // every source, and would have been kept.
-    if (writtenByThis && record.written !== stats.mtimeMs) return false
+    // every source, and would have been kept. The size and the inode are
+    // asked beside the mtime, because a rewrite inside the timestamp tick the
+    // compile wrote in keeps the mtime: one of another length moves the size,
+    // and one renamed over the file moves the inode.
+    if (
+      writtenByThis &&
+      (record.written !== stats.mtimeMs ||
+        record.size !== stats.size ||
+        record.ino !== stats.ino)
+    ) {
+      return false
+    }
 
     const lastRead = writtenByThis ? record.newestSource : null
 
@@ -333,15 +358,21 @@ export function readPersistedRecords(
       value !== null &&
       'fingerprint' in value &&
       typeof value.fingerprint === 'string' &&
+      'ino' in value &&
+      (value.ino === null || typeof value.ino === 'number') &&
       'newestSource' in value &&
       (value.newestSource === null || typeof value.newestSource === 'number') &&
+      'size' in value &&
+      (value.size === null || typeof value.size === 'number') &&
       'written' in value &&
       (value.written === null || typeof value.written === 'number')
     ) {
       records.set(destination, {
         fingerprint: value.fingerprint,
+        ino: value.ino,
         newestSource: value.newestSource,
         persisted: true,
+        size: value.size,
         written: value.written,
       })
     }
@@ -351,19 +382,30 @@ export function readPersistedRecords(
 }
 
 // The record a compile leaves for one destination it declared. One it wrote
-// is recorded with the file's mtime, and one Style Dictionary declined to write
-// with `written: null`. `null` comes back where a file it wrote is not there
-// to vouch for, so nothing is recorded for it and the next build compiles.
+// is recorded with the file's mtime, size and inode as it stood once written,
+// and one Style Dictionary declined to write with all three `null`. `null`
+// comes back where a file it wrote is not there to vouch for, so nothing is
+// recorded for it and the next build compiles.
 export function recordOf(
   destination: string,
   fingerprint: string,
   newestSource: null | number,
   wrote: boolean,
 ): DestinationRecord | null {
-  if (!wrote) return { fingerprint, newestSource, written: null }
+  if (!wrote) {
+    return { fingerprint, ino: null, newestSource, size: null, written: null }
+  }
 
   const stats = statOrNull(destination)
-  return stats ? { fingerprint, newestSource, written: stats.mtimeMs } : null
+  return stats
+    ? {
+        fingerprint,
+        ino: stats.ino,
+        newestSource,
+        size: stats.size,
+        written: stats.mtimeMs,
+      }
+    : null
 }
 
 // Where one project's records persist: under the nearest `package.json`'s
@@ -409,13 +451,14 @@ export function writePersistedRecords(
   for (const [destination, record] of recorded) merged.set(destination, record)
 
   const records: Record<string, Omit<DestinationRecord, 'persisted'>> = {}
-  for (const [destination, { fingerprint, newestSource, written }] of merged) {
+  for (const [destination, record] of merged) {
+    const { fingerprint, ino, newestSource, size, written } = record
     const stillThere =
       written === null
         ? statOrNull(path.dirname(destination))
         : statOrNull(destination)
     if (stillThere) {
-      records[destination] = { fingerprint, newestSource, written }
+      records[destination] = { fingerprint, ino, newestSource, size, written }
     }
   }
 

@@ -345,12 +345,13 @@ export async function runBuilds(
       //
       // `newestSource` goes in beside the fingerprint. It was taken before
       // this compile read anything, so a source saved while it ran is newer
-      // than it, and the rebuild queued for that save is not skipped. So does
-      // each file's mtime as this compile left it, byte-identical skip and
-      // all: a later check trusts the record only while the file still has
-      // it. A file Style Dictionary declined to write is recorded as such, so
-      // a later check does not go looking for it; one it wrote and that is
-      // already gone gets no record, so the next build compiles.
+      // than it, and the rebuild queued for that save is not skipped. So do
+      // each file's mtime, size and inode as this compile left it,
+      // byte-identical skip and all: a later check trusts the record only
+      // while the file still has all three. A file Style Dictionary declined
+      // to write is recorded as such, so a later check does not go looking
+      // for it; one it wrote and that is already gone gets no record, so the
+      // next build compiles.
       //
       // Only a compile with `cache` on has a fingerprint to record. One with it
       // off has still forgotten what it rewrote, above, which is what keeps
@@ -378,8 +379,9 @@ export async function runBuilds(
     // failing are still ours.
     // Once per compile rather than per configuration, and only after every
     // configuration succeeded. A compile that throws persists nothing, which
-    // is safe: whatever it rewrote no longer has the mtime its old record
-    // names, so that record vouches for nothing.
+    // is safe: whatever it rewrote was replaced rather than written in place,
+    // so it no longer has the inode its old record names, and that record
+    // vouches for nothing.
     if (recordsFile !== undefined && recorded.size > 0) {
       writePersistedRecords(recordsFile, recorded)
     }

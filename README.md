@@ -476,8 +476,19 @@ the nearest `package.json`, so it survives a restart. Where there is no record,
 the files a configuration reads are compared against the files it declares.
 
 A declared file that changed since the compile that wrote it is compiled over
-rather than trusted, whatever its mtime says. Generated output is disposable, so
-an edit made to it by hand does not survive the next build.
+rather than trusted, whatever its mtime says. Each compile records the mtime,
+size and inode of every file it wrote, and a file that no longer has all three
+is built again: a rewrite of another length moves the size, and a file replaced
+by a rename, which is how atomic-save editors and `rsync` write, moves the
+inode, even where the mtime was put back or never moved. Generated output is
+disposable, so an edit made to it by hand does not survive the next build.
+
+One rewrite is still not seen: one of the same length, made in place, inside the
+timestamp tick the compile wrote in — about 15ms on Windows, and a whole second
+or more on HFS+, ext3 and FAT. It moves none of the three, and only reading
+every output on every build could catch it, which is the cost the skip exists to
+avoid. Set `cache: false` where something rewrites generated output that
+quickly.
 
 Two cases never skip, because neither can be settled from the filesystem:
 
