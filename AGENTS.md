@@ -154,7 +154,8 @@ automerges minor and patch, so `.tool-versions` moves on its own schedule while
 a version copied into prose sits still — which is how this paragraph came to
 name a version the repository had stopped pinning three bumps earlier. The
 README's Development section uses the same self-reading form for the same
-reason.
+reason. Both settings come from the organization preset
+`local>kanso-labs/.github:renovate-config`, not from `.github/renovate.json`.
 
 ## Conventions
 
@@ -504,9 +505,10 @@ stopped. So a TypeScript 7 branch fails Renovate's own lockfile update with
 npm error Invalid: lock file's typescript@6.0.3 does not satisfy typescript@7.0.2
 ```
 
-`recreateWhen` is `always`, so closing that pull request only brings it back —
-which is how a repository learns to stop reading red. The `allowedVersions` rule
-in `.github/renovate.json` is what stops it being raised at all.
+`recreateWhen` is `always`, which the organization preset sets rather than this
+repository's own file, so closing that pull request only brings it back — which
+is how a repository learns to stop reading red. The `allowedVersions` rule in
+`.github/renovate.json` is what stops it being raised at all.
 
 **Grouping `typescript` with `eslint` is not a substitute.** A grouped branch
 still resolves `typescript@7` against a `typescript-eslint` that peers `<6.1.0`
@@ -528,8 +530,8 @@ dependency only `package-lock.json` names, which Renovate's npm manager cannot
 see: #486 bumped `brace-expansion`, which `eslint` reaches through `minimatch`.
 Renovate's only route to one is its weekly lock-file refresh, so Dependabot's
 pull request is the fast path, and it used to wait for a person. The shared
-workflow turns auto-merge on for minor and patch fixes, the rule Renovate's
-preset applies, with no waiting period.
+workflow turns auto-merge on for minor and patch fixes, the rule the
+organization's Renovate preset applies, with no waiting period.
 
 Three things follow from how it works:
 
@@ -568,11 +570,25 @@ section is skipped as "No user facing commits found". Renovate's default,
 release of its own: it shipped only when a feature happened to land beside it,
 and a run of nothing but upgrades published nothing at all.
 
-`.github/renovate.json` therefore sets `semanticCommits: enabled` and
-`semanticCommitScope: null` at the top level, and `semanticCommitType: deps` in
-a `packageRule` rather than beside them. `release-please-config.json` spells out
-`changelog-sections` with `deps` visible under a `Dependencies` heading. The two
-move together: that list replaces release-please's defaults wholesale, so a type
+The organization preset `local>kanso-labs/.github:renovate-config` therefore
+sets `semanticCommits: enabled` and `semanticCommitScope: null` at the top
+level, and `semanticCommitType: deps` in a `packageRule` rather than beside
+them. `.github/renovate.json` carries none of the three; #346 moved them to the
+preset, which is listed last in its `extends` so that it wins over
+`config:recommended`. The `deps` rule is the preset's first `packageRule`, and a
+rule in this repository's own file comes after it, so a narrower rule here is
+how one package would be typed differently.
+
+**The preset is read from `kanso-labs/.github`'s default branch on every run.**
+It is extended with no ref, so unlike the `kanso-labs/actions` pins, a change
+there reaches this repository with no pull request here. Do not make this
+section true of `.github/renovate.json` again by restating the keys there: the
+preset exists so that repositories stop restating them byte for byte, as its own
+`description` records.
+
+`release-please-config.json` spells out `changelog-sections` with `deps` visible
+under a `Dependencies` heading. The preset's `deps` type and that list move
+together: the list replaces release-please's defaults wholesale, so a type
 missing from it is invisible rather than merely unstyled, and `deps` with no
 matching section would put the upgrades back where they started.
 
