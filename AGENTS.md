@@ -1735,5 +1735,26 @@ check is worse than nothing: a title corrected at review time leaves the stale
 green `Lint` standing and the ruleset satisfied. The cost is a full re-run of
 the job on every title or body edit.
 
+**commitlint's default ignores are off, on purpose.** `.commitlintrc.json` sets
+`defaultIgnores: false`, so a title commitlint would otherwise skip before any
+rule runs is checked like any other. The defaults
+(`node_modules/@commitlint/is-ignored/lib/defaults.js`) skip `Revert …`,
+`Merge branch …`, `Merge pull request …`, `fixup!` and a bare semver among
+others, and with them on, the title GitHub's Revert button writes —
+`Revert "fix(watch): …"` — passed `Lint` with no type at all. Its squash subject
+is then a commit release-please cannot parse and drops, so a revert that is the
+only change since the last release opens no release pull request, and npm keeps
+serving the regression with every check green.
+
+So **a Revert-button title has to be retitled before it merges**, to
+`revert: <original title>`: `revert` is in `type-enum`, and release-please lists
+it under the visible `Reverts` section, so it reaches the notes and cuts a
+release. A `Merge …` title fails too, and takes a Conventional Commit title like
+any other. Turning the ignores off costs nothing: only pull request titles reach
+commitlint, so the merge, fixup and revert commits those ignores exist for never
+do. Replayed over the 100 most recent pull request titles, release-please's
+`chore(main): release …` and Renovate's `deps:` among them, none that passed
+with the ignores on fails with them off.
+
 A malformed type can still reach `main` through a commit that is not squashed
 from a pull request.
