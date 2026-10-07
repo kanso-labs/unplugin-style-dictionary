@@ -1762,12 +1762,22 @@ it.
 `fileEventsDelivered` in `tests/index.test.ts` is the barrier. It watches the
 fixture directory, writes a sentinel, and waits for its event; the events are
 numbered in the order they happen, so a stream opened after that is handed
-nothing older — 0 of 40 with it in front of the same stream. A real-watcher case
-that asserts an exact count needs it between writing its fixture and starting
-the watcher. A case that only waits for output sees an extra rebuild at worst,
-which is why this does not explain the Mac-only failure of the linked-package
-case under `rolldown.watch()`: that case asserts on what the build wrote, not on
-how often it built.
+nothing older — 0 of 40 with it in front of the same stream.
+
+**It writes the sentinel again every 100ms until one is reported, and it has
+to.** On macOS `fs.watch` returns before the FSEvents stream behind it is
+listening, so a sentinel written once can go unreported for good. Written once,
+it timed the re-entry case out in 2 full runs of 40, which is about the rate the
+barrier was added to remove. Measured directly, a single write went unreported
+91 times in 400 with sixteen watchers starting at once, as a full parallel run
+does, and 0 times in 200 with nothing else running. Rewritten every 100ms, it
+went unreported 0 times in 400 under the same load, and 80 full runs passed.
+
+A real-watcher case that asserts an exact count needs it between writing its
+fixture and starting the watcher. A case that only waits for output sees an
+extra rebuild at worst, which is why this does not explain the Mac-only failure
+of the linked-package case under `rolldown.watch()`: that case asserts on what
+the build wrote, not on how often it built.
 
 Do not lengthen `watcherIdle`'s quiet window instead — the stale event is not
 bounded by any fixed window — and do not relax the count to a lower bound, which
