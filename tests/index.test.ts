@@ -10,6 +10,7 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import * as rollup from 'rollup'
 import StyleDictionary from 'style-dictionary'
+import ts from 'typescript'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
@@ -8388,6 +8389,35 @@ describe('the contributor documentation', () => {
 
     expect(normaliseWhitespace(readmeFence())).toBe(
       normaliseWhitespace(optionsContract()),
+    )
+  })
+
+  it('attaches the options overview to the options interface', () => {
+    // TypeScript attaches only the last JSDoc before a declaration, so the
+    // overview reached no editor while another interface's JSDoc sat between
+    // it and `UnpluginStyleDictionaryOptions` — and the README pin above
+    // cannot see that, since it compares the text and not where it sits.
+    // Asked of the compiler's own parser, which is what an editor's hover
+    // reads.
+    const source = ts.createSourceFile(
+      'types.ts',
+      fs.readFileSync(new URL('../src/types.ts', import.meta.url), 'utf-8'),
+      ts.ScriptTarget.Latest,
+      true,
+    )
+
+    const declaration = source.statements.find(
+      (statement): statement is ts.InterfaceDeclaration =>
+        ts.isInterfaceDeclaration(statement) &&
+        statement.name.text === 'UnpluginStyleDictionaryOptions',
+    )
+    expect(declaration).toBeDefined()
+    if (!declaration) return
+
+    const blocks = ts.getJSDocCommentsAndTags(declaration)
+    expect(blocks).toHaveLength(1)
+    expect(ts.getTextOfJSDocComment(blocks[0]?.comment)).toMatch(
+      /^Options for the Style Dictionary unplugin factory/,
     )
   })
 
