@@ -5233,24 +5233,37 @@ const waitUntil = async (satisfied: () => boolean, timeoutMs: number) => {
 // handed anything older: 0 of 40 with this in front of the same stream.
 // `fs.watch` on a directory is FSEvents on macOS, and inotify or
 // ReadDirectoryChangesW elsewhere, where the sentinel arrives just the same.
+//
+// The sentinel is written again until one write is reported. On macOS
+// `fs.watch` returns before its stream is listening, so a write made straight
+// after it can go unreported for good: 91 of 400 with sixteen watchers starting
+// at once, as they do in a full parallel run, against 0 of 400 written again
+// every 100ms. Whichever write arrives was made after the fixture, which is all
+// the barrier needs.
 const fileEventsDelivered = async (directory: string) => {
   const sentinel = '.file-events-delivered'
+  const write = () => {
+    fs.writeFileSync(path.join(directory, sentinel), '')
+  }
 
   await new Promise<void>((resolve, reject) => {
+    const rewrite = setInterval(write, 100)
     const timer = setTimeout(() => {
+      clearInterval(rewrite)
       watcher.close()
       reject(new Error(`No event for ${sentinel} under ${directory}`))
     }, 10000)
     // Node does not promise a filename on every platform, and the sentinel is
-    // the only write after the watch starts.
+    // the only file written after the watch starts.
     const watcher = fs.watch(directory, (_event, filename) => {
       if (filename !== null && filename !== sentinel) return
+      clearInterval(rewrite)
       clearTimeout(timer)
       watcher.close()
       resolve()
     })
 
-    fs.writeFileSync(path.join(directory, sentinel), '')
+    write()
   })
 }
 
