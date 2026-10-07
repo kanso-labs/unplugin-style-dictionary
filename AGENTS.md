@@ -355,6 +355,21 @@ throw, all three dev-server phases fail and every build phase passes, where the
 build-only driver passed every fixture. An edit nothing regenerates for fails at
 the phase's 20-second deadline rather than holding `Build` to its timeout.
 
+**The fixtures follow the registry only up to Renovate's minimum release age.**
+Each range is resolved to the newest release published at least three days
+earlier — the age `security:minimumReleaseAgeNpm` sets for every npm upgrade
+here, which is why the constant names that preset — and installed exactly. A
+bundler release broken and then fixed or yanked inside that window therefore no
+longer turns `Build` red on every pull request meanwhile, and a genuinely
+incompatible one still does, three days later. The cutoff gates the peers alone,
+not their dependency trees. npm's `--before` would gate the whole tree, but it
+applies to the tarball's own exact pins as well, so a runtime dependency bumped
+inside the window — a security fix, which Dependabot raises and automerges with
+no waiting period — would stop every install. Measured on 2026-10-07: vite
+6.4.4, 7.3.7 and 8.3.3, each under a day old, resolved to 6.4.3, 7.3.6 and
+8.3.2, and with the age set to zero the same run installed the three fresh
+releases again.
+
 Two things about it are worth keeping. Each fixture emits a **JavaScript** token
 format, not CSS: rollup and rolldown cannot resolve a `.css` import without a
 loader plugin, and what is under test is this package's entry points. And the
