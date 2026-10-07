@@ -1854,6 +1854,38 @@ output carries the string `"false"` when release-please runs and decides not to
 cut a release, and a bare truthiness test passes on that — publishing every
 merge to npm.
 
+**`publish` runs on `!cancelled()`, because a release can be cut by a run that
+then fails.** release-please-action cuts releases and then updates pull requests
+in one step, so a throw in the second half fails `Propose releases` with the tag
+pushed and `release_created` already set. Under GitHub's implicit `success()`
+that skipped `publish`, and re-running could not recover it: the release half
+had already relabelled the pull request `autorelease: tagged`, so the re-run
+found nothing to release. Two of about 245 push runs here failed in that half,
+neither while cutting a release.
+
+Measured on a copy of this caller in a scratch repository, with `dry-run` on the
+publish call:
+
+- A called job that sets an output and then exits 1 still hands the output to
+  `needs.<call>.outputs`, with `result` reading `failure`.
+- With pull request creation refused, the run that tagged 0.2.1 failed in the
+  pull-request half and both publish jobs ran. Re-running it cut nothing and
+  published nothing. With the gate reverted, the run that tagged 0.2.2 skipped
+  `publish`.
+
+**Refuse pull request creation to reproduce it, not `pull-requests: write`.**
+The release half comments on the merged pull request, so a token without that
+scope fails inside the release half instead. What separates the two is the
+repository setting that lets GitHub Actions create pull requests: turned off, it
+refuses `POST /pulls` and still lets release-please update one already open.
+
+**That release-half failure is a gap nothing here covers.** It lands after the
+GitHub release is created and before any output is written, so `!cancelled()`
+has no `release_created` to read. A re-run finds the tag already there, relabels
+the pull request, and fails on the duplicate, so that release is never published
+either. Measured the same way: 0.2.0 was tagged and never reached the publish
+job.
+
 **Merge a release pull request only once `Release Please` has run for the latest
 push to `main`.** release-please rebuilds its pull request after every push, and
 merging it before that run finishes releases whatever the pull request held at
