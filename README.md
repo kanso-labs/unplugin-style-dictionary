@@ -25,9 +25,8 @@ them.
   bullet follows it rather than standing beside it.
 - **Automatic watching**: Reads the `source` and `include` patterns from your
   Style Dictionary configurations and watches the files they match, including a
-  token package resolved through `node_modules` in a workspace — except under
-  `vite build --watch` on Vite 8, whose build watcher is rolldown's. What a
-  change then triggers depends on the target — see
+  token package resolved through `node_modules` in a workspace. What a change
+  then triggers depends on the target — see
   [Watching, per target](#watching-per-target).
 - **Config flexibility**: Supports file paths (JSON, JSON5, JSONC, JS, MJS, TS),
   configuration objects, or functions — including registering custom formats at
@@ -125,8 +124,8 @@ typically run as a one-shot build rather than a long-lived dev server. There the
 plugin compiles tokens once in `buildStart`, which is enough to guarantee
 generated token files exist before the rest of the build consumes them.
 
-Under a real `rolldown.watch()`, do not rely on a token edit triggering a
-rebuild — see [Watching, per target](#watching-per-target).
+Under a real `rolldown.watch()`, a token edit rebuilds, as it does under the
+other targets' watch modes — see [Watching, per target](#watching-per-target).
 
 ### Rollup / Webpack / Rspack
 
@@ -357,26 +356,28 @@ Every target compiles tokens before the build that consumes them. What a later
 change to a token file triggers is not the same everywhere, because it depends
 on what the host bundler does with the watch list the plugin registers.
 
-| Target                    | Compiles before the build | Rebuilds on a token change        | Safe from rebuild loops |
-| ------------------------- | ------------------------- | --------------------------------- | ----------------------- |
-| **Vite**                  | yes                       | yes, under the dev server         | yes                     |
-| **Vite**, `build --watch` | yes                       | yes on 6 and 7; on 8, as Rolldown | yes                     |
-| **Rollup**                | yes                       | yes, under `rollup --watch`       | yes                     |
-| **Webpack**               | yes                       | yes, under `webpack --watch`      | yes                     |
-| **Rspack**                | yes                       | yes, under `rspack --watch`       | yes                     |
-| **Rolldown**              | yes                       | platform-dependent — see below    | yes                     |
+| Target                    | Compiles before the build | Rebuilds on a token change    | Safe from rebuild loops |
+| ------------------------- | ------------------------- | ----------------------------- | ----------------------- |
+| **Vite**                  | yes                       | yes, under the dev server     | yes                     |
+| **Vite**, `build --watch` | yes                       | yes, on 6, 7 and 8            | yes                     |
+| **Rollup**                | yes                       | yes, under `rollup --watch`   | yes                     |
+| **Webpack**               | yes                       | yes, under `webpack --watch`  | yes                     |
+| **Rspack**                | yes                       | yes, under `rspack --watch`   | yes                     |
+| **Rolldown**              | yes                       | yes, under `rolldown.watch()` | yes                     |
 
 Patterns and literal paths behave the same way wherever rebuilds happen at all.
 A `source` of `tokens/**/*.json` matches a file sitting directly in `tokens/` as
 well as one in a subdirectory, and a file created after the watcher started is
 picked up too.
 
-**Rolldown is the exception, and it is not about globs.** `this.addWatchFile()`
-is accepted by rolldown either way, and what happens next differs by platform:
-on macOS a file registered through it is watched by nothing, so a token edit
-reaches no hook, while on a Linux runner the same edit reaches a rebuild. Treat
-rolldown's watch mode as compiling once and not tracking tokens, and reach for a
-one-shot build or another target if you need rebuild-on-change.
+**Rolldown rebuilds on macOS too, a token reached through a symbolic link
+included.** Its watcher there drops the events for a path registered through a
+link — a workspace package linked into `node_modules`, or a project under `/var`
+or `/tmp`, both of which are links on macOS — so the plugin registers each such
+path by its realpath as well, and maps the event back to the spelling your
+`source` patterns use. This table used to call rolldown platform-dependent, and
+it was the link: the measurement behind that ran in a directory under `/var`.
+The same cases rebuild on Linux and on Windows, where CI runs them.
 
 **A token package resolved through `node_modules` is watched too, and that took
 a fix.** In a workspace — `app/node_modules/@acme/tokens` symlinked to
@@ -391,8 +392,9 @@ is thousands of files no token build reads.
 `vite build --watch` had the same problem and gets the same fix on Vite 6 and 7,
 which build on rollup's watcher and its chokidar ignore list: the plugin appends
 the same negations to `build.watch.chokidar.ignored`. Vite 8 builds with
-rolldown, which takes no ignore list from there, so what the Rolldown note above
-says holds for it too.
+rolldown, which takes no ignore list from there and needs none: a linked token
+package rebuilds there through the realpath registration the Rolldown note above
+describes.
 
 Nothing is needed from you for that. If you had worked around it with a
 `server.watch.ignored` or `build.watch.chokidar.ignored` negation of your own,
@@ -817,9 +819,9 @@ export interface StyleDictionaryConfigContext {
  * Every target compiles tokens before the build that consumes them. Live
  * rebuild-on-change is driven by the host bundler's watch mode, because token
  * source files sit outside the module graph: Vite's dev server, `rollup
- * --watch`, `webpack --watch` and `rspack --watch` all rebuild on a token
- * change, and a one-shot build (e.g. `tsdown`/`rolldown build` without
- * `--watch`) only builds once, in `buildStart`.
+ * --watch`, `rolldown.watch()`, `webpack --watch` and `rspack --watch` all
+ * rebuild on a token change, and a one-shot build (e.g. `tsdown`/`rolldown
+ * build` without `--watch`) only builds once, in `buildStart`.
  *
  * What the plugin says goes through the host wherever the host has a channel
  * for it: Vite's `config.logger`, the plugin context under rollup and
@@ -848,11 +850,12 @@ export interface StyleDictionaryConfigContext {
  * makes one a `no-misused-promises` error under the type-aware lint rules a
  * consumer is likely to be running — for a hook this documents as supported.
  *
- * Rolldown's watch mode is the exception, and it is not about glob patterns.
- * `addWatchFile` is accepted either way, but what happens next differs by
- * platform — on macOS a file registered through it is watched by nothing, while
- * on a Linux runner the same edit reaches a rebuild. Do not rely on a token
- * edit triggering a rebuild there.
+ * Rolldown's watch mode rebuilds on macOS as well, a token reached through a
+ * symbolic link included. Its watcher there drops the events for a path
+ * registered through a link — a workspace package linked into `node_modules`,
+ * or a project under `/var` or `/tmp`, both links on macOS — so each such path
+ * is registered by its realpath beside it, and the event is mapped back to the
+ * spelling the `source` patterns use.
  */
 export interface UnpluginStyleDictionaryOptions {
   /**
