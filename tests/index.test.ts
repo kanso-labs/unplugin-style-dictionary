@@ -5218,6 +5218,42 @@ const waitUntil = async (satisfied: () => boolean, timeoutMs: number) => {
   while (!satisfied() && Date.now() < deadline) await settle(50)
 }
 
+// Waits until every write made so far under `directory` has been turned into a
+// filesystem event, so a watcher started afterwards is not handed one of them.
+//
+// On macOS, an FSEvents stream opened just after a write is handed that write,
+// though it happened before the stream existed. Measured with the `fsevents`
+// module rollup's watcher uses: 40 streams of 40, each opened straight after
+// writing a file, reported it. So a watcher started straight after a fixture
+// is written can report the fixture as an edit, which is what made the
+// re-entry case below compile twice before it had edited anything.
+//
+// The events are numbered in the order they happen, so once the event for a
+// sentinel written after the fixture has arrived, a stream opened later is not
+// handed anything older: 0 of 40 with this in front of the same stream.
+// `fs.watch` on a directory is FSEvents on macOS, and inotify or
+// ReadDirectoryChangesW elsewhere, where the sentinel arrives just the same.
+const fileEventsDelivered = async (directory: string) => {
+  const sentinel = '.file-events-delivered'
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      watcher.close()
+      reject(new Error(`No event for ${sentinel} under ${directory}`))
+    }, 10000)
+    // Node does not promise a filename on every platform, and the sentinel is
+    // the only write after the watch starts.
+    const watcher = fs.watch(directory, (_event, filename) => {
+      if (filename !== null && filename !== sentinel) return
+      clearTimeout(timer)
+      watcher.close()
+      resolve()
+    })
+
+    fs.writeFileSync(path.join(directory, sentinel), '')
+  })
+}
+
 // A gate on a rollup watcher's own signals, for the cases below to wait on
 // before they touch the fixture again or close the watcher.
 //
@@ -5448,6 +5484,10 @@ describe('under a real rollup watcher', () => {
         '',
       ].join('\n'),
     )
+
+    // Otherwise, on macOS, the watcher can be handed the fixture write above
+    // as an edit, and the plugin rightly compiles for it.
+    await fileEventsDelivered(directory)
 
     let compiles = 0
     const idle = watcherIdle()
