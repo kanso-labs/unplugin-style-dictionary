@@ -51,7 +51,7 @@ permissions:
 jobs:
   release-please:
     name: Propose releases
-    uses: kanso-labs/actions/.github/workflows/_release-please.yaml@v4.1.0
+    uses: kanso-labs/actions/.github/workflows/_release-please.yaml@v4.2.0
     with:
       # True only on the scheduled run, which is what batches a day of merges
       # into one release. A push proposes without merging, and so does
@@ -119,4 +119,15 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: kanso-labs/actions/.github/workflows/_publish-npm.yaml@v4.1.0
+    uses: kanso-labs/actions/.github/workflows/_publish-npm.yaml@v4.2.0
+    # Refuses to publish unless this run checked out the commit the release
+    # was tagged at. release-please tags the release pull request's merge
+    # commit whichever run cuts it, so a later run cutting it would otherwise
+    # ship the later commit's code under the tagged version. A refusal leaves
+    # the version tagged and unpublished; AGENTS.md says how to publish it.
+    #
+    # The input arrived in v4.2.0, so it moves with the pin above: an input the
+    # called workflow does not declare fails every run of this file, on every
+    # push to main, not just the ones that release.
+    with:
+      tag-name: ${{ needs.release-please.outputs.tag_name }}

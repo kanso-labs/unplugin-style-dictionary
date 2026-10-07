@@ -1896,6 +1896,24 @@ the pull request, and fails on the duplicate, so that release is never published
 either. Measured the same way: 0.2.0 was tagged and never reached the publish
 job.
 
+**`publish` refuses any commit but the one the release was tagged at.** It
+passes `tag-name`, and `_publish-npm.yaml` checks after each checkout that the
+tag names `HEAD` and that `package.json` carries the tag's version.
+release-please tags the release pull request's merge commit whichever run cuts
+the release. So a later run cutting it would otherwise ship the later commit's
+code as that version: the merge commit's run displaced from the concurrency
+queue, or one failing before it tagged. Measured in a scratch repository with
+the check v4.2.0 ships: such a run failed `Publish to npm` with
+`Refusing to publish: <tag> is at <sha>, but this run checked out <sha>`, and
+without the check the same run packed the later commit.
+
+A refusal leaves the version tagged and in neither registry, and re-running the
+run does not help, because it checks out the same later commit. Nothing here
+publishes an existing tag with provenance either: npm's trusted publisher is
+registered against `release-please.yaml`, whose publish job runs only when a run
+cuts a release. Publish the tag by hand, as 0.2.0 and 0.2.1 were, or let the
+next release supersede it.
+
 **Merge a release pull request only once `Release Please` has run for the latest
 push to `main`.** release-please rebuilds its pull request after every push, and
 merging it before that run finishes releases whatever the pull request held at
