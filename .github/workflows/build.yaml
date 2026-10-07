@@ -53,6 +53,11 @@ jobs:
       # end, so what is exercised is the published file list resolved through
       # the exports map rather than the working tree.
       #
+      # Each Vite major also gets a dev server after its build, taken through a
+      # token edit. `build()` never reaches `configureServer`, so without that
+      # phase the plugin's dev-server code met only the Vite that
+      # `devDependencies` pins.
+      #
       # A step of this job rather than a job of its own, for the same reason
       # `package:check` is one: the ruleset requires its checks by exact job
       # name, and a new job would be a name nothing requires. It needs the

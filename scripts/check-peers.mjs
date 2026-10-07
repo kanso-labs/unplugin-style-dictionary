@@ -17,6 +17,12 @@
 // Each fixture drives its bundler through the Node API rather than a CLI. The
 // CLIs bring their own resolution and their own defaults, and what is under
 // test is this package's entry points.
+//
+// A Vite fixture runs a second phase after its build: a dev server in the same
+// directory, taken through a token edit. `build()` returns before
+// `configResolved` reaches its serve branch and never calls `configureServer`,
+// so without it the ignore-list amendment, `server.watcher.add` and the
+// `buildEnd` cleanup met no Vite but the one `devDependencies` pins.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -33,6 +39,17 @@ const root = new URL('..', import.meta.url).pathname
 // shape all five bundlers take unaided.
 const TOKEN = '#0070f3'
 const EXPECTED = '#0070f3'
+
+// What the dev-server phase writes over the token, and the file it writes.
+// The file is the fixture's one source, so the edit is one the plugin has to
+// rebuild for.
+const EDITED = '#ff0000'
+const EDITED_FILE = 'tokens/color.json'
+
+// How long the dev-server phase waits for each regeneration. A rebuild here
+// takes well under a second, so reaching it means nothing is coming — and the
+// phase fails rather than holding `Build` to its ten-minute timeout.
+const DEADLINE_MS = 20_000
 
 // One driver per bundler, named rather than looked up by key: a computed
 // lookup is untypeable here and the guard it needs is noise beside seven
@@ -90,6 +107,62 @@ const VITE_DRIVER = `
     })
   `
 
+// The dev-server phase. Middleware mode so nothing binds a port, and HMR off
+// so no websocket server outlives the phase — the same shape
+// `tests/dev-server.test.ts` boots.
+//
+// The failure is printed as one line and the exit code set, rather than
+// thrown: Node prints a thrown error beneath the source line it came from, and
+// that line is what the parent would otherwise report.
+const VITE_SERVE_DRIVER = `
+    import fs from 'node:fs'
+    import { createServer } from 'vite'
+    import plugin from '@kanso-labs/unplugin-style-dictionary/vite'
+
+    const generated = 'generated/tokens.js'
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    const carries = (value) =>
+      fs.existsSync(generated) && fs.readFileSync(generated, 'utf8').includes(value)
+
+    const waitFor = async (value, what) => {
+      const deadline = Date.now() + ${DEADLINE_MS}
+      while (!carries(value)) {
+        if (Date.now() > deadline) {
+          throw new Error(what + ' within ${DEADLINE_MS / 1000}s')
+        }
+        await sleep(100)
+      }
+    }
+
+    let server
+    try {
+      server = await createServer({
+        configFile: false,
+        logLevel: 'silent',
+        plugins: [plugin({ config: CONFIG })],
+        server: { hmr: false, middlewareMode: true },
+      })
+
+      await waitFor(${JSON.stringify(EXPECTED)}, 'the dev server wrote no starting value')
+
+      // chokidar reports nothing for a moment after the watcher is built, and
+      // an edit landing inside that window is missed by the watcher rather
+      // than by the plugin.
+      await sleep(500)
+
+      fs.writeFileSync(
+        ${JSON.stringify(EDITED_FILE)},
+        JSON.stringify({ color: { brand: { value: ${JSON.stringify(EDITED)} } } }),
+      )
+      await waitFor(${JSON.stringify(EDITED)}, 'the dev server did not regenerate after a token edit')
+    } catch (error) {
+      process.exitCode = 1
+      console.error('dev server failed: ' + (error instanceof Error ? error.message : String(error)))
+    } finally {
+      await server?.close()
+    }
+  `
+
 // The README's CommonJS form, because that is what a webpack.config.js looks
 // like and the `.default` hop is the thing most likely to break.
 const WEBPACK_DRIVER = `
@@ -119,6 +192,11 @@ const WEBPACK_DRIVER = `
  * The ends worth driving. `low` and `high` for a bounded range; a single entry
  * where the range is `*` and there is nothing to bound.
  *
+ * Vite also gets its `middle` major, because each major of `^6 || ^7 || ^8` is
+ * a dev server of its own and a `serve` driver runs on every one of them. Each
+ * resolves to the newest release of its major rather than the floor: PR #302
+ * chose that, since pinning `6.0.0` exactly tests a version nobody installs.
+ *
  * style-dictionary rides on rollup rather than getting fixtures of its own:
  * it is the peer every target shares, so pinning it at each end of `^5` while
  * the bundler stays constant is what isolates it.
@@ -136,12 +214,21 @@ const FIXTURES = [
     bundler: 'vite',
     driver: VITE_DRIVER,
     end: 'low',
+    serve: VITE_SERVE_DRIVER,
     versions: { vite: '^6.0.0' },
   },
   {
     bundler: 'vite',
     driver: VITE_DRIVER,
+    end: 'middle',
+    serve: VITE_SERVE_DRIVER,
+    versions: { vite: '^7.0.0' },
+  },
+  {
+    bundler: 'vite',
+    driver: VITE_DRIVER,
     end: 'high',
+    serve: VITE_SERVE_DRIVER,
     versions: { vite: '^8.0.0' },
   },
   {
@@ -253,14 +340,34 @@ function readPackReport(json) {
 }
 
 /**
+ * Runs one phase of a fixture and prints its line. A failure is recorded
+ * rather than thrown, so a build that fails still leaves the dev server beside
+ * it to report on its own.
+ * @param {string} label
+ * @param {() => string} phase returns what the `ok` line says after the label
+ * @returns {void}
+ */
+function runPhase(label, phase) {
+  try {
+    const detail = phase()
+    console.log(`  ok    ${label.padEnd(30)} ${detail}`)
+  } catch (error) {
+    console.log(`  FAIL  ${label}`)
+    failures.push(`${label}: ${describeFailure(error)}`)
+  }
+}
+
+/**
  * Writes a throwaway consumer: a token file, a Style Dictionary config, an
- * entry that re-exports a generated token, and the driver that builds it.
+ * entry that re-exports a generated token, the driver that builds it, and the
+ * driver that serves it where there is one.
  * @param {string} directory
  * @param {string} driver
  * @param {string} config the configuration's filename, `.json` or `.ts`
+ * @param {string | undefined} serve
  * @returns {void}
  */
-function writeFixture(directory, driver, config) {
+function writeFixture(directory, driver, config, serve) {
   fs.mkdirSync(path.join(directory, 'tokens'), { recursive: true })
 
   fs.writeFileSync(
@@ -313,8 +420,16 @@ function writeFixture(directory, driver, config) {
     path.join(directory, 'drive.mjs'),
     `const CONFIG = ${JSON.stringify(config)}\n${driver}`,
   )
+
+  if (serve !== undefined) {
+    fs.writeFileSync(
+      path.join(directory, 'serve.mjs'),
+      `const CONFIG = ${JSON.stringify(config)}\n${serve}`,
+    )
+  }
 }
 
+/** @type {string[]} */
 const failures = []
 const tarballDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'usd-pack-'))
 
@@ -338,85 +453,110 @@ for (const {
   config = 'sd.config.json',
   driver,
   end,
+  serve,
   versions,
 } of FIXTURES) {
   const label = `${bundler} (${end})`
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'usd-peer-'))
   const expectsFailure = config.endsWith('.ts') && !process.features.typescript
 
+  // Set once the install succeeds. The dev-server phase runs on any fixture
+  // that got that far, whether or not its build passed.
+  let installed = ''
+
   try {
-    writeFixture(directory, driver, config)
+    runPhase(label, () => {
+      writeFixture(directory, driver, config, serve)
 
-    const specifiers = Object.entries(versions).map(
-      ([name, range]) => `${name}@${range}`,
-    )
-
-    // `--ignore-scripts` matches every other install here, and keeps a
-    // dependency's lifecycle hooks out of a check that exists to be trusted.
-    execFileSync(
-      'npm',
-      [
-        'install',
-        '--no-audit',
-        '--no-fund',
-        '--ignore-scripts',
-        tarball,
-        ...specifiers,
-      ],
-      { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-    )
-
-    const installed = readInstalledVersion(
-      path.join(directory, 'node_modules', bundler, 'package.json'),
-    )
-
-    if (expectsFailure) {
-      let failure = ''
-      try {
-        execFileSync(process.execPath, ['drive.mjs'], {
-          cwd: directory,
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-        })
-      } catch (error) {
-        failure =
-          typeof error === 'object' && error !== null && 'stderr' in error
-            ? String(error.stderr)
-            : String(error)
-      }
-
-      if (!failure.includes(NO_TYPE_STRIPPING)) {
-        throw new Error(
-          `without type stripping, expected "${NO_TYPE_STRIPPING}", got: ${failure || 'a build that succeeded'}`,
-        )
-      }
-
-      console.log(
-        `  ok    ${label.padEnd(30)} ${bundler}@${installed}, fails as documented without type stripping`,
+      const specifiers = Object.entries(versions).map(
+        ([name, range]) => `${name}@${range}`,
       )
-      continue
-    }
 
-    execFileSync(process.execPath, ['drive.mjs'], {
-      cwd: directory,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // `--ignore-scripts` matches every other install here, and keeps a
+      // dependency's lifecycle hooks out of a check that exists to be trusted.
+      execFileSync(
+        'npm',
+        [
+          'install',
+          '--no-audit',
+          '--no-fund',
+          '--ignore-scripts',
+          tarball,
+          ...specifiers,
+        ],
+        { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      )
+
+      installed = readInstalledVersion(
+        path.join(directory, 'node_modules', bundler, 'package.json'),
+      )
+
+      if (expectsFailure) {
+        let failure = ''
+        try {
+          execFileSync(process.execPath, ['drive.mjs'], {
+            cwd: directory,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+        } catch (error) {
+          failure =
+            typeof error === 'object' && error !== null && 'stderr' in error
+              ? String(error.stderr)
+              : String(error)
+        }
+
+        if (!failure.includes(NO_TYPE_STRIPPING)) {
+          throw new Error(
+            `without type stripping, expected "${NO_TYPE_STRIPPING}", got: ${failure || 'a build that succeeded'}`,
+          )
+        }
+
+        return `${bundler}@${installed}, fails as documented without type stripping`
+      }
+
+      execFileSync(process.execPath, ['drive.mjs'], {
+        cwd: directory,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+
+      const generated = path.join(directory, 'generated', 'tokens.js')
+      if (!fs.existsSync(generated)) {
+        throw new Error('the build wrote no generated file')
+      }
+
+      const contents = fs.readFileSync(generated, 'utf8')
+      if (!contents.includes(EXPECTED)) {
+        throw new Error(`the generated file does not carry ${EXPECTED}`)
+      }
+
+      return `${bundler}@${installed}`
     })
 
-    const generated = path.join(directory, 'generated', 'tokens.js')
-    if (!fs.existsSync(generated)) {
-      throw new Error('the build wrote no generated file')
-    }
+    if (serve === undefined || installed === '') continue
 
-    const contents = fs.readFileSync(generated, 'utf8')
-    if (!contents.includes(EXPECTED)) {
-      throw new Error(`the generated file does not carry ${EXPECTED}`)
-    }
+    runPhase(`${bundler} (${end}, dev server)`, () => {
+      // The driver waits on its own deadline for each regeneration; this
+      // timeout is the backstop for a server whose `close()` never returns,
+      // which would otherwise hold `Build` until the job is killed.
+      execFileSync(process.execPath, ['serve.mjs'], {
+        cwd: directory,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: DEADLINE_MS * 3,
+      })
 
-    console.log(`  ok    ${label.padEnd(30)} ${bundler}@${installed}`)
-  } catch (error) {
-    console.log(`  FAIL  ${label}`)
-    failures.push(`${label}: ${describeFailure(error)}`)
+      const contents = fs.readFileSync(
+        path.join(directory, 'generated', 'tokens.js'),
+        'utf8',
+      )
+      if (!contents.includes(EDITED)) {
+        throw new Error(`the generated file does not carry ${EDITED}`)
+      }
+
+      return `${bundler}@${installed}, rebuilt on a token edit`
+    })
   } finally {
     fs.rmSync(directory, { force: true, recursive: true })
   }
@@ -432,4 +572,6 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log('\nEvery declared peer end builds.')
+console.log(
+  '\nEvery declared peer end builds, and every Vite major rebuilds a token edit under its dev server.',
+)
