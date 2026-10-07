@@ -25,9 +25,8 @@ them.
   bullet follows it rather than standing beside it.
 - **Automatic watching**: Reads the `source` and `include` patterns from your
   Style Dictionary configurations and watches the files they match, including a
-  token package resolved through `node_modules` in a workspace — except under
-  `vite build --watch` on Vite 8, whose build watcher is rolldown's. What a
-  change then triggers depends on the target — see
+  token package resolved through `node_modules` in a workspace. What a change
+  then triggers depends on the target — see
   [Watching, per target](#watching-per-target).
 - **Config flexibility**: Supports file paths (JSON, JSON5, JSONC, JS, MJS, TS),
   configuration objects, or functions — including registering custom formats at
@@ -74,10 +73,12 @@ npm error Could not resolve dependency:
 npm error peer style-dictionary@"^5.0.0" from @kanso-labs/unplugin-style-dictionary@0.9.0
 ```
 
-**This package needs Node 22.12 or newer.** The floor is Style Dictionary v5's,
-not this plugin's: every 5.x release declares `engines.node >= 22.0.0`, and it
-is a required peer rather than an optional one, so an older Node cannot install
-a working set at all. Node 20 reached end of life on 30 April 2026.
+**This package needs Node 22.12 or newer.** The floor is where two ranges meet,
+neither of them this plugin's own: `unplugin`, a runtime dependency, declares
+`engines.node` `^20.19.0 || >=22.12.0`, and every Style Dictionary 5.x release,
+a required peer rather than an optional one, declares `>=22.0.0`. Only 22.12 and
+newer satisfies both, so an older Node cannot install a working set at all. Node
+20 reached end of life on 30 April 2026.
 
 ## Usage
 
@@ -99,6 +100,13 @@ export default defineConfig({
 })
 ```
 
+Keep the generated files out of Vite's `build.outDir`, which is `dist` unless
+you change it. When that directory sits inside the project root, `vite build`
+empties it once this plugin has compiled, and again on every
+`vite build --watch` rebuild, so tokens written there are gone by the time the
+build finishes. Write them somewhere else, such as `build/`, or set
+`build.emptyOutDir` to `false`.
+
 ### Rolldown
 
 ```typescript
@@ -118,8 +126,8 @@ typically run as a one-shot build rather than a long-lived dev server. There the
 plugin compiles tokens once in `buildStart`, which is enough to guarantee
 generated token files exist before the rest of the build consumes them.
 
-Under a real `rolldown.watch()`, do not rely on a token edit triggering a
-rebuild — see [Watching, per target](#watching-per-target).
+Under a real `rolldown.watch()`, a token edit rebuilds, as it does under the
+other targets' watch modes — see [Watching, per target](#watching-per-target).
 
 ### Rollup / Webpack / Rspack
 
@@ -236,7 +244,7 @@ StyleDictionary({
     platforms: {
       css: {
         transformGroup: 'css',
-        buildPath: 'dist/css/',
+        buildPath: 'build/css/',
         files: [{ destination: 'variables.css', format: 'css/variables' }],
       },
     },
@@ -270,7 +278,7 @@ styleDictionaryPlugin({
     platforms: {
       css: {
         transformGroup: 'css',
-        buildPath: 'dist/',
+        buildPath: 'build/',
         files: [{ destination: 'vars.css', format: 'css/variables' }],
       },
       // Shells out to a native toolchain, so it is worth a minute of a real
@@ -314,7 +322,7 @@ export default defineConfig({
           platforms: {
             custom: {
               transformGroup: 'css',
-              buildPath: 'dist/',
+              buildPath: 'build/',
               files: [
                 { destination: 'tokens.txt', format: 'custom/my-format' },
               ],
@@ -350,26 +358,28 @@ Every target compiles tokens before the build that consumes them. What a later
 change to a token file triggers is not the same everywhere, because it depends
 on what the host bundler does with the watch list the plugin registers.
 
-| Target                    | Compiles before the build | Rebuilds on a token change        | Safe from rebuild loops |
-| ------------------------- | ------------------------- | --------------------------------- | ----------------------- |
-| **Vite**                  | yes                       | yes, under the dev server         | yes                     |
-| **Vite**, `build --watch` | yes                       | yes on 6 and 7; on 8, as Rolldown | yes                     |
-| **Rollup**                | yes                       | yes, under `rollup --watch`       | yes                     |
-| **Webpack**               | yes                       | yes, under `webpack --watch`      | yes                     |
-| **Rspack**                | yes                       | yes, under `rspack --watch`       | yes                     |
-| **Rolldown**              | yes                       | platform-dependent — see below    | yes                     |
+| Target                    | Compiles before the build | Rebuilds on a token change    | Safe from rebuild loops |
+| ------------------------- | ------------------------- | ----------------------------- | ----------------------- |
+| **Vite**                  | yes                       | yes, under the dev server     | yes                     |
+| **Vite**, `build --watch` | yes                       | yes, on 6, 7 and 8            | yes                     |
+| **Rollup**                | yes                       | yes, under `rollup --watch`   | yes                     |
+| **Webpack**               | yes                       | yes, under `webpack --watch`  | yes                     |
+| **Rspack**                | yes                       | yes, under `rspack --watch`   | yes                     |
+| **Rolldown**              | yes                       | yes, under `rolldown.watch()` | yes                     |
 
 Patterns and literal paths behave the same way wherever rebuilds happen at all.
 A `source` of `tokens/**/*.json` matches a file sitting directly in `tokens/` as
 well as one in a subdirectory, and a file created after the watcher started is
 picked up too.
 
-**Rolldown is the exception, and it is not about globs.** `this.addWatchFile()`
-is accepted by rolldown either way, and what happens next differs by platform:
-on macOS a file registered through it is watched by nothing, so a token edit
-reaches no hook, while on a Linux runner the same edit reaches a rebuild. Treat
-rolldown's watch mode as compiling once and not tracking tokens, and reach for a
-one-shot build or another target if you need rebuild-on-change.
+**Rolldown rebuilds on macOS too, a token reached through a symbolic link
+included.** Its watcher there drops the events for a path registered through a
+link — a workspace package linked into `node_modules`, or a project under `/var`
+or `/tmp`, both of which are links on macOS — so the plugin registers each such
+path by its realpath as well, and maps the event back to the spelling your
+`source` patterns use. This table used to call rolldown platform-dependent, and
+it was the link: the measurement behind that ran in a directory under `/var`.
+The same cases rebuild on Linux and on Windows, where CI runs them.
 
 **A token package resolved through `node_modules` is watched too, and that took
 a fix.** In a workspace — `app/node_modules/@acme/tokens` symlinked to
@@ -384,8 +394,9 @@ is thousands of files no token build reads.
 `vite build --watch` had the same problem and gets the same fix on Vite 6 and 7,
 which build on rollup's watcher and its chokidar ignore list: the plugin appends
 the same negations to `build.watch.chokidar.ignored`. Vite 8 builds with
-rolldown, which takes no ignore list from there, so what the Rolldown note above
-says holds for it too.
+rolldown, which takes no ignore list from there and needs none: a linked token
+package rebuilds there through the realpath registration the Rolldown note above
+describes.
 
 Nothing is needed from you for that. If you had worked around it with a
 `server.watch.ignored` or `build.watch.chokidar.ignored` negation of your own,
@@ -441,6 +452,14 @@ the log mentioning it.
 So treat the build directory as disposable: delete it when a configuration
 changes shape, and keep it out of version control and out of any directory
 holding hand-written files.
+
+Keep it out of the bundler's own output directory as well, which is the opposite
+problem. Vite empties `build.outDir` when it starts writing its bundle, after
+this plugin has compiled, whenever that directory sits inside the project root —
+`dist`, by default — so a `buildPath` under it leaves nothing behind after
+`vite build`, and nothing after a `vite build --watch` rebuild either. An
+`outDir` outside the root is not emptied unless `build.emptyOutDir` asks for it.
+Put the `buildPath` somewhere else, or set `build.emptyOutDir` to `false`.
 
 There is deliberately no `clean` option. Style Dictionary's
 `cleanAllPlatforms()` does not solve this — it removes the destinations the
@@ -720,12 +739,12 @@ the one that broke the build.
 
 Small on purpose. Five bundler entry points, one root entry, and two types.
 
-| Import                                                      | What it is                                                                                                                        |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `…/vite`, `…/rolldown`, `…/rollup`, `…/rspack`, `…/webpack` | Default export: the plugin for that bundler. Call it with the options below.                                                      |
-| `…` (the root)                                              | Default export, also named `unplugin`: the unplugin instance, carrying `.vite`, `.rolldown`, `.rollup`, `.rspack` and `.webpack`. |
-| `UnpluginStyleDictionaryOptions`                            | The options type, exported from every entry above.                                                                                |
-| `StyleDictionaryConfigContext`                              | What the function form of `config` is handed, exported from every entry above.                                                    |
+| Import                                                      | What it is                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `…/vite`, `…/rolldown`, `…/rollup`, `…/rspack`, `…/webpack` | Default export: the plugin for that bundler. Call it with the options below.                                                                                                                                                                                                                                                                                                                        |
+| `…` (the root)                                              | Default export, also named `unplugin`: the unplugin instance. Its `.vite`, `.rolldown`, `.rollup`, `.rspack` and `.webpack` are the five supported targets, the same plugins the subpaths export. It also carries unplugin's own `.esbuild`, `.farm`, `.unloader`, `.rsbuild`, `.bun` and `.raw`, which are not supported here: `.esbuild` throws on its first build, and nothing tests the others. |
+| `UnpluginStyleDictionaryOptions`                            | The options type, exported from every entry above.                                                                                                                                                                                                                                                                                                                                                  |
+| `StyleDictionaryConfigContext`                              | What the function form of `config` is handed, exported from every entry above.                                                                                                                                                                                                                                                                                                                      |
 
 Anything not in that table is internal, whatever a build output happens to
 contain. In particular the watch filter and the raw unplugin factory are not
@@ -734,14 +753,23 @@ takes a second `meta` argument — the bundler-identifying `UnpluginContextMeta`
 that a consumer would have to construct by hand, so calling it the obvious way
 is a type error rather than a plugin.
 
-Reach for the root entry when you need a target that has no subpath of its own,
-or when one configuration object feeds more than one bundler:
+Reach for the root entry when one configuration object feeds more than one
+bundler:
 
 ```typescript
 import styleDictionary from '@kanso-labs/unplugin-style-dictionary'
 
-const plugin = styleDictionary.rollup({ config: 'sd.config.json' })
+const options = { config: 'sd.config.json' }
+
+const forRollup = styleDictionary.rollup(options)
+const forWebpack = styleDictionary.webpack(options)
 ```
+
+It is not a way to reach a bundler that has no subpath. Every target without one
+is unplugin's own and unsupported here. esbuild in particular fails outright:
+the plugin registers its watch list before it compiles, and unplugin's esbuild
+context throws on that registration, so `.esbuild` writes nothing even for a
+one-shot build.
 
 ## Options Reference
 
@@ -793,9 +821,9 @@ export interface StyleDictionaryConfigContext {
  * Every target compiles tokens before the build that consumes them. Live
  * rebuild-on-change is driven by the host bundler's watch mode, because token
  * source files sit outside the module graph: Vite's dev server, `rollup
- * --watch`, `webpack --watch` and `rspack --watch` all rebuild on a token
- * change, and a one-shot build (e.g. `tsdown`/`rolldown build` without
- * `--watch`) only builds once, in `buildStart`.
+ * --watch`, `rolldown.watch()`, `webpack --watch` and `rspack --watch` all
+ * rebuild on a token change, and a one-shot build (e.g. `tsdown`/`rolldown
+ * build` without `--watch`) only builds once, in `buildStart`.
  *
  * What the plugin says goes through the host wherever the host has a channel
  * for it: Vite's `config.logger`, the plugin context under rollup and
@@ -824,11 +852,12 @@ export interface StyleDictionaryConfigContext {
  * makes one a `no-misused-promises` error under the type-aware lint rules a
  * consumer is likely to be running — for a hook this documents as supported.
  *
- * Rolldown's watch mode is the exception, and it is not about glob patterns.
- * `addWatchFile` is accepted either way, but what happens next differs by
- * platform — on macOS a file registered through it is watched by nothing, while
- * on a Linux runner the same edit reaches a rebuild. Do not rely on a token
- * edit triggering a rebuild there.
+ * Rolldown's watch mode rebuilds on macOS as well, a token reached through a
+ * symbolic link included. Its watcher there drops the events for a path
+ * registered through a link — a workspace package linked into `node_modules`,
+ * or a project under `/var` or `/tmp`, both links on macOS — so each such path
+ * is registered by its realpath beside it, and the event is mapped back to the
+ * spelling the `source` patterns use.
  */
 export interface UnpluginStyleDictionaryOptions {
   /**
@@ -945,9 +974,9 @@ export interface UnpluginStyleDictionaryOptions {
    * A dev server deliberately keeps serving through a failed rebuild, which is
    * precisely the case where the overlay is the only thing that can say so.
    *
-   * A failure Style Dictionary raises before this plugin can catch it — a
-   * token file that is not valid JSON, which rejects out of band — reaches
-   * neither the overlay nor this option.
+   * A token file that fails to parse is reported like any other failed
+   * compile: it reaches the overlay, and `onBuildError`, with the parser's
+   * message.
    *
    * @default true
    */

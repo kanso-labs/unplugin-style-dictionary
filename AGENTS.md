@@ -86,11 +86,29 @@ That directory is itself under the outer checkout's ignore, so the effect is
 masked and the hazard reads as already handled. Use a clone somewhere else.
 
 **oxfmt covers Markdown, JSON and YAML as well as TypeScript**, which is new:
-nothing formatted those before. `CHANGELOG.md` is the one exemption, via
-`ignorePatterns` in `.oxfmtrc.json` — release-please rewrites it on every
-release in a style oxfmt disagrees with, so formatting it only holds until the
-next release pull request, at which point `Lint` fails on a branch nobody
-hand-edits.
+nothing formatted those before. `CHANGELOG.md` and `LICENSE.md` are the two
+exemptions, via `ignorePatterns` in `.oxfmtrc.json`. release-please rewrites the
+changelog on every release in a style oxfmt disagrees with, so formatting it
+only holds until the next release pull request, at which point `Lint` fails on a
+branch nobody hand-edits; the licence is owned elsewhere.
+
+**The pre-commit hook's oxfmt task passes `--no-error-on-unmatched-pattern`, and
+`.lintstagedrc.json` cannot say why, so this does.** lint-staged hands oxfmt the
+staged paths, oxfmt applies `ignorePatterns` to explicit arguments too, and when
+every argument is ignored it exits 2 with
+`Expected at least one target file. All matched files may have been excluded by ignore rules.`
+lint-staged then kills the other tasks, so a commit whose only staged Markdown,
+JSON or YAML file was `CHANGELOG.md` or `LICENSE.md` was rejected, even with a
+`.ts` file beside it. Only hand edits ever hit it — release-please's own
+changelog commits never run the hook — and #375, which listed #371 in the
+changelog by hand, committed only because it staged AGENTS.md beside it.
+Measured through the real hook: with the flag, a commit staging only either file
+lands, and a badly formatted JSON file staged beside `CHANGELOG.md` is still
+reformatted; without it, the `CHANGELOG.md`-only commit is rejected again. **Do
+not take the two files out of `ignorePatterns` to make the hook pass**, for the
+reason above, and do not repeat them as exclusions in the lint-staged glob
+either: the flag keeps `.oxfmtrc.json` the only list. The code-file line needs
+no flag, since none of its files is ignored.
 
 **A `.js` file needs `allowJs` before type-aware linting means anything, and it
 fails quietly without it.** `eslint.config.js` is this repository's only `.js`
@@ -154,7 +172,8 @@ automerges minor and patch, so `.tool-versions` moves on its own schedule while
 a version copied into prose sits still — which is how this paragraph came to
 name a version the repository had stopped pinning three bumps earlier. The
 README's Development section uses the same self-reading form for the same
-reason.
+reason. Both settings come from the organization preset
+`local>kanso-labs/.github:renovate-config`, not from `.github/renovate.json`.
 
 ## Conventions
 
@@ -533,9 +552,10 @@ stopped. So a TypeScript 7 branch fails Renovate's own lockfile update with
 npm error Invalid: lock file's typescript@6.0.3 does not satisfy typescript@7.0.2
 ```
 
-`recreateWhen` is `always`, so closing that pull request only brings it back —
-which is how a repository learns to stop reading red. The `allowedVersions` rule
-in `.github/renovate.json` is what stops it being raised at all.
+`recreateWhen` is `always`, which the organization preset sets rather than this
+repository's own file, so closing that pull request only brings it back — which
+is how a repository learns to stop reading red. The `allowedVersions` rule in
+`.github/renovate.json` is what stops it being raised at all.
 
 **Grouping `typescript` with `eslint` is not a substitute.** A grouped branch
 still resolves `typescript@7` against a `typescript-eslint` that peers `<6.1.0`
@@ -557,8 +577,8 @@ dependency only `package-lock.json` names, which Renovate's npm manager cannot
 see: #486 bumped `brace-expansion`, which `eslint` reaches through `minimatch`.
 Renovate's only route to one is its weekly lock-file refresh, so Dependabot's
 pull request is the fast path, and it used to wait for a person. The shared
-workflow turns auto-merge on for minor and patch fixes, the rule Renovate's
-preset applies, with no waiting period.
+workflow turns auto-merge on for minor and patch fixes, the rule the
+organization's Renovate preset applies, with no waiting period.
 
 Three things follow from how it works:
 
@@ -597,11 +617,25 @@ section is skipped as "No user facing commits found". Renovate's default,
 release of its own: it shipped only when a feature happened to land beside it,
 and a run of nothing but upgrades published nothing at all.
 
-`.github/renovate.json` therefore sets `semanticCommits: enabled` and
-`semanticCommitScope: null` at the top level, and `semanticCommitType: deps` in
-a `packageRule` rather than beside them. `release-please-config.json` spells out
-`changelog-sections` with `deps` visible under a `Dependencies` heading. The two
-move together: that list replaces release-please's defaults wholesale, so a type
+The organization preset `local>kanso-labs/.github:renovate-config` therefore
+sets `semanticCommits: enabled` and `semanticCommitScope: null` at the top
+level, and `semanticCommitType: deps` in a `packageRule` rather than beside
+them. `.github/renovate.json` carries none of the three; #346 moved them to the
+preset, which is listed last in its `extends` so that it wins over
+`config:recommended`. The `deps` rule is the preset's first `packageRule`, and a
+rule in this repository's own file comes after it, so a narrower rule here is
+how one package would be typed differently.
+
+**The preset is read from `kanso-labs/.github`'s default branch on every run.**
+It is extended with no ref, so unlike the `kanso-labs/actions` pins, a change
+there reaches this repository with no pull request here. Do not make this
+section true of `.github/renovate.json` again by restating the keys there: the
+preset exists so that repositories stop restating them byte for byte, as its own
+`description` records.
+
+`release-please-config.json` spells out `changelog-sections` with `deps` visible
+under a `Dependencies` heading. The preset's `deps` type and that list move
+together: the list replaces release-please's defaults wholesale, so a type
 missing from it is invisible rather than merely unstyled, and `deps` with no
 matching section would put the upgrades back where they started.
 
@@ -1500,6 +1534,17 @@ whose watch behaviour is a documented absence. Not built. farm, unloader,
 rsbuild and bun stay out too, for the reason the issue gives: an optional peer
 and a `scripts/check-package.mjs` entry each, for no demonstrated demand.
 
+**esbuild is reachable today all the same, as `.esbuild` on the root export, and
+it throws there.** The root export is the whole unplugin instance, so it carries
+every key unplugin builds, these five and `raw` included. It is not even a
+one-shot target through that key: `buildStart` registers the watch list before
+it compiles, so the first `addWatchFile` throws and nothing is written —
+measured by driving `.esbuild` through unplugin 3.4.0's adapter with a stub
+build, which threw
+`unplugin/esbuild: addWatchFile outside supported hooks (resolveId, load, transform)`
+and left the destination missing. README's Public API section says so, and names
+the root entry only for one configuration feeding several bundlers.
+
 **rspack decorates a diagnostic before it reaches `stats`; webpack does not.**
 The plugin pushes a plain `new Error(message)` onto `compilation.warnings` on
 both. webpack hands that back byte for byte, while rspack reframes it with a `⚠`
@@ -1763,6 +1808,27 @@ list including `edited`**, which is not a default activity type. Without it the
 check is worse than nothing: a title corrected at review time leaves the stale
 green `Lint` standing and the ruleset satisfied. The cost is a full re-run of
 the job on every title or body edit.
+
+**commitlint's default ignores are off, on purpose.** `.commitlintrc.json` sets
+`defaultIgnores: false`, so a title commitlint would otherwise skip before any
+rule runs is checked like any other. The defaults
+(`node_modules/@commitlint/is-ignored/lib/defaults.js`) skip `Revert …`,
+`Merge branch …`, `Merge pull request …`, `fixup!` and a bare semver among
+others, and with them on, the title GitHub's Revert button writes —
+`Revert "fix(watch): …"` — passed `Lint` with no type at all. Its squash subject
+is then a commit release-please cannot parse and drops, so a revert that is the
+only change since the last release opens no release pull request, and npm keeps
+serving the regression with every check green.
+
+So **a Revert-button title has to be retitled before it merges**, to
+`revert: <original title>`: `revert` is in `type-enum`, and release-please lists
+it under the visible `Reverts` section, so it reaches the notes and cuts a
+release. A `Merge …` title fails too, and takes a Conventional Commit title like
+any other. Turning the ignores off costs nothing: only pull request titles reach
+commitlint, so the merge, fixup and revert commits those ignores exist for never
+do. Replayed over the 100 most recent pull request titles, release-please's
+`chore(main): release …` and Renovate's `deps:` among them, none that passed
+with the ignores on fails with them off.
 
 A malformed type can still reach `main` through a commit that is not squashed
 from a pull request.
