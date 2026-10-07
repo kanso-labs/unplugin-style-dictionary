@@ -73,10 +73,12 @@ npm error Could not resolve dependency:
 npm error peer style-dictionary@"^5.0.0" from @kanso-labs/unplugin-style-dictionary@0.9.0
 ```
 
-**This package needs Node 22.12 or newer.** The floor is Style Dictionary v5's,
-not this plugin's: every 5.x release declares `engines.node >= 22.0.0`, and it
-is a required peer rather than an optional one, so an older Node cannot install
-a working set at all. Node 20 reached end of life on 30 April 2026.
+**This package needs Node 22.12 or newer.** The floor is where two ranges meet,
+neither of them this plugin's own: `unplugin`, a runtime dependency, declares
+`engines.node` `^20.19.0 || >=22.12.0`, and every Style Dictionary 5.x release,
+a required peer rather than an optional one, declares `>=22.0.0`. Only 22.12 and
+newer satisfies both, so an older Node cannot install a working set at all. Node
+20 reached end of life on 30 April 2026.
 
 ## Usage
 
