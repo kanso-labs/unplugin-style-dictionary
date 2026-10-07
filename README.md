@@ -747,50 +747,6 @@ const plugin = styleDictionary.rollup({ config: 'sd.config.json' })
 
 ````typescript
 /**
- * Options for the Style Dictionary unplugin factory, shared across all bundler
- * targets (Vite, Rolldown, Rollup, Webpack).
- *
- * Every target compiles tokens before the build that consumes them. Live
- * rebuild-on-change is driven by the host bundler's watch mode, because token
- * source files sit outside the module graph: Vite's dev server, `rollup
- * --watch` and `webpack --watch` all rebuild on a token change, and a one-shot
- * build (e.g. `tsdown`/`rolldown build` without `--watch`) only builds once, in
- * `buildStart`.
- *
- * What the plugin says goes through the host wherever the host has a channel
- * for it: Vite's `config.logger`, the plugin context under rollup and
- * rolldown, and `compilation.warnings` under webpack and rspack, which is what
- * puts a failed compile in `stats.toJson()`. The progress lines and the size
- * table take the host's `info` channel, and webpack and rspack have none, so
- * there both go to the console. A failure is reported on the warning channel
- * and never the error one — rollup's `this.error` aborts the bundle, and that
- * decision is `failOnError`'s alone. Where no host offers a channel the console
- * is used, with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the
- * stream is a terminal.
- *
- * Style Dictionary's own lines are not the plugin's. The platform name and the
- * `✔︎` for each file it wrote are its own `console` calls, so they reach the
- * console under every host, whatever the host's log level. `logLevel: 'silent'`
- * quiets them, as does `log.verbosity: 'silent'` in the configuration.
- *
- * The three `onBuild*` hooks are called synchronously and their return value
- * is not awaited, so a build never waits for one. A hook may still be written
- * `async`: a promise it returns is left to run on its own, and a rejection is
- * caught and reported rather than reaching the host as an unhandled one. A
- * hook that throws is reported and does not fail the build that called it.
- *
- * They return `Promise<void> | void` rather than `void` for that reason. Both
- * accept an `async` hook as far as the compiler is concerned, but `void` alone
- * makes one a `no-misused-promises` error under the type-aware lint rules a
- * consumer is likely to be running — for a hook this documents as supported.
- *
- * Rolldown's watch mode is the exception, and it is not about glob patterns.
- * `addWatchFile` is accepted either way, but what happens next differs by
- * platform — on macOS a file registered through it is watched by nothing, while
- * on a Linux runner the same edit reaches a rebuild. Do not rely on a token
- * edit triggering a rebuild there.
- */
-/**
  * What the host is doing, handed to the function form of `config` so it can
  * decide what to build.
  *
@@ -830,6 +786,50 @@ export interface StyleDictionaryConfigContext {
   watch: boolean
 }
 
+/**
+ * Options for the Style Dictionary unplugin factory, shared across all bundler
+ * targets (Vite, Rolldown, Rollup, Webpack, Rspack).
+ *
+ * Every target compiles tokens before the build that consumes them. Live
+ * rebuild-on-change is driven by the host bundler's watch mode, because token
+ * source files sit outside the module graph: Vite's dev server, `rollup
+ * --watch`, `webpack --watch` and `rspack --watch` all rebuild on a token
+ * change, and a one-shot build (e.g. `tsdown`/`rolldown build` without
+ * `--watch`) only builds once, in `buildStart`.
+ *
+ * What the plugin says goes through the host wherever the host has a channel
+ * for it: Vite's `config.logger`, the plugin context under rollup and
+ * rolldown, and `compilation.warnings` under webpack and rspack, which is what
+ * puts a failed compile in `stats.toJson()`. The progress lines and the size
+ * table take the host's `info` channel, and webpack and rspack have none, so
+ * there both go to the console. A failure is reported on the warning channel
+ * and never the error one — rollup's `this.error` aborts the bundle, and that
+ * decision is `failOnError`'s alone. Where no host offers a channel the console
+ * is used, with colour gated on `NO_COLOR`, `FORCE_COLOR` and whether the
+ * stream is a terminal.
+ *
+ * Style Dictionary's own lines are not the plugin's. The platform name and the
+ * `✔︎` for each file it wrote are its own `console` calls, so they reach the
+ * console under every host, whatever the host's log level. `logLevel: 'silent'`
+ * quiets them, as does `log.verbosity: 'silent'` in the configuration.
+ *
+ * The three `onBuild*` hooks are called synchronously and their return value
+ * is not awaited, so a build never waits for one. A hook may still be written
+ * `async`: a promise it returns is left to run on its own, and a rejection is
+ * caught and reported rather than reaching the host as an unhandled one. A
+ * hook that throws is reported and does not fail the build that called it.
+ *
+ * They return `Promise<void> | void` rather than `void` for that reason. Both
+ * accept an `async` hook as far as the compiler is concerned, but `void` alone
+ * makes one a `no-misused-promises` error under the type-aware lint rules a
+ * consumer is likely to be running — for a hook this documents as supported.
+ *
+ * Rolldown's watch mode is the exception, and it is not about glob patterns.
+ * `addWatchFile` is accepted either way, but what happens next differs by
+ * platform — on macOS a file registered through it is watched by nothing, while
+ * on a Linux runner the same edit reaches a rebuild. Do not rely on a token
+ * edit triggering a rebuild there.
+ */
 export interface UnpluginStyleDictionaryOptions {
   /**
    * Whether a configuration whose output is already up to date may skip its
@@ -937,7 +937,7 @@ export interface UnpluginStyleDictionaryOptions {
    * frame naming this plugin, and the overlay is dismissed on the next
    * rebuild that succeeds.
    *
-   * This is Vite's overlay, so it does nothing on the other three targets,
+   * This is Vite's overlay, so it does nothing on the other four targets,
    * and nothing under `vite build` — there is no page to draw on.
    *
    * It is not `failOnError`'s job, and the two are independent. `failOnError`
