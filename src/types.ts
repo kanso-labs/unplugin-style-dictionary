@@ -199,9 +199,9 @@ export interface UnpluginStyleDictionaryOptions {
    * A dev server deliberately keeps serving through a failed rebuild, which is
    * precisely the case where the overlay is the only thing that can say so.
    *
-   * A failure Style Dictionary raises before this plugin can catch it — a
-   * token file that is not valid JSON, which rejects out of band — reaches
-   * neither the overlay nor this option.
+   * A token file that fails to parse is reported like any other failed
+   * compile: it reaches the overlay, and `onBuildError`, with the parser's
+   * message.
    *
    * @default true
    */
