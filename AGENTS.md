@@ -86,11 +86,29 @@ That directory is itself under the outer checkout's ignore, so the effect is
 masked and the hazard reads as already handled. Use a clone somewhere else.
 
 **oxfmt covers Markdown, JSON and YAML as well as TypeScript**, which is new:
-nothing formatted those before. `CHANGELOG.md` is the one exemption, via
-`ignorePatterns` in `.oxfmtrc.json` — release-please rewrites it on every
-release in a style oxfmt disagrees with, so formatting it only holds until the
-next release pull request, at which point `Lint` fails on a branch nobody
-hand-edits.
+nothing formatted those before. `CHANGELOG.md` and `LICENSE.md` are the two
+exemptions, via `ignorePatterns` in `.oxfmtrc.json`. release-please rewrites the
+changelog on every release in a style oxfmt disagrees with, so formatting it
+only holds until the next release pull request, at which point `Lint` fails on a
+branch nobody hand-edits; the licence is owned elsewhere.
+
+**The pre-commit hook's oxfmt task passes `--no-error-on-unmatched-pattern`, and
+`.lintstagedrc.json` cannot say why, so this does.** lint-staged hands oxfmt the
+staged paths, oxfmt applies `ignorePatterns` to explicit arguments too, and when
+every argument is ignored it exits 2 with
+`Expected at least one target file. All matched files may have been excluded by ignore rules.`
+lint-staged then kills the other tasks, so a commit whose only staged Markdown,
+JSON or YAML file was `CHANGELOG.md` or `LICENSE.md` was rejected, even with a
+`.ts` file beside it. Only hand edits ever hit it — release-please's own
+changelog commits never run the hook — and #375, which listed #371 in the
+changelog by hand, committed only because it staged AGENTS.md beside it.
+Measured through the real hook: with the flag, a commit staging only either file
+lands, and a badly formatted JSON file staged beside `CHANGELOG.md` is still
+reformatted; without it, the `CHANGELOG.md`-only commit is rejected again. **Do
+not take the two files out of `ignorePatterns` to make the hook pass**, for the
+reason above, and do not repeat them as exclusions in the lint-staged glob
+either: the flag keeps `.oxfmtrc.json` the only list. The code-file line needs
+no flag, since none of its files is ignored.
 
 **A `.js` file needs `allowJs` before type-aware linting means anything, and it
 fails quietly without it.** `eslint.config.js` is this repository's only `.js`
