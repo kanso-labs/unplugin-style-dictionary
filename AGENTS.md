@@ -1700,6 +1700,32 @@ Mac, and CI runs Linux and Windows; the cases under
 `a watch entry reached through a symbolic link` hold both halves on every
 platform.
 
+**On macOS a watcher started straight after a fixture is written can be handed
+that write as an edit.** An FSEvents stream opened just after a write is given
+the write, though it happened before the stream existed: with the `fsevents`
+module rollup's watcher uses, 40 streams of 40 opened straight after writing a
+file reported it. That is what made
+`compiles once for one token edit with the cache off` compile twice before it
+had edited anything, in about one full run in thirty on a Mac. A probe on a
+failing run recorded `watchChange` handed `tokens/color.json`, in both its
+`/var` and `/private/var` spellings, 150ms after the first build ended, with
+nothing written since the fixture. CI runs Linux and Windows and has never shown
+it.
+
+`fileEventsDelivered` in `tests/index.test.ts` is the barrier. It watches the
+fixture directory, writes a sentinel, and waits for its event; the events are
+numbered in the order they happen, so a stream opened after that is handed
+nothing older — 0 of 40 with it in front of the same stream. A real-watcher case
+that asserts an exact count needs it between writing its fixture and starting
+the watcher. A case that only waits for output sees an extra rebuild at worst,
+which is why this does not explain the Mac-only failure of the linked-package
+case under `rolldown.watch()`: that case asserts on what the build wrote, not on
+how often it built.
+
+Do not lengthen `watcherIdle`'s quiet window instead — the stale event is not
+bounded by any fixed window — and do not relax the count to a lower bound, which
+passes with the re-entry guard removed.
+
 **Rollup through 4.63.4 could drop a file change that arrived during a rebuild,
 and 4.63.5 does not.** Its watcher recorded a changed path in `invalidatedIds`
 and, one `buildDelay` later, ran a callback that awaited the `change` emission —
