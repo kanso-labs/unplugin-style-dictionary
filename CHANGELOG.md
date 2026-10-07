@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.19](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.18...unplugin-style-dictionary-v0.10.19) (2026-10-07)
+
+
+### Bug Fixes
+
+* **build:** compile over a rewritten output that kept its mtime ([#521](https://github.com/kanso-labs/unplugin-style-dictionary/issues/521)) ([2bebc40](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2bebc40ff21389bff4d964b4755110a8cc2994a1))
+
+
+### Dependencies
+
+* update dependency style-dictionary to v5.6.0 ([#519](https://github.com/kanso-labs/unplugin-style-dictionary/issues/519)) ([085986f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/085986f68d59af300686b64274c315bdda896be3))
+
 ## [0.10.18](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.17...unplugin-style-dictionary-v0.10.18) (2026-10-06)
 
 
