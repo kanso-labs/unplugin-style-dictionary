@@ -13,6 +13,13 @@ on:
   # on this same cron, so a change landing here and in a dependency of it comes
   # out in one morning rather than two.
   #
+  # That is when the run is due, not when it starts. GitHub has started every
+  # scheduled run here hours late: across all 40 from 2026-08-28 to 10-06, the
+  # earliest started 3h12m after the cron, the median 4h55m and the latest
+  # 11h28m, which is 09:11, 10:55 and 17:28 America/Sao_Paulo. So the day's
+  # release merges mid-morning or later, while maintainers are merging too,
+  # rather than before anyone is at work.
+  #
   # GitHub disables a scheduled workflow after 60 days without repository
   # activity. Renovate's commits keep this one alive, but that is the shape a
   # silent stop to releasing would take.
