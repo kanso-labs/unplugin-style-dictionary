@@ -317,10 +317,24 @@ stood behind any of them: `tests/targets.test.ts` drives all five bundlers, so
 the adapters are covered, but only against the single version `devDependencies`
 pins — it cannot see a range end going stale.
 
-`scripts/check-peers.mjs` packs the tarball and installs it into seven throwaway
+`scripts/check-peers.mjs` packs the tarball and installs it into eight throwaway
 fixtures, so what it exercises is the published file list resolved through the
 exports map rather than the working tree. style-dictionary rides on rollup at
 each end of `^5` while the bundler stays constant, which is what isolates it.
+
+**Each Vite fixture serves as well as builds, and there is one per major.**
+`build()` returns before `configResolved` reaches its serve branch and never
+calls `configureServer`, so a build alone runs none of the dev-server code: the
+ignore-list amendment, `server.watcher.add` and the `buildEnd` cleanup met only
+the Vite `devDependencies` pins. After its build, each Vite fixture starts a
+middleware-mode dev server in the same directory, rewrites `tokens/color.json`,
+waits for `generated/tokens.js` to carry the new value, and closes the server —
+and prints a `dev server` line of its own beside the build's. `^6`, `^7` and
+`^8` each get a fixture, each resolving to the newest release of its major
+rather than the floor, as #302 chose. Measured: with `configureServer` made to
+throw, all three dev-server phases fail and every build phase passes, where the
+build-only driver passed every fixture. An edit nothing regenerates for fails at
+the phase's 20-second deadline rather than holding `Build` to its timeout.
 
 Two things about it are worth keeping. Each fixture emits a **JavaScript** token
 format, not CSS: rollup and rolldown cannot resolve a `.css` import without a
