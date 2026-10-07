@@ -83,10 +83,22 @@ jobs:
   publish:
     name: Publish to npm
     needs: release-please
+    # !cancelled() is what publishes a release cut by a run that then failed.
+    # release-please cuts releases and then updates pull requests in one step,
+    # so a failure in the second half fails Propose releases with the tag
+    # already pushed. Without a status function GitHub applies success() and
+    # skips this job, and re-running does not recover it: the release half has
+    # already relabelled the pull request autorelease: tagged, so the re-run
+    # finds nothing to release. A failed call still hands its outputs on, so
+    # release_created decides whatever the call's result. AGENTS.md has the
+    # measurement.
+    #
     # Compared against the string rather than used bare. A bare truthiness test
     # would also pass on the string "false", which is what this output carries
     # when release-please runs and decides not to cut a release.
-    if: needs.release-please.outputs.release_created == 'true'
+    if:
+      ${{ !cancelled() && needs.release-please.outputs.release_created == 'true'
+      }}
     # Three scopes for two registries. id-token is what npm exchanges for a
     # short-lived credential, and what mints the provenance attestation off the
     # same token. GitHub Packages has no trusted publishing to exchange against
