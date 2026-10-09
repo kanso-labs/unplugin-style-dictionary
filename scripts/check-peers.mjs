@@ -32,12 +32,12 @@ import semver from 'semver'
 
 const root = new URL('..', import.meta.url).pathname
 
-// The age every npm upgrade here waits out before Renovate raises it, set by
-// the `security:minimumReleaseAgeNpm` preset `.github/renovate.json` extends —
-// the number lives in that preset, not in a file here. The fixtures follow the
-// registry only up to the same cutoff, so a bundler release broken and then
-// fixed or yanked inside the window does not turn `Build` red meanwhile; a
-// release that is genuinely incompatible still does, once it is old enough.
+// The fixtures follow the registry only up to releases this old, so a bundler
+// release broken and then fixed or yanked inside the window does not turn
+// `Build` red on every pull request meanwhile; a release that is genuinely
+// incompatible still does, once it is old enough. Renovate waits for nothing and
+// raises an upgrade as soon as it is published, so this holds back the
+// fixtures, never an upgrade.
 const MINIMUM_RELEASE_AGE_DAYS = 3
 const cutoff = Date.now() - MINIMUM_RELEASE_AGE_DAYS * 24 * 60 * 60 * 1000
 
