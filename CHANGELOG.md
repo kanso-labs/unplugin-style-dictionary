@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.22](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.21...unplugin-style-dictionary-v0.10.22) (2026-10-09)
+
+
+### Dependencies
+
+* update kanso-labs/actions action to v4.2.2 ([#562](https://github.com/kanso-labs/unplugin-style-dictionary/issues/562)) ([573ee9c](https://github.com/kanso-labs/unplugin-style-dictionary/commit/573ee9ce5bb3a29030612ac2b152b51c929b8030))
+
 ## [0.10.21](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.20...unplugin-style-dictionary-v0.10.21) (2026-10-09)
 
 
