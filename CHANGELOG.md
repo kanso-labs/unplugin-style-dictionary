@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.25](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.24...unplugin-style-dictionary-v0.10.25) (2026-10-10)
+
+
+### Dependencies
+
+* update dependency oxlint-tsgolint to v7.0.2004 ([#573](https://github.com/kanso-labs/unplugin-style-dictionary/issues/573)) ([e95df09](https://github.com/kanso-labs/unplugin-style-dictionary/commit/e95df0989314df7b4e7b17f8e1c3c9f093baa40e))
+* update dependency rollup to v4.64.5 ([#574](https://github.com/kanso-labs/unplugin-style-dictionary/issues/574)) ([1cd75d8](https://github.com/kanso-labs/unplugin-style-dictionary/commit/1cd75d81fe84c49f5fb6b6fde693b355660556aa))
+* update dependency style-dictionary to v5.6.1 ([#575](https://github.com/kanso-labs/unplugin-style-dictionary/issues/575)) ([a9e4ce9](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a9e4ce9b76720420841892a60e3a639e68056016))
+* update dependency tsdown to v0.23.1 ([#576](https://github.com/kanso-labs/unplugin-style-dictionary/issues/576)) ([6950149](https://github.com/kanso-labs/unplugin-style-dictionary/commit/6950149f5bbf07504286cc7c7a8bab7f71c731ae))
+* update kanso-labs/actions action to v4.2.3 ([#577](https://github.com/kanso-labs/unplugin-style-dictionary/issues/577)) ([a847a8a](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a847a8ab9d012db4f9673fa5fc2c8865f7ca4513))
+
 ## [0.10.24](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.23...unplugin-style-dictionary-v0.10.24) (2026-10-10)
 
 
