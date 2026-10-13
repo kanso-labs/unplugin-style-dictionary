@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.27](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.26...unplugin-style-dictionary-v0.10.27) (2026-10-13)
+
+
+### Dependencies
+
+* update dependency @rspack/core to v2.2.9 ([#583](https://github.com/kanso-labs/unplugin-style-dictionary/issues/583)) ([565e5f3](https://github.com/kanso-labs/unplugin-style-dictionary/commit/565e5f3a42f7fbd53438dc5678629090f6ebdecb))
+* update dependency oxfmt to v0.73.0 ([#585](https://github.com/kanso-labs/unplugin-style-dictionary/issues/585)) ([524f24f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/524f24fd90cad8db7d89d82edfb4b1e14ea22fab))
+* update dependency rollup to v4.64.6 ([#584](https://github.com/kanso-labs/unplugin-style-dictionary/issues/584)) ([a6268a7](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a6268a79586db1e3cd1daa0efb3501765c8144a9))
+* update dependency typescript-eslint to v8.71.2 ([#581](https://github.com/kanso-labs/unplugin-style-dictionary/issues/581)) ([05d49b0](https://github.com/kanso-labs/unplugin-style-dictionary/commit/05d49b0f7aaae34511c9f6dd5644dd20f5dff8a5))
+
 ## [0.10.26](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.25...unplugin-style-dictionary-v0.10.26) (2026-10-12)
 
 
