@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.32](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.31...unplugin-style-dictionary-v0.10.32) (2026-10-16)
+
+
+### Dependencies
+
+* update dependency webpack to v5.112.0 ([#599](https://github.com/kanso-labs/unplugin-style-dictionary/issues/599)) ([be2279e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/be2279e4656f1b844452bc9e7a2d5b825d143b98))
+* update vitest to v5.0.5 ([#597](https://github.com/kanso-labs/unplugin-style-dictionary/issues/597)) ([1a0b94b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/1a0b94b3b7521f74fc02613e2f0bdc6c3478969a))
+
 ## [0.10.31](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.30...unplugin-style-dictionary-v0.10.31) (2026-10-15)
 
 
