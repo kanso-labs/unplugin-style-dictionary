@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.36](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.35...unplugin-style-dictionary-v0.10.36) (2026-10-20)
+
+
+### Dependencies
+
+* update commitlint to v21.2.4 ([#608](https://github.com/kanso-labs/unplugin-style-dictionary/issues/608)) ([48469b8](https://github.com/kanso-labs/unplugin-style-dictionary/commit/48469b827bda011c4d8da2126cb611a1124de5ab))
+* update dependency eslint-plugin-perfectionist to v5.13.0 ([#615](https://github.com/kanso-labs/unplugin-style-dictionary/issues/615)) ([66e10f5](https://github.com/kanso-labs/unplugin-style-dictionary/commit/66e10f53bb70deaebb69ed0c685c04eb88815b10))
+* update dependency oxfmt to v0.74.0 ([#610](https://github.com/kanso-labs/unplugin-style-dictionary/issues/610)) ([8700870](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8700870d29be6f3f810c7aa1546c972b08b7b699))
+* update dependency rollup to v4.64.10 ([#609](https://github.com/kanso-labs/unplugin-style-dictionary/issues/609)) ([c3cb231](https://github.com/kanso-labs/unplugin-style-dictionary/commit/c3cb2316112cc9f44e5d6ae93600ea9dca19eb4e))
+* update dependency rollup to v4.64.12 ([#614](https://github.com/kanso-labs/unplugin-style-dictionary/issues/614)) ([a5dddf3](https://github.com/kanso-labs/unplugin-style-dictionary/commit/a5dddf33f450c51e99a292adf9dd736ec90dbadb))
+* update dependency typescript-eslint to v8.72.0 ([#611](https://github.com/kanso-labs/unplugin-style-dictionary/issues/611)) ([6d46844](https://github.com/kanso-labs/unplugin-style-dictionary/commit/6d468441e541628b364d7b92feeccd77f0cb87be))
+* update oxlint to v1.89.0 ([#612](https://github.com/kanso-labs/unplugin-style-dictionary/issues/612)) ([51cb8d5](https://github.com/kanso-labs/unplugin-style-dictionary/commit/51cb8d561e1e3defe10d2f2d7f3df73acc780523))
+
 ## [0.10.35](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.34...unplugin-style-dictionary-v0.10.35) (2026-10-18)
 
 
