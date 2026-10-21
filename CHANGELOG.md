@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.38](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.37...unplugin-style-dictionary-v0.10.38) (2026-10-21)
+
+
+### Dependencies
+
+* update dependency rolldown to v1.2.15 ([#618](https://github.com/kanso-labs/unplugin-style-dictionary/issues/618)) ([b1b0322](https://github.com/kanso-labs/unplugin-style-dictionary/commit/b1b0322c144e31829db130942505f7fd52273c22))
+* update kanso-labs/actions action to v4.3.1 ([#621](https://github.com/kanso-labs/unplugin-style-dictionary/issues/621)) ([3fa557b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/3fa557bc3515f70c053ebd56da97031209c2ab8a))
+* update node.js to v24.22.1 ([#619](https://github.com/kanso-labs/unplugin-style-dictionary/issues/619)) ([8233b79](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8233b79563144a2e8331286d5e6028575bacf120))
+
 ## [0.10.37](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.36...unplugin-style-dictionary-v0.10.37) (2026-10-21)
 
 
