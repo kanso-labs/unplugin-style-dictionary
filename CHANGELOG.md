@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.39](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.38...unplugin-style-dictionary-v0.10.39) (2026-10-22)
+
+
+### Dependencies
+
+* update dependency rollup to v4.65.0 ([#622](https://github.com/kanso-labs/unplugin-style-dictionary/issues/622)) ([4ac1019](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4ac10193f9b8a3704e5b9ad19dd517ef81e766a3))
+
 ## [0.10.38](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.37...unplugin-style-dictionary-v0.10.38) (2026-10-21)
 
 
