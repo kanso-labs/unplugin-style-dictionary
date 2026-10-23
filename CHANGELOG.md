@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.41](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.40...unplugin-style-dictionary-v0.10.41) (2026-10-23)
+
+
+### Dependencies
+
+* update dependency tsdown to v0.23.2 ([#628](https://github.com/kanso-labs/unplugin-style-dictionary/issues/628)) ([049b464](https://github.com/kanso-labs/unplugin-style-dictionary/commit/049b464ff536fb14e88a29dd9ab138bb73c1677d))
+* update dependency webpack to v5.112.2 ([#629](https://github.com/kanso-labs/unplugin-style-dictionary/issues/629)) ([7021de7](https://github.com/kanso-labs/unplugin-style-dictionary/commit/7021de73ee8cd3bd5ee3b5440deea0934c2d553e))
+
 ## [0.10.40](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.39...unplugin-style-dictionary-v0.10.40) (2026-10-23)
 
 
