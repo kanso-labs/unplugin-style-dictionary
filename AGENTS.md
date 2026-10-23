@@ -960,13 +960,12 @@ why that paragraph is here. Two supporting facts belong with it: every `npm ci`
 in CI passes `--ignore-scripts`, and automerged dependency upgrades land once
 their checks pass, with no release-age grace period to wait out first.
 
-**This repository keeps its own bug report form, and that is deliberate.**
-`.github/ISSUE_TEMPLATE/bug-report.yaml` asks for the three things a report here
-cannot be placed without — which bundler and version, which `style-dictionary`,
-which Node. A repository carrying its own `ISSUE_TEMPLATE/` opts out of the
-organization default entirely rather than merging with it, so this one takes no
-generic form. Do not delete it for consistency with the siblings; the opt-out is
-the point.
+**This repository has no issue template of its own, and that is deliberate.**
+One bug report form and its contact links are served from `kanso-labs/.github`
+to every repository in the organization. A `.github/ISSUE_TEMPLATE/` here would
+replace all of them rather than add to them, so do not add one back. The shared
+form's Environment field is where a report names its bundler, `style-dictionary`
+and Node versions.
 
 **Releases used to tag but never reach npm, and what fixed it was not in this
 repository.** `Publish to npm` failed with `npm error code E404` on the `PUT` to
