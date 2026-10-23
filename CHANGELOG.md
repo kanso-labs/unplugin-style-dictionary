@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.40](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.39...unplugin-style-dictionary-v0.10.40) (2026-10-23)
+
+
+### Dependencies
+
+* update dependency oxlint-tsgolint to v7.0.2005 ([#624](https://github.com/kanso-labs/unplugin-style-dictionary/issues/624)) ([de9bb01](https://github.com/kanso-labs/unplugin-style-dictionary/commit/de9bb01d648c46fcdc7fcf054ea4d685bf5faca5))
+* update dependency webpack to v5.112.1 ([#625](https://github.com/kanso-labs/unplugin-style-dictionary/issues/625)) ([4cbcf00](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4cbcf00e75caf9009e3e8e874410ba5aa1f1960d))
+
 ## [0.10.39](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.38...unplugin-style-dictionary-v0.10.39) (2026-10-22)
 
 
