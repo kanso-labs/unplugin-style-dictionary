@@ -701,182 +701,103 @@ rather than reaching `main` — see Traps for what that check does and does not
 cover. A plain `chore:` still publishes nothing, which is the point:
 housekeeping should not cut a release.
 
-## Working the improvement plan
+## Working the project
 
-The
-[Unplugin Style Dictionary project](https://github.com/orgs/kanso-labs/projects/3)
-holds the plan that came out of the September 2026 evaluation of this
-repository: one issue per pull request, from #184 on, and an issue per spike — a
-question one review raised and no second review confirmed, answered by an
-experiment before anything is built. Every item carries a Phase, a Kind, an
-Area, a Size and a Status, and every issue carries the `v1.0.0` milestone, a
-type, a pair of labels, a priority and an effort besides; the Roadmap view is
-the board by phase, and each issue names what it depends on. The evaluation the
-items were cut from, with every finding and its verdict, is linked from the
-project's README.
+Work is planned in the
+[Unplugin Style Dictionary project](https://github.com/orgs/kanso-labs/projects/3),
+which follows the organization's
+[project standard](https://github.com/kanso-labs/.github/blob/main/PROJECTS.md).
+That file owns the issue types, the Priority and Effort fields, the Status
+workflows and the views, so none of them is restated here. The project's README
+has this repository's Area options, and links the September 2026 evaluation of
+the plugin that the first items were cut from, with every finding and its
+verdict. The project adds no field of its own.
 
-Items are worked in phase order, and the project is kept current as they are:
+One issue is one pull request, from #184 on, except a spike: a question one
+review raised and no second review confirmed, answered by an experiment before
+anything is built. The evaluation sorted its findings into groups, and each
+group is an epic with its items as sub-issues. The `v1.0.0` milestone holds the
+issues the 1.0 release needs.
 
-- Starting an item sets its Status to In Progress. Its pull request closes it
-  with `Closes #N`, and the project's own workflow moves it to Done when that
-  pull request merges — nothing else needs to move it.
-- Each item branches from `main`, unless its "Depends on" names an issue whose
-  pull request has not merged yet, and its pull request title is the issue
-  title, which is already the Conventional Commit the changelog wants.
-- A spike ends in a written answer. If the answer is yes, the pull request that
-  follows carries the conventional type the issue names; if no, the issue is
-  closed with the experiment and its result in the closing comment, and that
-  reason is recorded in this file where the plan assumed otherwise.
+### Filing an issue
 
-Phases 0 and 1 run in parallel — they touch different parts of `src/index.ts`
-and meet only at the destination-set computation. Phase 2 precedes 3, since
-threading a resolved config object through to Style Dictionary is only safe once
-the resolution base is settled. Phases 5 to 8 come after the fixes, so the
-documentation is rewritten once against measured behaviour rather than twice.
-Quick wins are one-line changes with no place in that order; they land in any
-week. Within a phase, items are independent unless an issue says otherwise, so
-they can run in parallel worktrees.
+The title is the Conventional Commit the pull request will carry —
+`type(scope): lowercase imperative phrase`, `!` after the scope for a breaking
+change, at most 72 characters — where the scope names the part of the plugin the
+change lives in: `watch`, `build`, `config`, `options`, `types`, `vite`,
+`webpack`, `readme`, `agents`, `package`, `exports`, `ci`, `lint`, `renovate`,
+`release`, `tests`. A spike is not a pull request yet, so its title is the
+question: `Spike: are token sources inside node_modules ever watched?`.
 
-### Every item carries ten fields, and none of them is optional
+Each other fact goes where the standard keeps it, and nowhere else: the issue
+type, Priority and Effort, the project's Area, the parent epic, a blocked-by
+link to every issue that must merge first, and the milestone where 1.0 needs the
+issue. An issue is Ready once Area, Priority and Effort are set and nothing open
+blocks it, and moving it there from Backlog is the triage.
 
-They come from three different places, which is the whole difficulty: five are
-the project's own, three are set on the issue (a pull request carries two of
-them, the labels and the milestone), and two are GitHub's native issue fields,
-which live in the issue's sidebar and nowhere else. Nothing joins them up, so
-each is set in its own place.
+The body takes the standard's sections for its type and carries no metadata. For
+a Feature, Bug or Task this repository writes them as bold lead-ins rather than
+headings, in this order:
 
-| Field     | Set on         | Values                                                     |
-| --------- | -------------- | ---------------------------------------------------------- |
-| Status    | Project item   | Todo, In Progress, Done                                    |
-| Phase     | Project item   | `0 · Watching` through `8 · Hygiene`, and `Quick wins`     |
-| Kind      | Project item   | Fix, Feature, Perf, Test, Docs, Tooling, Spike             |
-| Area      | Project item   | Watching, Compile, Config, Targets, Options, Packaging, CI |
-| Size      | Project item   | S, M, L                                                    |
-| Milestone | Issue, PR      | `v1.0.0`                                                   |
-| Type      | Issue          | Feature, Bug, Task                                         |
-| Labels    | Issue, PR      | one `kind:`, one `area:`                                   |
-| Priority  | Issue (native) | Urgent, High, Medium, Low                                  |
-| Effort    | Issue (native) | High, Medium, Low                                          |
-
-**Priority and Effort are native issue fields, not project columns.** They are
-the set GitHub gives every repository, alongside Start date and Target date, and
-they appear in the issue's own sidebar. A native issue field cannot be shown as
-a project column and a project field cannot be shown in the sidebar, so there is
-no syncing between them and no point adding a project field that duplicates one.
-They are also issues-only: passing a pull request's node id to
-`setIssueFieldValue` fails with _Could not resolve to Issue node_.
-
-**Four of the ten are derived rather than judged**, so read them off the field
-they follow rather than forming a second opinion:
-
-- **Priority follows Phase.** Phases 0 and 1 are Urgent, 2 through 4 are High, 5
-  through 7 are Medium, and 8 is Low. Quick wins are Medium: cheap enough to
-  land in any week, ahead of nothing. Items are already worked in phase order,
-  so a priority disagreeing with the phase would describe an order nobody
-  follows. What it buys is a sort that survives being grouped by something other
-  than Phase, in a place the board is not.
-- **Effort follows Size** — `L` is High, `M` is Medium, `S` is Low. The two ask
-  the same question in different vocabularies, and only Size is ever argued. S
-  is under half a day, M one to two days, L more.
-- **Type follows Kind.** Feature and Perf are a Feature, Fix is a Bug, and Test,
-  Docs, Tooling and Spike are a Task.
-- **The two labels mirror Kind and Area**, one of each, lower-cased — `kind:fix`
-  for Kind `Fix`, `area:watching` for Area `Watching`. A project field is only
-  legible inside the project, and the labels are what carry the same two facts
-  out to the issue list, to search, and into a notification mail, so
-  `label:area:targets` answers from outside the board what the Area field
-  answers within it. They are also why `kind:` and `area:` are the only label
-  prefixes the plan owns: a label outside those two is nobody's mirror, and is
-  left alone by anything editing them in bulk.
-
-Phase, Kind, Area and Size are the judgements, and the issue is where they are
-argued rather than the board. Kind follows the title's type where one is
-obvious: `fix` is a Fix, `feat` a Feature, `perf` a Perf, `test` a Test, `docs`
-Docs, and `ci`, `build` and `chore` are Tooling. Area is the part of the plugin
-the work touches — a test item's Area is the subject it tests, a docs item's the
-subject it documents.
-
-**Start date and Target date are left empty on purpose.** GitHub offers them on
-every issue, but the plan schedules nothing by date — it is ordered by Phase and
-worked in that order. Filling them would mean inventing dates that nothing
-checks and nothing honours.
-
-**A pull request takes the labels and the milestone, and is not a project
-item.** The board is the plan, and the plan is made of issues; a board holding
-every merged pull request would bury the items it exists to order under history.
-What connects the two is already there — `Linked pull requests` is a column on
-the board, so the pull request that closes an item shows against it without
-being an item itself. The labels and the milestone are what make a pull request
-findable from outside the board, which is all it needed. It takes no type: issue
-types are an Issue-only construct — `PullRequest` exposes no such field in
-GraphQL, and `is:pr type:Task` matches nothing.
-
-Where its two labels come from depends on whether an issue stands behind it:
-
-- **A pull request that closes a plan issue inherits that issue's Kind and
-  Area**, so it carries the same two labels. It is the work the issue describes,
-  and giving it a second opinion would only split one thing across two answers.
-- **A pull request with nothing behind it reads its Kind off its Conventional
-  Commit type** — `feat` is a Feature, `fix` a Fix, `perf` a Perf, `docs` Docs,
-  `test` a Test, and `chore`, `ci` and `build` are Tooling. Its Area is the part
-  of the plugin its scope names: `fix(watch)` is `area:watching`, `ci(lint)` is
-  `area:ci`.
-
-**A dependency bump carries the label pair and nothing else.** Renovate attaches
-`kind:tooling` and `area:packaging` to every pull request it opens, through the
-`labels` key in `.github/renovate.json`, and Dependabot's security updates carry
-the same pair through `.github/dependabot.yaml`, so a bump is findable from the
-issue list and from search; it takes no milestone and no project item, on
-purpose — bumps outnumber the plan's own pull requests, and on the `v1.0.0`
-milestone they would drown the only question it answers. The
-`chore(main): release …` pull request is release-please's, and carries only its
-own `autorelease:` labels.
-
-### What an issue says
-
-Every issue is written the same way, so a reader who has seen one can find their
-way round the next. The title is the Conventional Commit the pull request will
-carry — `type(scope): lowercase imperative phrase`, `!` after the scope for a
-breaking change, at most 72 characters — where the scope names the part of the
-plugin the change lives in: `watch`, `build`, `config`, `options`, `types`,
-`vite`, `webpack`, `readme`, `agents`, `package`, `exports`, `ci`, `lint`,
-`renovate`, `release`, `tests`. A spike is not a pull request yet, so its title
-is the question: `Spike: are token sources inside node_modules ever watched?`.
-
-The body has these sections, in this order, and no headings:
-
-1. **What is wrong.** The defect or the gap and its consequence for a consumer,
+1. **What it is.** The defect or the gap and its consequence for a consumer,
    then the mechanism, citing `file:line` and quoting code or measured output
    where that is what makes the claim checkable. Numbers only when they were
    measured.
-2. **What to change.** The proposal, naming functions and files. Where two
+2. **What to build.** The proposal, naming functions and files. Where two
    candidates exist, both, and what decides between them. Where the obvious fix
    is unsound or this file records why it must not be done, a bold sentence
    saying so.
 3. **How to know it worked.** The acceptance criterion as steps a reviewer can
    perform, ending with "Prove the test can fail by reverting the fix" wherever
    a test is involved.
-4. `**Phase:** … · **Size:** … · **Kind:** … · **Area:** …` — the four
-   judgements, repeated in the body so they survive an export and a search.
-5. **Files** — what the change touches, relative to the repository root.
-6. **Depends on** — the issues that must merge first, as `#N`; omitted when
-   there are none.
-7. **Resolves** — the finding ids from the evaluation, so the issue traces back
+4. **Files** — what the change touches, relative to the repository root.
+5. **Resolves** — the finding ids from the evaluation, so the issue traces back
    to its evidence; omitted when there are none.
-8. **Definition of done** — a checklist: the change is made; a test pins it and
-   fails when the change is reverted (for Docs: what it claims is checked
-   against the code; for Tooling: the check fails on the case it exists to
-   catch; for a Spike: the answer is written down with the experiment);
+6. **Definition of done** — a checklist: the change is made; a test pins it and
+   fails when the change is reverted (for docs: what it claims is checked
+   against the code; for tooling: the check fails on the case it exists to
+   catch; for a spike: the answer is written down with the experiment);
    `npm run lint`, `npm run build`, `npm test` and `npm run package:check` are
    green; the pull request title is the Conventional Commit above.
-9. A footer naming where the item came from, in italics.
+7. A footer naming where the item came from, in italics.
+
+### Working an item
+
+Take the next item from Ready: the highest Priority first, and the oldest first
+within a priority. Set its Status to In progress. It branches from `main`,
+unless an issue blocking it has a pull request that has not merged yet, in which
+case it branches from that one. Its pull request title is the issue title, which
+is already the Conventional Commit the changelog wants, and the pull request
+closes the issue with `Closes #N`. The project's workflows do the rest: linking
+the pull request moves the item to In review, and merging it moves the item to
+Done.
+
+A spike ends in a written answer. If the answer is yes, the pull request that
+follows carries the conventional type the issue names; if no, the issue is
+closed with the experiment and its result in the closing comment, and that
+reason is recorded in this file where the evaluation assumed otherwise.
+
+**Start date and Target date are left empty on purpose.** GitHub offers them on
+every issue, but nothing here is scheduled by date, so filling them would mean
+inventing dates that nothing checks and nothing honours.
+
+**A pull request is not a project item.** The board is made of issues, and one
+holding every merged pull request would bury them under history; `Closes #N` is
+the whole link. A pull request takes none of an issue's fields either, since
+issue types and issue fields exist on issues only — `setIssueFieldValue` given a
+pull request's node id fails with _Could not resolve to Issue node_. One with no
+issue behind it needs only its Conventional Commit title. The pull requests
+Renovate and Dependabot open close no issue and join no project, and the
+`chore(main): release …` pull request is release-please's, carrying only its own
+`autorelease:` labels.
 
 ### Setting the fields
 
-`gh issue create` sets the three issue-side fields in one call —
-`--label kind:fix --label area:watching --milestone v1.0.0 --type Bug` — and the
-milestone and labels are what `gh issue edit` changes later. The rest is
-GraphQL:
+`gh issue create` sets the type and the milestone in one call —
+`--type Bug --milestone v1.0.0` — and
+`gh project item-add 3 --owner kanso-labs --url <issue url>` puts the issue on
+the project, where the built-in workflow files it under Backlog. The rest is the
+API:
 
 - **Priority and Effort go through `setIssueFieldValue`, both in one call.** It
   takes the issue's node id as `issueId` and a required `issueFields` list,
@@ -894,35 +815,28 @@ GraphQL:
   An earlier schema took `fieldId` and `value` beside `issueId`, and that form
   is now rejected before it runs — `Argument 'issueFields' … is required`, and
   `doesn't accept argument 'fieldId'`. The field and option ids are the
-  repository's:
-  `repository { issueFields(first: 10) { nodes { ... on IssueFieldSingleSelect { id name options { id name } } } } }`
+  organization's:
+  `organization(login: "kanso-labs") { issueFields(first: 10) { nodes { ... on IssueFieldSingleSelect { id name options { id name } } } } }`
   lists them.
 
-- **The project item** comes from `addProjectV2ItemById` with the project's id
-  and the issue's node id, and its five fields from
-  `updateProjectV2ItemFieldValue` with the item id, the field id and the option
-  id, which `gh project field-list 3 --owner kanso-labs --format json` lists.
+- **Area is a project field**, set with `updateProjectV2ItemFieldValue` from the
+  item id, the field id and the option id, which
+  `gh project field-list 3 --owner kanso-labs --format json` lists.
+- **The parent epic and a blocked-by link are REST calls** on the child and the
+  blocked issue: `POST /repos/{owner}/{repo}/issues/{parent}/sub_issues` and
+  `POST /repos/{owner}/{repo}/issues/{number}/dependencies/blocked_by`. They
+  take the other issue's `id`, as `sub_issue_id` and `issue_id` — not its
+  number.
 
 **Project fields are GraphQL-only, and that budget is small.** There is no REST
 route to a project item, and GraphQL allows 5,000 points an hour against a limit
-that is separate from REST's — so a bulk edit over the board is the one thing
-here that can run out of road halfway. Both halves batch, so the seven
-single-select fields an item carries take two mutations rather than seven: one
-`setIssueFieldValue` holding both native fields in its `issueFields` list, and
-**one mutation with aliased `updateProjectV2ItemFieldValue` calls** for the five
-project ones. It is the difference between seven points an item and two, and the
-limit, once hit, locks out every GraphQL call including the reads that would
-tell you what landed.
+that is separate from REST's, so batch a bulk edit into aliased mutations
+instead of one call per item. Once the limit is hit it locks out every GraphQL
+call, the reads that would tell you what landed included.
 
 **An archived item is read-only.** Writing a field to one fails with _The item
 is archived and cannot be updated_, so setting one means unarchiving, writing,
-and archiving again. Worth knowing before a bulk edit over the whole board
-reports failures that are not failures of the edit.
-
-**A view's grouping is not settable from the API.** `createProjectV2View` and
-`updateProjectV2View` take a name, a layout, a filter and the visible fields,
-and nothing else — so the Roadmap board's column field and the By area table's
-grouping were set by hand once and stay wherever the last person left them.
+and archiving again. The project archives a closed issue after a week.
 
 ## Traps
 
