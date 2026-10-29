@@ -596,17 +596,17 @@ Three things follow from how it works:
   Dependabot pull request takes its workflows from the merge ref and Dependabot
   never edits one.
 
-**`.github/dependabot.yaml` titles and labels those security updates like
-Renovate's.** Without it, #486 arrived as
+**`.github/dependabot.yaml` titles those security updates like Renovate's.**
+Without it, #486 arrived as
 `chore(deps-dev): Bump brace-expansion from 5.0.9 to 5.0.12 in the npm_and_yarn group across 1 directory`,
 which commitlint rejects twice over — 103 characters against a limit of 100, and
 a sentence-case subject — and which would have released nothing had it passed.
-It also carried Dependabot's own `dependencies` and `javascript` labels. Each
-ecosystem a security update can arrive for has an entry: `npm` and
+Each ecosystem a security update can arrive for has an entry: `npm` and
 `github-actions`, since one without an entry keeps the defaults. Each entry sets
 `open-pull-requests-limit: 0`, which turns version updates off and leaves
-security updates on, `commit-message.prefix: deps`, and the label pair, which
-replaces Dependabot's own.
+security updates on, and `commit-message.prefix: deps`. It sets no labels, so
+Dependabot adds its own `dependencies` and ecosystem label, which the
+organization's `labels.yaml` leaves alone.
 
 What it produces was measured rather than assumed, because Dependabot's title
 rules are not where its configuration suggests:
