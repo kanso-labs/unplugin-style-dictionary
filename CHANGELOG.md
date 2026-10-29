@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.47](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.46...unplugin-style-dictionary-v0.10.47) (2026-10-29)
+
+
+### Dependencies
+
+* update dependency @rspack/core to v2.3.0 ([#651](https://github.com/kanso-labs/unplugin-style-dictionary/issues/651)) ([d890957](https://github.com/kanso-labs/unplugin-style-dictionary/commit/d8909576d4d802e4992dc2908996a3ccd71f4415))
+* update dependency rolldown to v1.2.16 ([#652](https://github.com/kanso-labs/unplugin-style-dictionary/issues/652)) ([db29ab9](https://github.com/kanso-labs/unplugin-style-dictionary/commit/db29ab9551f9a71d319021834a9564e58bba5451))
+* update dependency rollup to v4.66.0 ([#646](https://github.com/kanso-labs/unplugin-style-dictionary/issues/646)) ([2b3abfc](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2b3abfca1fb68e41b39d4747776c9973acf46688))
+* update dependency tsdown to v0.23.4 ([#653](https://github.com/kanso-labs/unplugin-style-dictionary/issues/653)) ([e49862b](https://github.com/kanso-labs/unplugin-style-dictionary/commit/e49862bd273a6dafa0aafbd4b21b985ee0ddd987))
+* update kanso-labs/actions action to v4.4.0 ([#654](https://github.com/kanso-labs/unplugin-style-dictionary/issues/654)) ([2d7e094](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2d7e094af2fe35d2e4a663cc8bfb5fc8be66cf56))
+* update node.js to v24.22.2 ([#649](https://github.com/kanso-labs/unplugin-style-dictionary/issues/649)) ([8b723b1](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8b723b1c5a77e1872bf59370ef5c452776f6ecae))
+* update node.js to v26 ([#647](https://github.com/kanso-labs/unplugin-style-dictionary/issues/647)) ([29eb338](https://github.com/kanso-labs/unplugin-style-dictionary/commit/29eb33803d633aa0872368a19ab7ec5cb1841f6f))
+
 ## [0.10.46](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.45...unplugin-style-dictionary-v0.10.46) (2026-10-28)
 
 
