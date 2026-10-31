@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.49](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.48...unplugin-style-dictionary-v0.10.49) (2026-10-31)
+
+
+### Dependencies
+
+* update dependency eslint to v10.14.0 ([#670](https://github.com/kanso-labs/unplugin-style-dictionary/issues/670)) ([2535fcb](https://github.com/kanso-labs/unplugin-style-dictionary/commit/2535fcba5fb2bc1670d919897903e9666d35dddb))
+* update dependency rollup to v4.67.2 ([#672](https://github.com/kanso-labs/unplugin-style-dictionary/issues/672)) ([f81d5ca](https://github.com/kanso-labs/unplugin-style-dictionary/commit/f81d5caa6e88fe3387138739ebe3e91bb0367200))
+
 ## [0.10.48](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.47...unplugin-style-dictionary-v0.10.48) (2026-10-30)
 
 
