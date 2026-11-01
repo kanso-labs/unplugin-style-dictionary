@@ -92,7 +92,7 @@
     "eslint": "10.14.0",
     "eslint-plugin-oxlint": "1.90.0",
     "eslint-plugin-perfectionist": "5.13.0",
-    "globals": "17.13.0",
+    "globals": "17.14.0",
     "husky": "9.1.7",
     "lint-staged": "17.6.0",
     "oxfmt": "0.75.0",
