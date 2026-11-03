@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.52](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.51...unplugin-style-dictionary-v0.10.52) (2026-11-03)
+
+
+### Dependencies
+
+* update dependency @rspack/core to v2.3.1 ([#683](https://github.com/kanso-labs/unplugin-style-dictionary/issues/683)) ([75cbf64](https://github.com/kanso-labs/unplugin-style-dictionary/commit/75cbf64167d3eec4d2a427e63c5a831cd521e71f))
+* update dependency semver to v7.8.6 ([#680](https://github.com/kanso-labs/unplugin-style-dictionary/issues/680)) ([1380179](https://github.com/kanso-labs/unplugin-style-dictionary/commit/138017930deb0ea4f82fffab8d927efebd8c0c08))
+* update vitest to v5.1.0 ([#681](https://github.com/kanso-labs/unplugin-style-dictionary/issues/681)) ([c480a9d](https://github.com/kanso-labs/unplugin-style-dictionary/commit/c480a9df3b70cc5886712c2ecf4594e278813014))
+
 ## [0.10.51](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.50...unplugin-style-dictionary-v0.10.51) (2026-11-02)
 
 
