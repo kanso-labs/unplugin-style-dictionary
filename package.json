@@ -135,5 +135,10 @@
     "webpack": {
       "optional": true
     }
+  },
+  "overrides": {
+    "eslint-plugin-oxlint": {
+      "oxlint": "$oxlint"
+    }
   }
 }

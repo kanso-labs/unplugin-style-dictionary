@@ -23,7 +23,7 @@
       ]
     },
     {
-      "description": "eslint-plugin-oxlint declares a hard `~` peer on the matching oxlint minor, so a lone bump of either resolves to ERESOLVE. The eslint rule above negates the plugin out of its `eslint-plugin-**` matcher so this pairing does not rest on rule order.",
+      "description": "eslint-plugin-oxlint declares a hard `~` peer on the matching oxlint minor and is released hours after oxlint, so the `overrides` in package.json point that peer at the oxlint the root pins, and either may move first without npm refusing the pair (#687). This rule bumps the two together once both are out. The eslint rule above negates the plugin out of its `eslint-plugin-**` matcher so this pairing does not rest on rule order.",
       "groupName": "oxlint",
       "matchPackageNames": ["eslint-plugin-oxlint", "oxlint"]
     },
