@@ -96,7 +96,7 @@
     "husky": "9.1.7",
     "lint-staged": "17.6.0",
     "oxfmt": "0.76.0",
-    "oxlint": "1.90.0",
+    "oxlint": "1.91.0",
     "oxlint-tsgolint": "7.0.2005",
     "publint": "0.3.25",
     "rimraf": "6.1.4",
@@ -134,6 +134,11 @@
     },
     "webpack": {
       "optional": true
+    }
+  },
+  "overrides": {
+    "eslint-plugin-oxlint": {
+      "oxlint": "$oxlint"
     }
   }
 }

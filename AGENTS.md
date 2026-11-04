@@ -840,6 +840,16 @@ and archiving again. The project archives a closed issue after a week.
 
 ## Traps
 
+**`overrides` points `eslint-plugin-oxlint`'s peer at the root's `oxlint`.** The
+plugin peers the oxlint minor it was released with, `~1.90.0`, and is released
+hours after oxlint, sometimes a day or more. Renovate offers an oxlint release
+as soon as it is published, so a lone oxlint bump failed its lock update with
+`ERESOLVE`, left the lock stale, and every required check died at `npm ci`
+(#687). The plugin reads nothing of oxlint, only the rule lists it carries, so
+one a minor behind leaves on in ESLint at most a rule the newer oxlint also
+checks. The `oxlint` group in `.github/renovate.json` still bumps the two
+together once both are out.
+
 **Config discovery reads a module, and reading a module runs it.** With no
 `config`, the root is searched for `sd.config.json`, `config.json`,
 `sd.config.js` and `sd.config.mjs`. A candidate is validated before it is
