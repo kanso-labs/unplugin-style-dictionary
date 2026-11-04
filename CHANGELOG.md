@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.53](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.52...unplugin-style-dictionary-v0.10.53) (2026-11-04)
+
+
+### Dependencies
+
+* update dependency oxfmt to v0.76.0 ([#686](https://github.com/kanso-labs/unplugin-style-dictionary/issues/686)) ([ca1f550](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ca1f550a53d9fe89ca11f668c54a4ee388957903))
+* update dependency oxlint to v1.91.0 ([#687](https://github.com/kanso-labs/unplugin-style-dictionary/issues/687)) ([4e4bb44](https://github.com/kanso-labs/unplugin-style-dictionary/commit/4e4bb448335c9b94cbfc288180de3c4b2b2ea915))
+* update dependency rimraf to v6.1.4 ([#684](https://github.com/kanso-labs/unplugin-style-dictionary/issues/684)) ([383fd37](https://github.com/kanso-labs/unplugin-style-dictionary/commit/383fd37c4e6c4d44cc15cc869475045c69e8c318))
+* update dependency rollup to v4.67.5 ([#690](https://github.com/kanso-labs/unplugin-style-dictionary/issues/690)) ([401a81f](https://github.com/kanso-labs/unplugin-style-dictionary/commit/401a81f06835b261947a38674811870e1308078e))
+* update dependency style-dictionary to v5.8.0 ([#689](https://github.com/kanso-labs/unplugin-style-dictionary/issues/689)) ([c64e23d](https://github.com/kanso-labs/unplugin-style-dictionary/commit/c64e23d378e360effd5333ee990d8305d280e767))
+* update dependency tsdown to v0.23.5 ([#685](https://github.com/kanso-labs/unplugin-style-dictionary/issues/685)) ([8108701](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8108701aeaf7e90e3382927ff727050b650564cf))
+
 ## [0.10.52](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.51...unplugin-style-dictionary-v0.10.52) (2026-11-03)
 
 
