@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.57](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.56...unplugin-style-dictionary-v0.10.57) (2026-11-06)
+
+
+### Dependencies
+
+* update dependency tsdown to v0.23.7 ([#698](https://github.com/kanso-labs/unplugin-style-dictionary/issues/698)) ([84fc11d](https://github.com/kanso-labs/unplugin-style-dictionary/commit/84fc11daea59b925c3dbb2a0cf8f021395b6920b))
+
 ## [0.10.56](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.55...unplugin-style-dictionary-v0.10.56) (2026-11-05)
 
 
