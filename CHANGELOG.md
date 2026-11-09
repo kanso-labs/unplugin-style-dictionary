@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.61](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.60...unplugin-style-dictionary-v0.10.61) (2026-11-09)
+
+
+### Dependencies
+
+* update dependency oxfmt to v0.78.0 ([#713](https://github.com/kanso-labs/unplugin-style-dictionary/issues/713)) ([78b31b9](https://github.com/kanso-labs/unplugin-style-dictionary/commit/78b31b942298c39ca4f1ffd815c2dc1a36429501))
+* update dependency rolldown to v1.3.1 ([#710](https://github.com/kanso-labs/unplugin-style-dictionary/issues/710)) ([99caa03](https://github.com/kanso-labs/unplugin-style-dictionary/commit/99caa03cc2380257c422fa2f6592d39b53f1c321))
+* update dependency rollup to v4.68.2 ([#711](https://github.com/kanso-labs/unplugin-style-dictionary/issues/711)) ([5e9ee1e](https://github.com/kanso-labs/unplugin-style-dictionary/commit/5e9ee1ee631a3f07f136e4543fc86c9e7e1c0040))
+* update dependency typescript-eslint to v8.72.2 ([#716](https://github.com/kanso-labs/unplugin-style-dictionary/issues/716)) ([508a954](https://github.com/kanso-labs/unplugin-style-dictionary/commit/508a95439a0c263c10942659ea4849132e6e673c))
+* update dependency vite to v8.3.7 ([#712](https://github.com/kanso-labs/unplugin-style-dictionary/issues/712)) ([f4f5fed](https://github.com/kanso-labs/unplugin-style-dictionary/commit/f4f5fed433758a486dcb8e37e0fcaf948ca8800f))
+* update oxlint to v1.93.0 ([#714](https://github.com/kanso-labs/unplugin-style-dictionary/issues/714)) ([93a72fc](https://github.com/kanso-labs/unplugin-style-dictionary/commit/93a72fccdd14e506be65b32b092dacc4c7d91640))
+
 ## [0.10.60](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.59...unplugin-style-dictionary-v0.10.60) (2026-11-08)
 
 
