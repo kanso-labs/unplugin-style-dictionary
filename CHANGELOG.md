@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.62](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.61...unplugin-style-dictionary-v0.10.62) (2026-11-10)
+
+
+### Dependencies
+
+* update dependency @rspack/core to v2.3.2 ([#718](https://github.com/kanso-labs/unplugin-style-dictionary/issues/718)) ([49553b3](https://github.com/kanso-labs/unplugin-style-dictionary/commit/49553b33259afb31324025d76b47ea7ea384d929))
+
 ## [0.10.61](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.60...unplugin-style-dictionary-v0.10.61) (2026-11-09)
 
 
