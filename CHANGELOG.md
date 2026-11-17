@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.71](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.70...unplugin-style-dictionary-v0.10.71) (2026-11-17)
+
+
+### Dependencies
+
+* update dependency typescript-eslint to v8.73.0 ([#748](https://github.com/kanso-labs/unplugin-style-dictionary/issues/748)) ([ba016fe](https://github.com/kanso-labs/unplugin-style-dictionary/commit/ba016fe97b8b7ebebc306bd783e3bd14b3e0401f))
+
 ## [0.10.70](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.69...unplugin-style-dictionary-v0.10.70) (2026-11-16)
 
 
