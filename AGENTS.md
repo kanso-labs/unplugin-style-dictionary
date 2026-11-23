@@ -537,10 +537,10 @@ the job log rather than the check mark.
 
 Everything shared comes from `kanso-labs/actions` at an exact release tag, never
 a moving major — `actions/setup-node`, `actions/lint-workflows`,
-`_release-please.yaml`, `_publish-npm.yaml`, `_renovate-command.yaml` and
-`_dependabot-auto-merge.yaml`. A change over there reaches this repository only
-when Renovate bumps the pin, which is deliberate — see that repository's
-`AGENTS.md`.
+`_release-please.yaml`, `_publish-npm.yaml`, `_check-published.yaml`,
+`_renovate-command.yaml`, `_dependabot-auto-merge.yaml` and
+`_add-to-project.yaml`. A change over there reaches this repository only when
+Renovate bumps the pin, which is deliberate — see that repository's `AGENTS.md`.
 
 **`typescript` is held below 7, and the hold is not this repository's choice.**
 `typescript-eslint` peers `typescript >=4.8.4 <6.1.0`, and no published version
@@ -919,8 +919,8 @@ the wide grant are both gone now, and `GITHUB_TOKEN` is back on
 `contents: read`.
 
 That superseded failure is also why the npm one went unseen for so long.
-`Publish to npm` is gated on `release_created`, no release pull request had ever
-been mergeable, and so the job had never once run before 0.2.2.
+`Publish to npm` was gated on `release_created` then, no release pull request
+had ever been mergeable, and so the job had never once run before 0.2.2.
 
 **Moving the publish into the shared workflow does not change what npm
 validates.** `Publish to npm` calls `_publish-npm.yaml`, but npm's trusted
@@ -1783,60 +1783,34 @@ bundle — the watcher cases call `result.close()` on every `BUNDLE_END` — and
 would read as a shutdown on every rebuild. webpack has no equivalent; its
 nearest is `compiler.hooks.watchClose`, and nothing measured shows it exposed.
 
-**`release_created` is compared against the string `'true'` on purpose.** The
-output carries the string `"false"` when release-please runs and decides not to
-cut a release, and a bare truthiness test passes on that — publishing every
-merge to npm.
+**`publish` runs on the release, from its tag, never after the run that cut
+it.** It used to run after `Propose releases` on `release_created`, behind
+`!cancelled()`, and the run that cut a release need not be the release commit's
+own: a push landing while that run waits replaces it in the concurrency group,
+and the later run's checkout is a later commit. The shared workflow refused that
+commit, so the version stayed tagged and unpublished, and nothing here could
+publish an existing tag (kanso-labs/actions#123, which hit daily-core twice). A
+run that failed after creating the GitHub release, which skipped the publish
+when that was measured in a scratch repository, publishes now too, since the
+release event fires either way.
 
-**`publish` runs on `!cancelled()`, because a release can be cut by a run that
-then fails.** release-please-action cuts releases and then updates pull requests
-in one step, so a throw in the second half fails `Propose releases` with the tag
-pushed and `release_created` already set. Under GitHub's implicit `success()`
-that skipped `publish`, and re-running could not recover it: the release half
-had already relabelled the pull request `autorelease: tagged`, so the re-run
-found nothing to release. Two of about 245 push runs here failed in that half,
-neither while cutting a release.
+Now `release-please.yaml` runs on `release: published` as well. The application
+token creates the release, so the event fires. `Propose releases` is gated on
+`github.ref_type != 'tag'` and `publish` on `github.ref_type == 'tag'`, in a
+concurrency group keyed on the tag. On the tag the checkout and `GITHUB_SHA` are
+the release commit however the release was cut, so the provenance names it.
+`_publish-npm.yaml` refuses a tag that is not on `main` or whose version is not
+`package.json`'s. It skips a registry that already has the version, and
+publishes a version older than `latest` under `backport`.
 
-Measured on a copy of this caller in a scratch repository, with `dry-run` on the
-publish call:
-
-- A called job that sets an output and then exits 1 still hands the output to
-  `needs.<call>.outputs`, with `result` reading `failure`.
-- With pull request creation refused, the run that tagged 0.2.1 failed in the
-  pull-request half and both publish jobs ran. Re-running it cut nothing and
-  published nothing. With the gate reverted, the run that tagged 0.2.2 skipped
-  `publish`.
-
-**Refuse pull request creation to reproduce it, not `pull-requests: write`.**
-The release half comments on the merged pull request, so a token without that
-scope fails inside the release half instead. What separates the two is the
-repository setting that lets GitHub Actions create pull requests: turned off, it
-refuses `POST /pulls` and still lets release-please update one already open.
-
-**That release-half failure is a gap nothing here covers.** It lands after the
-GitHub release is created and before any output is written, so `!cancelled()`
-has no `release_created` to read. A re-run finds the tag already there, relabels
-the pull request, and fails on the duplicate, so that release is never published
-either. Measured the same way: 0.2.0 was tagged and never reached the publish
-job.
-
-**`publish` refuses any commit but the one the release was tagged at.** It
-passes `tag-name`, and `_publish-npm.yaml` checks after each checkout that the
-tag names `HEAD` and that `package.json` carries the tag's version.
-release-please tags the release pull request's merge commit whichever run cuts
-the release. So a later run cutting it would otherwise ship the later commit's
-code as that version: the merge commit's run displaced from the concurrency
-queue, or one failing before it tagged. Measured in a scratch repository with
-the check v4.2.0 ships: such a run failed `Publish to npm` with
-`Refusing to publish: <tag> is at <sha>, but this run checked out <sha>`, and
-without the check the same run packed the later commit.
-
-A refusal leaves the version tagged and in neither registry, and re-running the
-run does not help, because it checks out the same later commit. Nothing here
-publishes an existing tag with provenance either: npm's trusted publisher is
-registered against `release-please.yaml`, whose publish job runs only when a run
-cuts a release. Publish the tag by hand, as 0.2.0 and 0.2.1 were, or let the
-next release supersede it.
+A version that did not publish is recovered by dispatching Release Please on its
+tag: Run workflow, then the tag under "Use workflow from", or
+`gh workflow run release-please.yaml --ref unplugin-style-dictionary-v1.2.3`,
+since the tags here carry the component. The file name is unchanged, so npm's
+trusted publisher still matches. `check-published.yaml` compares the latest
+releases with both registries every night and keeps an issue open, with that
+command in it, while one is missing. A tag cut before this shape carries the old
+file and cannot be recovered that way; publish it by hand.
 
 **Merge a release pull request only once `Release Please` has run for the latest
 push to `main`.** release-please rebuilds its pull request after every push, and
