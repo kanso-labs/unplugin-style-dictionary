@@ -31,7 +31,21 @@ on:
   # computes changes — so a pull request that cannot merge is not repaired by
   # closing it, and nothing proposes a replacement until somebody happens to
   # push. This is that lever.
+  #
+  # Dispatched on a tag instead of main, it publishes that tag, which is how a
+  # version that did not publish is recovered: Run workflow, then the tag under
+  # "Use workflow from". The publish skips a registry that already has it.
   workflow_dispatch:
+  # Publishing starts from the release, not from the run that cut it. The run
+  # that cuts a release need not be the release commit's own: a push landing
+  # while that run waits replaces it in the concurrency group, and the later
+  # run's checkout is a later commit, which left releases elsewhere tagged and
+  # unpublished (kanso-labs/actions#123). release-please tags the release
+  # commit whichever run cuts it, and the release event runs on that tag. It
+  # fires because the application token, not GITHUB_TOKEN, creates the release.
+  release:
+    types:
+      - published
 
 # Every release merge pushes main, and every push starts a run. Overlapping runs
 # try to cut the same tags and strip the same labels, and one dies on the
@@ -40,9 +54,16 @@ on:
 #
 # This belongs to the caller. GitHub documents concurrency there and says
 # nothing either way about a group declared inside a called workflow.
+#
+# A run on a tag takes a group of its own. In the shared one it would be one
+# more pending run a push could replace, which is the bug above one step later;
+# keyed on the tag, two runs for one version queue, and the second finds it
+# published.
 concurrency:
   cancel-in-progress: false
-  group: release-please
+  group:
+    ${{ github.ref_type == 'tag' && format('publish-{0}', github.ref_name) ||
+    'release-please' }}
 
 # The application token below does the writing, so GITHUB_TOKEN stays on read.
 permissions:
@@ -51,7 +72,8 @@ permissions:
 jobs:
   release-please:
     name: Propose releases
-    uses: kanso-labs/actions/.github/workflows/_release-please.yaml@v4.5.5
+    if: github.ref_type != 'tag'
+    uses: kanso-labs/actions/.github/workflows/_release-please.yaml@v4.6.0
     with:
       # True only on the scheduled run, which is what batches a day of merges
       # into one release. A push proposes without merging, and so does
@@ -82,23 +104,11 @@ jobs:
   # and 0.2.5 came out public with nothing to flip afterwards.
   publish:
     name: Publish to npm
-    needs: release-please
-    # !cancelled() is what publishes a release cut by a run that then failed.
-    # release-please cuts releases and then updates pull requests in one step,
-    # so a failure in the second half fails Propose releases with the tag
-    # already pushed. Without a status function GitHub applies success() and
-    # skips this job, and re-running does not recover it: the release half has
-    # already relabelled the pull request autorelease: tagged, so the re-run
-    # finds nothing to release. A failed call still hands its outputs on, so
-    # release_created decides whatever the call's result. AGENTS.md has the
-    # measurement.
-    #
-    # Compared against the string rather than used bare. A bare truthiness test
-    # would also pass on the string "false", which is what this output carries
-    # when release-please runs and decides not to cut a release.
-    if:
-      ${{ !cancelled() && needs.release-please.outputs.release_created == 'true'
-      }}
+    # Only on a tag: the release event, or a dispatch on the tag. The shared
+    # workflow checks out the tag, refuses a commit that is not on main, and
+    # publishes nothing to a registry that already has the version, so
+    # running it twice is safe.
+    if: github.ref_type == 'tag'
     # Three scopes for two registries. id-token is what npm exchanges for a
     # short-lived credential, and what mints the provenance attestation off the
     # same token. GitHub Packages has no trusted publishing to exchange against
@@ -119,15 +129,4 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: kanso-labs/actions/.github/workflows/_publish-npm.yaml@v4.5.5
-    # Refuses to publish unless this run checked out the commit the release
-    # was tagged at. release-please tags the release pull request's merge
-    # commit whichever run cuts it, so a later run cutting it would otherwise
-    # ship the later commit's code under the tagged version. A refusal leaves
-    # the version tagged and unpublished; AGENTS.md says how to publish it.
-    #
-    # The input arrived in v4.2.0, so it moves with the pin above: an input the
-    # called workflow does not declare fails every run of this file, on every
-    # push to main, not just the ones that release.
-    with:
-      tag-name: ${{ needs.release-please.outputs.tag_name }}
+    uses: kanso-labs/actions/.github/workflows/_publish-npm.yaml@v4.6.0
