@@ -30,6 +30,7 @@ jobs:
       packages: read
     uses: kanso-labs/actions/.github/workflows/_check-published.yaml@v4.6.0
     with:
-      # Three hours, so a release that lands in the evening is checked on the
-      # run that night rather than the next.
-      grace-hours: 3
+      # One hour, so any release that lands before 22:45 UTC is checked on the
+      # run that night. The publish runs on GitHub's runners, so it is done
+      # within minutes of the release.
+      grace-hours: 1

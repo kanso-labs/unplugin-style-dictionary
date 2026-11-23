@@ -537,10 +537,10 @@ the job log rather than the check mark.
 
 Everything shared comes from `kanso-labs/actions` at an exact release tag, never
 a moving major — `actions/setup-node`, `actions/lint-workflows`,
-`_release-please.yaml`, `_publish-npm.yaml`, `_renovate-command.yaml` and
-`_dependabot-auto-merge.yaml`. A change over there reaches this repository only
-when Renovate bumps the pin, which is deliberate — see that repository's
-`AGENTS.md`.
+`_release-please.yaml`, `_publish-npm.yaml`, `_check-published.yaml`,
+`_renovate-command.yaml`, `_dependabot-auto-merge.yaml` and
+`_add-to-project.yaml`. A change over there reaches this repository only when
+Renovate bumps the pin, which is deliberate — see that repository's `AGENTS.md`.
 
 **`typescript` is held below 7, and the hold is not this repository's choice.**
 `typescript-eslint` peers `typescript >=4.8.4 <6.1.0`, and no published version
@@ -1790,8 +1790,9 @@ own: a push landing while that run waits replaces it in the concurrency group,
 and the later run's checkout is a later commit. The shared workflow refused that
 commit, so the version stayed tagged and unpublished, and nothing here could
 publish an existing tag (kanso-labs/actions#123, which hit daily-core twice). A
-release cut by a run that then failed, the gap measured for 0.2.0 and 0.2.1,
-went unpublished the same way.
+run that failed after creating the GitHub release, which skipped the publish
+when that was measured in a scratch repository, publishes now too, since the
+release event fires either way.
 
 Now `release-please.yaml` runs on `release: published` as well. The application
 token creates the release, so the event fires. `Propose releases` is gated on
@@ -1804,11 +1805,12 @@ publishes a version older than `latest` under `backport`.
 
 A version that did not publish is recovered by dispatching Release Please on its
 tag: Run workflow, then the tag under "Use workflow from", or
-`gh workflow run release-please.yaml --ref v1.2.3`. The file name is unchanged,
-so npm's trusted publisher still matches. `check-published.yaml` compares the
-latest releases with both registries every night and keeps an issue open, with
-that command in it, while one is missing. A tag cut before this shape carries
-the old file and cannot be recovered that way; publish it by hand.
+`gh workflow run release-please.yaml --ref unplugin-style-dictionary-v1.2.3`,
+since the tags here carry the component. The file name is unchanged, so npm's
+trusted publisher still matches. `check-published.yaml` compares the latest
+releases with both registries every night and keeps an issue open, with that
+command in it, while one is missing. A tag cut before this shape carries the old
+file and cannot be recovered that way; publish it by hand.
 
 **Merge a release pull request only once `Release Please` has run for the latest
 push to `main`.** release-please rebuilds its pull request after every push, and
