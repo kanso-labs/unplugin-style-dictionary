@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.82](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.81...unplugin-style-dictionary-v0.10.82) (2026-11-26)
+
+
+### Dependencies
+
+* update dependency @types/node to v26.6.11 ([#790](https://github.com/kanso-labs/unplugin-style-dictionary/issues/790)) ([8c381c9](https://github.com/kanso-labs/unplugin-style-dictionary/commit/8c381c995e3f85577bac62c8e02d072f22970c61))
+* update dependency vite to v8.4.0 ([#792](https://github.com/kanso-labs/unplugin-style-dictionary/issues/792)) ([231cc94](https://github.com/kanso-labs/unplugin-style-dictionary/commit/231cc94df3bb41fb5c174eb72a3068f0ac9c680f))
+
 ## [0.10.81](https://github.com/kanso-labs/unplugin-style-dictionary/compare/unplugin-style-dictionary-v0.10.80...unplugin-style-dictionary-v0.10.81) (2026-11-25)
 
 
